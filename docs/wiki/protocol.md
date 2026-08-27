@@ -161,7 +161,14 @@ Response:
 {"type":"config","status":"ok"}
 ```
 
-The daemon applies the JSON patch to `config.toml` on disk and reloads in-memory config.
+The daemon **recursively merges** the JSON patch into `config.toml` on disk and reloads in-memory config. Top-level sections are merged, not replaced — keys absent from the patch are preserved. For example, a patch containing `{"git":{"mode":"compact"}}` updates only `git.mode` without touching `git.cache_ttl_ms` or other git keys.
+
+Behavior details:
+- **Missing file:** If `config.toml` does not exist (fresh install), the daemon creates it with `create_dir_all` on the parent directory, seeds from an empty table, merges the patch, and writes.
+- **Parse error:** If the existing file has TOML syntax errors, the daemon returns `{"type":"config","status":"error","error":"config.toml has syntax errors: ..."}` and **refuses to overwrite** the file.
+- **I/O error:** Write failures return a structured error response instead of dropping the connection.
+- **Atomic write:** Uses temp file + rename to prevent corruption on crash.
+- **Theme reload:** When the patch touches the `[theme]` section, the daemon automatically calls `reload_theme()` after `reload_config()` so palette changes take effect immediately.
 
 **Used by:** Quattro panel (primary write path).
 
@@ -250,9 +257,14 @@ Legacy:
 {"command":"reload_config"}
 ```
 
-**Response:**
+**Response (success):**
 ```json
 {"type":"control","status":"ok"}
+```
+
+**Response (failure):**
+```json
+{"type":"control","status":"error","error":"reload failed: ..."}
 ```
 
 **Used by:** CLI `reload`, Quattro panel (legacy fallback after direct TOML write), integration tests.
@@ -380,8 +392,9 @@ Messages without a `type` field are handled via fallback routing:
 
 | Condition | Routed as |
 |-----------|-----------|
-| `"command"` field present | Control command |
-| Prompt fields present (no `command`) | Prompt request |
+| `"cwd"` field present | Prompt request (v0.3.0: checked first) |
+| `"command"` field present (no `cwd`) | Control command |
+| Neither | Attempt prompt parse, error on failure |
 
 This ensures old clients (CLI, Bash adapter socket fallback, theme hook) continue to work with new daemons without modification. New clients should use typed messages and the `hello` handshake.
 
@@ -394,8 +407,12 @@ Primary path uses the bridge coprocess (`omarchy10k bridge`):
 ```bash
 coproc __O10K_BRIDGE { "$__O10K_BIN" bridge --socket "$__O10K_SOCKET"; }
 # Write JSON request to coproc stdin
-# Read NUL-terminated prompt string from coproc stdout
+# Read two NUL-terminated fields from coproc stdout: left\0right\0
+IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" left
+IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" right
 ```
+
+The bridge emits `left\0right\0` per response — the `right` field carries the right prompt for ble.sh's `prompt_rps1`. The right field may be empty when right prompt is disabled.
 
 Fallback uses `__o10k_socket_send` with socat or python3:
 
@@ -549,3 +566,26 @@ Quattro Panel          Socket              Daemon
       │◄─ preview text ───┤                    │
       │                   │                    │
 ```
+
+## Known Issues
+
+Recorded by the [Bug Audit](bug-audit.md).
+
+### `command` collides between prompt and control messages (v0.3.0: mitigated)
+
+`PromptRequest` declares a `command` field (the command text), and `TypedMessage`
+declares `command` at the top level ahead of `#[serde(flatten)] rest`. Named
+fields win over `flatten`, so on a typed `prompt` message, `command` is swallowed
+by `TypedMessage` and never reaches `PromptRequest`.
+
+**v0.3.0 fix:** Type-less messages now check for `cwd` first (prompt requests
+always have `cwd`) before checking `command`, so a type-less prompt request
+carrying a `command` field is correctly routed to the prompt handler instead of
+the control handler. See [Bug Audit #12](bug-audit.md#12-a-type-less-prompt-request-carrying-command-is-misrouted-to-the-control-handler).
+
+### The `version` field is never read
+
+`TypedMessage.version` is parsed and discarded — `cargo build` flags it as dead
+code. `Model.buildHello` sends `"version":"0.3"`; the daemon ignores it and
+answers with its own `protocol_version` regardless. There is no version
+negotiation, only advertisement.

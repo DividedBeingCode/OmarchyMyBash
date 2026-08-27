@@ -23,6 +23,22 @@ pub struct TermCaps {
     pub has_sync_output: bool,
 }
 
+impl Default for TermCaps {
+    fn default() -> Self {
+        Self {
+            terminal: TerminalKind::Unknown,
+            has_osc7: false,
+            has_osc8: false,
+            has_osc52: false,
+            has_osc777: false,
+            has_kitty_graphics: false,
+            has_sixel: false,
+            has_undercurl: false,
+            has_sync_output: false,
+        }
+    }
+}
+
 impl TermCaps {
     pub fn detect() -> Self {
         let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();

@@ -1,12 +1,11 @@
+use crate::render::wrap_np;
 use crate::segments::SegmentContext;
-use crate::terminal::TermCaps;
 
+const RESET: &str = "\x1b[0m";
 const UNDERCURL_ON: &str = "\x1b[4:3m";
 const UNDERCURL_OFF: &str = "\x1b[4:0m";
 
 pub fn render_prompt_char(ctx: &SegmentContext<'_>) -> String {
-    let reset = "\x1b[0m";
-
     let (symbol, color) = if ctx.exit_code == 0 {
         (
             ctx.config.segments.character.success.as_str(),
@@ -19,15 +18,21 @@ pub fn render_prompt_char(ctx: &SegmentContext<'_>) -> String {
         )
     };
 
-    if ctx.exit_code != 0 && TermCaps::detect().has_undercurl {
-        format!("{color}{UNDERCURL_ON}{symbol}{UNDERCURL_OFF}{reset}")
+    if ctx.exit_code != 0 && ctx.term_caps.has_undercurl {
+        format!(
+            "{}{}{}{}{}",
+            wrap_np(&color),
+            wrap_np(UNDERCURL_ON),
+            symbol,
+            wrap_np(UNDERCURL_OFF),
+            wrap_np(RESET)
+        )
     } else {
-        format!("{color}{symbol}{reset}")
+        format!("{}{}{}", wrap_np(&color), symbol, wrap_np(RESET))
     }
 }
 
 pub fn render_transient_char(ctx: &SegmentContext<'_>) -> String {
-    let reset = "\x1b[0m";
     let color = ctx.palette.muted.fg_escape();
-    format!("{color}❯{reset}")
+    format!("{}❯{}", wrap_np(&color), wrap_np(RESET))
 }

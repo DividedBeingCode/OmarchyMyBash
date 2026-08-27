@@ -13,7 +13,7 @@ The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as
   "schemaVersion": 1,
   "id": "community.omarchy10k",
   "name": "Omarchy10k",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "kinds": ["bar-widget"],
   "entryPoints": { "barWidget": "BarWidget.qml" },
   "barWidget": {
@@ -137,7 +137,7 @@ The bar glyph tooltip reflects live daemon status:
 | One-click tool setup | "Install Atuin" / "Install Mise" buttons in Shell tab when tools missing |
 | Config undo | Circular buffer of last 10 config states; "↩ Undo" button in header |
 | Config import/export | "Copy Config" / "Paste Config" in Advanced tab via xclip/wl-copy |
-| Degradation labels | `protocolAtLeast()` helper; "full (v0.3+)" or "degraded (upgrade daemon)" in daemon info |
+| Degradation labels | Per-feature: preview shows "Live preview requires daemon v0.3+" and palette shows "Palette preview requires daemon v0.3+" when protocol < 0.3; Advanced tab shows "full (v0.3+)" / "degraded (upgrade daemon)" |
 | Benchmark display | "Run Benchmark" button with scrollable results (`omarchy10k benchmark --iterations 50`) |
 
 ## Live Prompt Preview
@@ -265,7 +265,7 @@ setConfigValue(key, value)
     → _flushSave()
       → patch = Model.unflattenPatch(Model.collectConfig(root))
       → send {type:"config", command:"set", config: patch}
-      → daemon applies patch to config.toml
+      → daemon recursively merges patch into config.toml (preserving unmentioned keys)
       → daemon reloads config in-memory
       → requestPreview()
 ```
@@ -275,9 +275,9 @@ On daemon error, `lastError` is set and the red error toast appears for 5 second
 **Fallback:** If the daemon does not support the config API, falls back to direct TOML file I/O:
 
 ```
-Model.buildTOML(_configFlat) → TOML string
-  → configWriter.exec(["sh", "-c", "mkdir -p dir && cat > file"])
-  → sendDaemonCommand("reload_config")
+Model.buildTOML(_configFlat) → TOML string (single-quote escaped)
+  → configWriter.exec(["sh", "-c", "mkdir -p dir && printf ... > file"])
+  → configWriter.onRunningChanged → sendDaemonCommand("reload_config")
 ```
 
 ### CONFIG_MAP
@@ -357,6 +357,8 @@ Two-column toggle grid for eight segment/feature flags. Clicking a pill toggles 
 
 Enabled segments render with accent background; disabled segments use muted styling.
 
+**Time Format selector** — visible when Time is enabled. Three options: `HH:MM` (`%H:%M`), `HH:MM:SS` (`%H:%M:%S`), `hh:mm AM/PM` (`%I:%M %p`).
+
 ### Shell Tab
 
 Displays detection results for five tools with conditional install actions:
@@ -369,13 +371,15 @@ Displays detection results for five tools with conditional install actions:
 | Zoxide | `command -v zoxide` | — |
 | fzf | `command -v fzf` | — |
 
-Install buttons appear only when the tool status contains `✗ not found`.
+Install buttons appear only when the tool status contains `✗ not found`. After any install runner completes, `detectTools()` is called automatically and a success toast is shown.
+
+**Notification Threshold** — `ControlRow` selector below the tool list with `5s`, `10s`, `30s` options. Maps to `segments.notification.threshold_ms` (5000/10000/30000). The daemon includes `notify_threshold_ms` in prompt responses; the bash adapter updates its threshold from this field.
 
 ### Advanced Tab
 
 | Action | Behavior |
 |--------|----------|
-| Open Config File | `$EDITOR` or `nano` via `Process.startDetached()` |
+| Open Config File | Opens `$TERMINAL` (default: `foot`) running `$EDITOR` (default: `nano`) via `Process.startDetached()` |
 | Run Doctor | `omarchy10k doctor`; output shown in scrollable monospace area below |
 | Copy Config | Serialize config to clipboard |
 | Paste Config | Parse clipboard TOML, apply, save |
@@ -392,7 +396,7 @@ When multiple shells are running, each has its own daemon socket. The Advanced t
 - Lists all discovered `omarchy10k-*.sock` files
 - Each entry shows shell PID, working directory, and a floating-terminal icon
 - Clicking a row switches the active session (disconnect + reconnect)
-- Clicking the terminal icon opens a new shell in that session's CWD (`cd '$cwd' && exec $SHELL`)
+- Clicking the terminal icon opens a new shell in that session's CWD (single quotes in CWD are escaped as `'\''` for safe interpolation)
 - Config changes apply to the selected session's daemon
 
 ## Process Components
@@ -419,7 +423,7 @@ Stateless helper library (`.pragma library`):
 
 | Function | Purpose |
 |----------|---------|
-| `configDir()` | `$HOME/.config/omarchy10k` |
+| `configDir()` | `$XDG_CONFIG_HOME/omarchy10k` (falls back to `$HOME/.config/omarchy10k`) |
 | `configPath()` | `configDir()/config.toml` |
 | `runtimeDir()` | `$XDG_RUNTIME_DIR` or `/tmp` |
 | `buildCommand(name, id)` | JSON control command string with newline |
@@ -484,3 +488,51 @@ cp -r quattro/ ~/.config/omarchy/plugins/community.omarchy10k/
 ```
 
 Requires a running Omarchy Quattro desktop with Quickshell-based bar system.
+
+## Known Issues
+
+Recorded by the [Bug Audit](bug-audit.md).
+
+### The fallback config writer destroys `config.toml`
+
+When `daemonSocket` is not connected, `Panel.qml`'s `_flushSave` rebuilds the
+whole file from `Model.parseTOML`'s flat output:
+
+```qml
+var toml = Model.buildTOML(root._configFlat)
+configWriter.exec(["sh", "-c", "mkdir -p '…' && printf '%s\\n' '…' > '" + _configPath + "'"])
+```
+
+`parseTOML` keeps only `section.key = scalar` pairs. Round-tripping through it
+strips every comment and drops the nested `[theme.custom]` table entirely. The
+shell quoting itself is correct (`'` → `'\''`), so this is data loss rather than
+injection.
+
+The daemon-connected path (`config set`) is safe — the daemon parses the existing
+file, deep-merges the patch, and refuses to overwrite a file it cannot parse.
+Prefer keeping the panel connected. See
+[Bug Audit #19](bug-audit.md#19-quattros-fallback-config-writer-destroys-the-config-file).
+
+### Every save writes every mapped key
+
+`Model.collectConfig` returns all of `CONFIG_MAP`, not just the changed keys, so
+`_flushSave` sends the panel's full property set on each save. If a save fires
+before `config_get` has returned, the panel's QML defaults are written over the
+user's real settings.
+
+### Preview escape handling (v0.3.0: fixed)
+
+Preview responses now have `\x01`/`\x02` readline delimiters stripped server-side,
+so the panel's `Model.stripAnsi` works correctly on clean ANSI output. Live prompt
+strings are now fully readline-safe with all escapes wrapped.
+
+### Segment toggles with limited effect
+
+The Segments tab toggles `segments.python.enabled`, `segments.toolchain.enabled`
+and `segments.nix.enabled`. Those three segments read the *daemon's* environment,
+which is frozen at shell startup, so enabling them has no visible effect for a
+user who activates a venv, switches mise versions, or enters a nix shell after the
+shell started. This is tracked as a [v0.4 design item](bug-audit.md#5-every-environment-derived-segment-is-frozen-at-daemon-start).
+
+The Time segment ABI bug ([#2](bug-audit.md#2-struct-tm-abi-mismatch-corrupts-the-stack-when-the-time-segment-is-enabled))
+has been fixed — `struct Tm` now includes all required fields.

@@ -9,7 +9,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
 
     let (capacity, charging) = read_battery()?;
     let show_above = ctx.config.segments.battery.show_above;
-    if capacity >= show_above {
+    if capacity > show_above {
         return None;
     }
 

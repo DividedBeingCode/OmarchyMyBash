@@ -106,7 +106,7 @@ All palette resolution goes through `ThemePalette::resolve_palette(&config)` —
 ### `ThemePalette::load_omarchy()`
 
 1. Reads `~/.local/state/omarchy/current/theme/colors.toml`
-2. Parses TOML into internal `OmarchyColors` struct
+2. Detects TOML schema: if the file contains a `[colors]` table header, parses via a `ColorsFile` wrapper struct; otherwise parses color keys at the root level. This handles both Omarchy theme engine output formats.
 3. Converts hex strings to `AnsiColor` RGB values via `AnsiColor::from_hex`
 4. Missing keys → hardcoded Tokyo Night defaults
 5. Sets `is_dark` from `mode` field (anything other than `"light"` = dark)

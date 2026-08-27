@@ -169,7 +169,19 @@ The panel edits `~/.config/omarchy10k/config.toml` directly. Every change made i
 
 ## Installation
 
-### From Source
+### Quick Install (Recommended)
+
+```bash
+git clone https://github.com/DividedBeingCode/OmarchyMyBash.git
+cd OmarchyMyBash/omarchy10k
+./install.sh
+```
+
+This builds from source, installs binaries to `~/.local/bin/`, configures `.bashrc`, installs the Quattro Control Center plugin, and sets up the theme-set hook. Open a new terminal and you're done.
+
+To uninstall: `./install.sh --uninstall`
+
+### Manual Install
 
 ```bash
 # Clone
@@ -180,18 +192,18 @@ cd OmarchyMyBash
 cargo build --release
 
 # Install binaries
-sudo cp target/release/omarchy10k /usr/local/bin/
-sudo cp target/release/omarchy10kd /usr/local/bin/
+cp target/release/omarchy10k ~/.local/bin/
+cp target/release/omarchy10kd ~/.local/bin/
 
 # Add to ~/.bashrc (one line, that's it)
 echo 'eval "$(omarchy10k init bash)"' >> ~/.bashrc
 
 # Optional: install the Quattro plugin
-cp -r quattro/ ~/.config/omarchy/plugins/community.omarchy10k/
+cp -r omarchy10k/quattro/ ~/.config/omarchy/plugins/community.omarchy10k/
 
 # Optional: install the theme-set hook
 mkdir -p ~/.config/omarchy/hooks/theme-set.d/
-cp hooks/theme-set ~/.config/omarchy/hooks/theme-set.d/omarchy10k
+cp omarchy10k/hooks/theme-set ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 chmod +x ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 ```
 
@@ -273,6 +285,44 @@ show = "auto"               # auto | always | never
 [segments.character]
 success = "❯"
 error = "❯"
+
+# ── v0.3 Context Segments ────────────────────────────
+
+[segments.container]
+enabled = true
+
+[segments.python]
+enabled = true              # show active venv / conda env
+
+[segments.toolchain]
+enabled = true              # show Mise-managed versions
+
+[segments.nix]
+enabled = true              # show Nix shell
+
+[segments.k8s]
+enabled = false             # show Kubernetes context
+show_namespace = true
+
+[segments.time]
+enabled = false             # show current time
+format = "%H:%M"            # %H:%M | %H:%M:%S | %I:%M %p
+
+[segments.battery]
+enabled = false             # show battery (laptops)
+
+[segments.notification]
+enabled = true
+threshold_ms = 10000        # desktop notification for long commands
+
+# ── Terminal Features ────────────────────────────────
+
+[terminal.title]
+enabled = true
+format = "{dir}"            # {dir}, {user}, {host}, {branch}
+
+[terminal.progress]
+enabled = true              # OSC 9;4 progress bar
 
 # ── Daemon ────────────────────────────────────────────
 
@@ -433,7 +483,7 @@ omarchy10k/
 
 ## Roadmap
 
-### v0.1 -- Prompt Core (current)
+### v0.1 -- Prompt Core
 
 The foundation: replace Starship with equal or better prompt quality.
 
@@ -450,19 +500,27 @@ The foundation: replace Starship with equal or better prompt quality.
 
 ### v0.2 -- Shell UX
 
-- [ ] Mise/Atuin/Zoxide/fzf adapter scripts via hook broker
-- [ ] Command-aware segment expansion (type `git` and the git segment expands)
-- [ ] SSH/root/container context segments
-- [ ] vi-mode indicator segment
-- [ ] Battery/power segment (event-driven, show on low only)
-- [ ] Custom Rust git engine (inspired by gitstatusd)
+- [x] Hook broker composable lifecycle (precmd, preexec, chpwd, shell_exit)
+- [x] SSH/container context segments
+- [x] Bridge coprocess for zero-fork prompt rendering
+- [x] OSC 133 shell integration markers
+- [x] Instant prompt cache
 
-### v0.3 -- Control Center
+### v0.3 -- Control Center & Terminal (current)
 
-- [ ] Live prompt preview in Quattro panel
-- [ ] Preset system (Quattro, Minimal, P10k Classic, Laptop, Remote, Agent, Rice)
-- [ ] `omarchy10k configure` TUI wizard
-- [ ] Theme modes (Follow, Custom, Hybrid) in panel UI
+- [x] Live prompt preview in Quattro panel
+- [x] Preset/layout system (omarchy, minimal, powerline, classic, pure, dense)
+- [x] Theme modes (Follow, Custom, Hybrid) in panel UI with palette preview
+- [x] 7 new segments (container, python, toolchain, nix, k8s, time, battery)
+- [x] Terminal feature detection (TermCaps) for Ghostty, Foot, Kitty, WezTerm, Alacritty
+- [x] OSC 7 CWD, OSC 8 hyperlinks, OSC 777 notifications, OSC 9;4 progress, DEC 2026 sync output
+- [x] Terminal title with `{dir}`, `{user}`, `{host}`, `{branch}` placeholders
+- [x] Git worktree detection and display
+- [x] One-script installer with `--uninstall` support
+- [x] Multi-session discovery and switching in Quattro
+- [x] Config undo/history, import/export, diff toast
+- [x] Segment toggle grid, one-click tool setup, benchmark display
+- [x] Protocol v0.3 with typed messages and version negotiation
 
 ### v0.4 -- Plugin Ecosystem
 

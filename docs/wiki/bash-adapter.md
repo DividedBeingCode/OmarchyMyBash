@@ -92,9 +92,10 @@ Called at init time alongside daemon startup.
 ### Request (`__o10k_bridge_request`)
 
 1. Writes the JSON request to the coprocess stdin
-2. Reads a NUL-terminated response from coprocess stdout (2 second timeout)
-3. Sets `PS1` directly from the response
-4. Writes the instant prompt cache in the background (see [Instant Prompt Cache](#instant-prompt-cache))
+2. Reads two NUL-terminated fields from coprocess stdout (2 second timeout each): `left\0right\0`
+3. Sets `PS1` from the `left` field
+4. Caches the `right` field in `__O10K_LAST_RIGHT` for ble.sh right prompt
+5. Writes the instant prompt cache in the background (see [Instant Prompt Cache](#instant-prompt-cache))
 
 If the bridge is unavailable or times out, the adapter falls back to `__o10k_socket_send` + `parse-prompt`.
 
@@ -287,17 +288,24 @@ Transport priority:
 |----------|--------|---------|
 | 0 | Bridge coprocess (NUL-terminated stdout) | ~0.1ms |
 | 1 | `socat -T2 - UNIX-CONNECT:"$sock"` | ~1ms |
-| 2 | `python3` inline (AF_UNIX, 2s timeout) | ~5ms |
+| 2 | `python3` via `sys.argv` (AF_UNIX, 2s timeout) | ~5ms |
 | 3 | Return failure (fallback PS1 used) | — |
 
 `/dev/tcp` fallback is commented in source but not implemented — Bash `/dev/tcp` doesn't support Unix domain sockets.
+
+### Hardening Notes
+
+- **JSON escaping:** The prompt request JSON-escapes `$PWD` (backslashes and double-quotes) before embedding it in the request string. Directories with special characters (e.g. `C:\Users` or paths containing `"`) no longer produce malformed JSON.
+- **Python3 fallback safety:** The Python3 socket snippet accepts socket path and message as `sys.argv[1]` and `sys.argv[2]` instead of interpolating shell variables into the script. This eliminates code injection via crafted socket paths.
+- **Daemon restart detection:** Before each prompt render, `__o10k_render_prompt` checks if the socket exists AND the bridge PID is alive. If either is missing, and at least 5 seconds have passed since the last restart attempt, the adapter removes the stale socket and restarts both the daemon and bridge automatically. Rate-limiting prevents restart storms on persistent failures.
+- **Bridge fallback NUL framing:** The bridge's `write_fallback()` function emits two NUL-terminated fields (`left\0right\0`) matching the normal protocol, so the bash reader never hangs waiting for the second field.
 
 ## Hook Installation
 
 ### Detection
 
 ```bash
-if BLE_VERSION major ≥ 4 → blesh hooks
+if declare -F blehook → blesh hooks
 else → vanilla Bash hooks
 ```
 
@@ -323,8 +331,8 @@ Registers `__o10k_update_rps1` as an additional `PRECMD+` hook for right prompt 
 - Append `__O10K_PREEXEC_READY=1`
 
 **Preexec emulation:**
-- Bash ≥ 4.4: `PS0='$(__o10k_preexec 2>/dev/null)'` — fires once per command line
-- Bash < 4.4: DEBUG trap chained with existing trap via `trap -p DEBUG`
+- DEBUG trap chained with existing trap via `trap -p DEBUG` (all Bash versions)
+- Previous versions used `PS0` for Bash 4.4+, but this ran in a subshell, causing timer, ready-gate, and notification state to be lost. The DEBUG trap runs in the main shell context.
 
 ### Preexec Ready Gate
 
@@ -350,8 +358,8 @@ Both vanilla and ble.sh preexec handlers:
 When ble.sh is active, the adapter manages the right-aligned prompt via `__o10k_update_rps1`:
 
 1. Registered as a ble.sh `PRECMD+` hook (runs after `__o10k_render_prompt`)
-2. Queries the daemon for right prompt data (via bridge or socket)
-3. Sets `bleopt prompt_rps1` with the result, or an empty string if unavailable
+2. Reads `__O10K_LAST_RIGHT` which is populated during the prompt render cycle (from the bridge's `right\0` field or the socket fallback's JSON `right` extraction)
+3. Sets `bleopt prompt_rps1` with the cached value, or an empty string if unavailable
 
 Right prompt content typically includes git branch and command duration when `prompt.right_prompt = true`.
 
@@ -366,6 +374,7 @@ Right prompt content typically includes git branch and command duration when `pr
 | `__O10K_CACHE_DIR` | `$XDG_CACHE_HOME/omarchy10k` | Instant prompt cache directory |
 | `__O10K_CACHE` | `$__O10K_CACHE_DIR/last_prompt` | Cached PS1 file path |
 | `__O10K_EMIT_OSC133` | `0` or `1` | Whether to emit OSC 133 markers |
+| `__O10K_LAST_RIGHT` | `""` | Last right prompt string (for ble.sh `prompt_rps1`) |
 | `__O10K_BRIDGE_PID` | `0` | Bridge coprocess PID |
 
 ## Path Variables
@@ -387,9 +396,9 @@ Right prompt content typically includes git branch and command duration when `pr
 | `O10K_BIN` | Override CLI path |
 | `O10K_DAEMON_BIN` | Override daemon path |
 | `O10K_NOTIFY_THRESHOLD` | Desktop notification threshold (ms) |
-| `O10K_PARENT_PID` | Set to `$$` when starting daemon |
+| `O10K_PARENT_PID` | Exported as `$$` at init time; used by daemon and CLI to find the per-shell socket |
 | `HOSTNAME` | OSC 7 CWD reporting hostname |
-| `BLE_VERSION` | ble.sh detection |
+| `BLE_VERSION` | ble.sh detection (legacy; v0.3.0 uses `declare -F blehook` instead) |
 | `COLUMNS` | Terminal width |
 | `EPOCHREALTIME` | Microsecond timing (Bash 5.0+) |
 | `PWD` | Current directory for prompt + chpwd |
@@ -410,4 +419,19 @@ Right prompt content typically includes git branch and command duration when `pr
 | `bash` ≥ 4.4 | Required | PS0 preexec, basic functionality |
 | `bash` ≥ 5.0 | Recommended | EPOCHREALTIME timing |
 | `bash` ≥ 5.1 | Recommended | Array PROMPT_COMMAND |
-| `ble.sh` ≥ 4 | Optional | Enhanced hooks, transient prompt |
+| `ble.sh` (any version with `blehook`) | Optional | Enhanced hooks, transient prompt, right prompt |
+
+## v0.3.0 Bug Fixes
+
+The following issues identified by the [Bug Audit](bug-audit.md) have been fixed:
+
+| Finding | Fix | Severity |
+|---------|-----|----------|
+| [#6 Daemon never restarted](bug-audit.md#6-the-daemon-is-never-restarted-once-it-dies) | Restart triggers when socket is missing OR bridge PID is dead; 5-second rate limiting prevents restart storms | High |
+| [#7 CLI cannot find socket](bug-audit.md#7-the-cli-cannot-find-the-daemon-socket) | `O10K_PARENT_PID` is now `export`ed at init time so CLI tools can find the per-shell socket | High |
+| [#8 ble.sh gate never passes](bug-audit.md#8-the-blesh-version-gate-never-passes) | Detection uses `declare -F blehook` (feature probe) instead of `BLE_VERSION` numeric comparison | High |
+| [#11 Cache race between shells](bug-audit.md#11-the-instant-prompt-cache-races-between-concurrent-shells) | Cache temp files use PID-specific names (`$__O10K_CACHE.$$.tmp`) | Medium |
+| [#15 Comma-decimal locales](bug-audit.md#15-command-timing-silently-returns-zero-in-comma-decimal-locales) | `EPOCHREALTIME` values are normalized (`comma→period`) before arithmetic | Medium |
+| [#18 OSC 777 injection](bug-audit.md#18-osc-777-notification-text-is-injected-unescaped) | Command text is sanitized (`;`, BEL, ESC stripped) before OSC 777 interpolation | Low |
+| [#20a kill -0 PID 0](bug-audit.md#20-smaller-confirmed-defects) | Restart logic guards PID > 0 before `kill -0` | Low |
+| [#20f Fork-free jobs](bug-audit.md#20-smaller-confirmed-defects) | `jobs -p` output collected via `mapfile` + array length instead of `$(wc -l)` | Low |

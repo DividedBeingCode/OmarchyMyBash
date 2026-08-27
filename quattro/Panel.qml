@@ -81,6 +81,7 @@ Panel {
         root.controller.show()
         discoverAllSockets()
         detectTools()
+        loadConfig()
     }
 
     function close() {
@@ -171,13 +172,9 @@ Panel {
             daemonSocket.flush()
         } else {
             var toml = Model.buildTOML(root._configFlat)
-            configWriter.exec({
-                command: ["sh", "-c",
-                    "mkdir -p '" + Model.configDir() + "' && cat > '" + _configPath + "'"]
-            })
-            configWriter.write(toml)
-            configWriter.write("")
-            configWriter.running = false
+            var escaped = toml.replace(/'/g, "'\\''")
+            configWriter.exec(["sh", "-c",
+                "mkdir -p '" + Model.configDir() + "' && printf '%s\\n' '" + escaped + "' > '" + _configPath + "'"])
         }
 
         Qt.callLater(root.requestPreview)
@@ -259,8 +256,10 @@ Panel {
             root.daemonVersion = resp.version || root.daemonVersion
             root.daemonProtocolVersion = resp.protocol_version || root.daemonProtocolVersion
             if (root.sessionList.length > 0 && root.activeSessionIndex < root.sessionList.length) {
-                root.sessionList[root.activeSessionIndex].pid = String(resp.pid)
-                root.sessionList[root.activeSessionIndex].cwd = resp.cwd || ""
+                var updated = root.sessionList.slice()
+                updated[root.activeSessionIndex].pid = String(resp.pid)
+                updated[root.activeSessionIndex].cwd = resp.cwd || ""
+                root.sessionList = updated
             }
             loadConfig()
         } else if (resp.status === "ok") {
@@ -385,6 +384,14 @@ Panel {
 
     Process {
         id: installRunner
+        onRunningChanged: {
+            if (!running) {
+                root.detectTools()
+                root.toastMessage = "Installation finished — tools refreshed"
+                root._showToast = true
+                toastTimer.restart()
+            }
+        }
     }
 
     Process {
@@ -530,7 +537,7 @@ Panel {
                     x: Style.space(16)
                     radius: Style.space(4)
                     color: Qt.darker(Color.background || "#1a1b26", 1.5)
-                    visible: root.previewText.length > 0
+                    visible: root.previewText.length > 0 || !root._featureAvailable("0.3")
 
                     Column {
                         id: previewContent
@@ -539,10 +546,15 @@ Panel {
                         spacing: Style.space(4)
 
                         Text {
-                            text: root.previewText
-                            color: Color.foreground || "#a9b1d6"
+                            text: root._featureAvailable("0.3")
+                                ? root.previewText
+                                : "Live preview requires daemon v0.3+"
+                            color: root._featureAvailable("0.3")
+                                ? (Color.foreground || "#a9b1d6")
+                                : (Color.muted || "#414868")
                             font.family: "monospace"
                             font.pixelSize: Style.font.body
+                            font.italic: !root._featureAvailable("0.3")
                         }
 
                         Row {
@@ -715,7 +727,7 @@ Panel {
 
             Row {
                 spacing: Style.space(3)
-                visible: Object.keys(root.paletteColors).length > 0
+                visible: Object.keys(root.paletteColors).length > 0 || !root._featureAvailable("0.3")
                 Repeater {
                     model: ["accent", "foreground", "muted", "background", "red", "green", "yellow", "blue"]
                     delegate: Column {
@@ -735,6 +747,15 @@ Panel {
                         }
                     }
                 }
+            }
+
+            Text {
+                visible: !root._featureAvailable("0.3") && Object.keys(root.paletteColors).length === 0
+                text: "Palette preview requires daemon v0.3+"
+                color: Color.muted || "#414868"
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+                font.italic: true
             }
 
             ControlRow {
@@ -861,6 +882,22 @@ Panel {
                     }
                 }
             }
+
+            ControlRow {
+                label: "Time Format"
+                visible: root.cfgTimeEnabled
+                value: root.cfgTimeFormat === "%H:%M" ? "HH:MM"
+                     : root.cfgTimeFormat === "%H:%M:%S" ? "HH:MM:SS"
+                     : root.cfgTimeFormat === "%I:%M %p" ? "hh:mm AM/PM"
+                     : "HH:MM"
+                options: ["HH:MM", "HH:MM:SS", "hh:mm AM/PM"]
+                onChanged: function(val) {
+                    var fmt = val === "HH:MM:SS" ? "%H:%M:%S"
+                            : val === "hh:mm AM/PM" ? "%I:%M %p"
+                            : "%H:%M"
+                    root.setConfigValue("segments.time.format", fmt)
+                }
+            }
         }
     }
 
@@ -903,6 +940,25 @@ Panel {
 
             StatusRow { label: "Zoxide"; status: root.zoxideStatus }
             StatusRow { label: "fzf"; status: root.fzfStatus }
+
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Color.muted || "#414868"
+            }
+
+            ControlRow {
+                label: "Notify After"
+                value: root.cfgNotifyThresholdMs === 5000 ? "5s"
+                     : root.cfgNotifyThresholdMs === 10000 ? "10s"
+                     : root.cfgNotifyThresholdMs === 30000 ? "30s"
+                     : root.cfgNotifyThresholdMs + "ms"
+                options: ["5s", "10s", "30s"]
+                onChanged: function(val) {
+                    var ms = val === "5s" ? 5000 : val === "30s" ? 30000 : 10000
+                    root.setConfigValue("segments.notification.threshold_ms", ms)
+                }
+            }
         }
     }
 
@@ -917,7 +973,7 @@ Panel {
                 label: "Open Config File"
                 onClicked: {
                     editorLauncher.command = ["sh", "-c",
-                        "${EDITOR:-nano} '" + root._configPath + "'"]
+                        "${TERMINAL:-foot} -e sh -c '${EDITOR:-nano} \"" + root._configPath + "\"'"]
                     editorLauncher.startDetached()
                 }
             }
@@ -984,8 +1040,12 @@ Panel {
             ActionButton {
                 label: "Reload Config"
                 onClicked: {
-                    root.loadConfig()
-                    root.sendDaemonCommand("reload_config")
+                    if (daemonSocket.connected) {
+                        root.sendDaemonCommand("reload_config")
+                        Qt.callLater(root.loadConfig)
+                    } else {
+                        root.loadConfig()
+                    }
                 }
             }
 
@@ -1096,6 +1156,12 @@ Panel {
                         ? (Color.accent || "#7aa2f7")
                         : (Color.lighter_background || "#24283b")
 
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.connectToSession(index)
+                    }
+
                     Row {
                         id: sessionRow
                         anchors.fill: parent
@@ -1126,7 +1192,7 @@ Panel {
                         anchors.right: parent.right
                         anchors.rightMargin: Style.space(4)
                         anchors.verticalCenter: parent.verticalCenter
-                        z: 1
+                        z: 2
                         color: termMa.containsMouse ? (Color.accent || "#7aa2f7") : "transparent"
                         visible: modelData.cwd.length > 0
 
@@ -1145,17 +1211,12 @@ Panel {
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
+                                var safeCwd = modelData.cwd.replace(/'/g, "'\\''")
                                 floatingTermLauncher.command = ["sh", "-c",
-                                    "cd '" + modelData.cwd + "' && exec ${SHELL:-bash}"]
+                                    "cd '" + safeCwd + "' && exec ${SHELL:-bash}"]
                                 floatingTermLauncher.startDetached()
                             }
                         }
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.connectToSession(index)
                     }
                 }
             }
@@ -1168,8 +1229,13 @@ Panel {
         id: resetProc
         onRunningChanged: {
             if (!running) {
-                root.loadConfig()
-                root.sendDaemonCommand("reload_config")
+                if (daemonSocket.connected) {
+                    root.sendDaemonCommand("reload_config")
+                    Qt.callLater(root.loadConfig)
+                } else {
+                    root.loadConfig()
+                }
+                root._undoStack = []
             }
         }
     }

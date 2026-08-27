@@ -21,7 +21,9 @@
 | **Git Worktree** | Git feature allowing multiple working directories from one repo. Detected via `.git` file analysis (`gitdir:` pointer or `commondir` entry). When active, the worktree directory name appears in the git segment after the branch name. |
 | **GitAction** | An in-progress git operation detected via `.git/` marker files: Merge, Rebase, CherryPick, Bisect, Revert. |
 | **Hook broker** | The adapter's `o10k_hook_add`/`o10k_hook_remove` system that lets shell tools register callbacks for precmd/preexec/chpwd/shell_exit without fighting over PROMPT_COMMAND. |
+| **First-run hint** | One-time diagnostic message (`"Daemon not running. Run 'omarchy10k doctor' for diagnostics."`) shown when the daemon fails to start. Gated by `~/.cache/omarchy10k/.first-run-hint-shown` flag file so it fires once per install. |
 | **Hot reload** | The daemon's ability to update config or theme without restarting, via filesystem watchers or protocol commands. |
+| **install.sh** | One-script installer at `omarchy10k/install.sh`. Runs `cargo build --release`, copies binaries to `~/.local/bin/`, configures `.bashrc`, installs the Quattro plugin and theme-set hook. Supports `--uninstall` to reverse all steps. |
 | **In-flight set** | HashSet tracking which git repository roots currently have an active background refresh. Prevents duplicate concurrent git status queries for the same repo. |
 | **Instant Prompt** | Cached prompt loaded from `~/.cache/omarchy10k/last_prompt` for zero-latency startup. The Bash adapter sets `PS1` from the cache before the daemon is ready; after each successful render, the bridge writes the new prompt atomically (`tmp` + `mv`) in a background subshell. |
 | **Layout engine** | `LayoutEngine` — resolves which segments fit the terminal width using priority-based compression. |
@@ -44,7 +46,7 @@
 | **Quattro** | The Omarchy desktop bar/panel system built on Quickshell. The Omarchy10k plugin appears as a bar widget. |
 | **Quickshell** | The QML-based desktop shell framework used by Omarchy Quattro. Provides `Process`, `Socket`, bar/panel infrastructure. |
 | **Segment** | A discrete piece of the prompt (directory, git, exit status, command duration). Each is a `render(ctx) -> Option<Segment>` function. |
-| **SegmentContext** | Struct carrying all inputs a segment needs: cwd, exit code, duration, width, jobs, SSH status, git status, config, palette. |
+| **SegmentContext** | Struct carrying all inputs a segment needs: cwd, exit code, duration, width, jobs, SSH status, git status, config, palette, and `term_caps` (cached `TermCaps` for the render cycle). |
 | **Shell integration detection** | The adapter's `__o10k_detect_terminal_integration` function that checks for existing terminal shell integrations (Ghostty, VTE, WezTerm, Kitty) to avoid duplicate OSC 133 emission. Complemented by daemon-side `TermCaps::detect()` for per-terminal feature gating. |
 | **Smart truncation** | Directory segment's algorithm: keeps first and last path components, uses unique prefixes for middle directories, preserves git repo roots. |
 | **Stale-while-revalidate** | Git caching strategy where expired cache entries return immediately (marked `stale: true`) while an async background task refreshes the data. Prevents blocking on git subprocess. |
@@ -64,6 +66,7 @@
 | `O10K_BIN` | User (optional) | Adapter | Override `omarchy10k` binary path |
 | `O10K_DAEMON_BIN` | User (optional) | Adapter | Override `omarchy10kd` binary path |
 | `O10K_SHELL_INTEGRATION` | User (optional) | Adapter | Control OSC 133 emission: `auto`, `force`, `off` |
+| `O10K_NOTIFY_THRESHOLD` | User (optional) | Adapter | Initial desktop notification threshold in ms (default `10000`). Overridden at runtime by `notify_threshold_ms` from daemon prompt response. |
 | `GHOSTTY_RESOURCES_DIR` | Ghostty | Adapter | Ghostty terminal detection |
 | `KITTY_SHELL_INTEGRATION` | Kitty | Adapter | Kitty terminal detection |
 | `PPID` | Shell | CLI | Fallback PID for socket path |
@@ -95,4 +98,5 @@
 | `$XDG_CACHE_HOME/omarchy10k/last_prompt` | Instant prompt cache (default `~/.cache/omarchy10k/last_prompt`) | Bash adapter / bridge |
 | `~/.config/omarchy/plugins/community.omarchy10k/` | Installed Quattro plugin | User (manual copy) |
 | `~/.config/omarchy/hooks/theme-set.d/omarchy10k` | Theme switch hook | User (manual install) |
+| `$XDG_CACHE_HOME/omarchy10k/.first-run-hint-shown` | First-run hint gate flag | Bash adapter |
 | `~/.local/share/blesh/ble.sh` | ble.sh installation | User |

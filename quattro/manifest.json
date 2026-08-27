@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "community.omarchy10k",
   "name": "Omarchy10k",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "author": "Ian Johnston",
   "license": "MIT",
   "description": "Control Center for the Omarchy10k shell experience. Configure prompt style, theme, segments, and shell integrations from the Quattro bar.",

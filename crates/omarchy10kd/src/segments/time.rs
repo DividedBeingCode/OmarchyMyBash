@@ -69,6 +69,8 @@ struct Tm {
     tm_wday: i32,
     tm_yday: i32,
     tm_isdst: i32,
+    tm_gmtoff: std::ffi::c_long,
+    tm_zone: *const std::ffi::c_char,
 }
 
 mod localtime {

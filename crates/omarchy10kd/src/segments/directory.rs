@@ -1,4 +1,5 @@
 use crate::layout::Segment;
+use crate::render::wrap_np;
 use crate::segments::SegmentContext;
 use unicode_width::UnicodeWidthStr;
 use std::path::Path;
@@ -7,7 +8,9 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let path = ctx.cwd;
     let home = ctx.home;
 
-    let display_path = if !home.is_empty() && path.starts_with(home) {
+    let display_path = if !home.is_empty()
+        && std::path::Path::new(path).starts_with(std::path::Path::new(home))
+    {
         format!("~{}", &path[home.len()..])
     } else {
         path.to_string()
@@ -28,24 +31,32 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         }
     };
 
-    let bold = strategy != "truncate"
-        || ctx.config.directory.repo_root_style == "bold";
+    let bold = ctx.config.directory.repo_root_style == "bold";
 
-    let hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_default();
-    let abs_path = ctx.cwd;
-    let hyperlink_content = format!(
-        "\x1b]8;;file://{hostname}{abs_path}\x1b\\{content}\x1b]8;;\x1b\\"
-    );
+    let display_content = if ctx.term_caps.has_osc8 {
+        let hostname = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_default();
+        let abs_path = ctx.cwd;
+        let osc_open = format!("\x1b]8;;file://{hostname}{abs_path}\x1b\\");
+        let osc_close = "\x1b]8;;\x1b\\";
+        format!(
+            "{}{}{}",
+            wrap_np(&osc_open),
+            content,
+            wrap_np(osc_close)
+        )
+    } else {
+        content.clone()
+    };
 
     let preferred_width = UnicodeWidthStr::width(content.as_str()) as u16;
     let compact_width = UnicodeWidthStr::width(compact.as_str()) as u16;
 
     Some(Segment {
         name: "directory",
-        content: hyperlink_content,
+        content: display_content,
         compact_content: Some(compact),
         priority: 10,
         min_width: compact_width.min(10),
@@ -123,12 +134,13 @@ fn smart_truncate(path: &str, max_len: usize, _repo_root_style: &str) -> String 
 
 fn unique_prefix(target: &str, before: &[&str], after: &[&str]) -> String {
     let siblings: Vec<&&str> = before.iter().chain(after.iter()).collect();
+    let chars: Vec<char> = target.chars().collect();
 
-    for len in 1..=target.len() {
-        let prefix = &target[..len];
-        let is_unique = siblings.iter().all(|s| !s.starts_with(prefix) || **s == target);
+    for len in 1..=chars.len() {
+        let prefix: String = chars[..len].iter().collect();
+        let is_unique = siblings.iter().all(|s| !s.starts_with(&prefix) || **s == target);
         if is_unique {
-            return prefix.to_string();
+            return prefix;
         }
     }
 
@@ -164,7 +176,7 @@ mod tests {
     fn test_home_substitution() {
         let path = "/home/ian/Code/omarchy10k";
         let home = "/home/ian";
-        let display = if path.starts_with(home) {
+        let display = if std::path::Path::new(path).starts_with(std::path::Path::new(home)) {
             format!("~{}", &path[home.len()..])
         } else {
             path.to_string()
@@ -175,5 +187,20 @@ mod tests {
     #[test]
     fn test_short_path_no_truncation() {
         assert_eq!(smart_truncate("~/Code", 40, "bold"), "~/Code");
+    }
+
+    #[test]
+    fn test_home_prefix_not_path_aware_false_positive() {
+        let path = "/home/ian2/projects";
+        let home = "/home/ian";
+        let matches = std::path::Path::new(path).starts_with(std::path::Path::new(home));
+        assert!(!matches, "/home/ian2 should NOT match /home/ian");
+    }
+
+    #[test]
+    fn test_unique_prefix_multibyte() {
+        let result = unique_prefix("données", &["docs"], &[]);
+        assert!(result.is_char_boundary(result.len()), "prefix must be valid UTF-8");
+        assert!(!result.is_empty());
     }
 }

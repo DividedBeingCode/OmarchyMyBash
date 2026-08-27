@@ -2,10 +2,16 @@ use crate::config::Config;
 use crate::git::GitStatus;
 use crate::layout::{LayoutEngine, LayoutPreset, ResolvedSegment};
 use crate::segments::{self, SegmentContext, character};
+use crate::terminal::TermCaps;
 use crate::theme::ThemePalette;
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
+
+/// Wrap an ANSI escape in readline non-printing delimiters
+pub fn wrap_np(esc: &str) -> String {
+    format!("\x01{esc}\x02")
+}
 const OSC_133_PROMPT_START: &str = "\x01\x1b]133;A\x07\x02";
 const OSC_133_PROMPT_END: &str = "\x01\x1b]133;B\x07\x02";
 
@@ -15,6 +21,8 @@ pub struct PromptResponse {
     pub right: Option<String>,
     pub transient: Option<String>,
     pub git_stale: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_threshold_ms: Option<u64>,
 }
 
 pub struct PromptRenderer<'a> {
@@ -37,8 +45,25 @@ impl<'a> PromptRenderer<'a> {
         git_status: &GitStatus,
         shell_integration: bool,
     ) -> PromptResponse {
+        self.render_with_ssh(cwd, exit_code, cmd_duration_ms, cols, jobs, git_status, shell_integration, None)
+    }
+
+    pub fn render_with_ssh(
+        &self,
+        cwd: &str,
+        exit_code: i32,
+        cmd_duration_ms: u64,
+        cols: u16,
+        jobs: u32,
+        git_status: &GitStatus,
+        shell_integration: bool,
+        force_ssh: Option<bool>,
+    ) -> PromptResponse {
         let home = std::env::var("HOME").unwrap_or_default();
-        let in_ssh = std::env::var("SSH_TTY").is_ok() || std::env::var("SSH_CONNECTION").is_ok();
+        let in_ssh = force_ssh.unwrap_or_else(|| {
+            std::env::var("SSH_TTY").is_ok() || std::env::var("SSH_CONNECTION").is_ok()
+        });
+        let term_caps = TermCaps::detect();
 
         let ctx = SegmentContext {
             cwd,
@@ -51,6 +76,7 @@ impl<'a> PromptRenderer<'a> {
             git_status,
             config: self.config,
             palette: self.palette,
+            term_caps: &term_caps,
         };
 
         let mut segments = segments::collect_segments(&ctx);
@@ -69,12 +95,15 @@ impl<'a> PromptRenderer<'a> {
         };
 
         let title_escape = if self.config.terminal.title.enabled {
-            let short_cwd = if !home.is_empty() && cwd.starts_with(&home) {
+            let short_cwd = if !home.is_empty()
+                && std::path::Path::new(cwd).starts_with(std::path::Path::new(&home))
+            {
                 format!("~{}", &cwd[home.len()..])
             } else {
                 cwd.to_string()
             };
-            format!("\x1b]2;{short_cwd}\x07")
+            let title_text = self.expand_title_format(&self.config.terminal.title.format, &short_cwd, git_status);
+            format!("\x01\x1b]2;{title_text}\x07\x02")
         } else {
             String::new()
         };
@@ -88,8 +117,13 @@ impl<'a> PromptRenderer<'a> {
             format!("{title_escape}{prompt_start}{line1} {line2} {prompt_end}")
         };
 
+        let left_segment_names: std::collections::HashSet<&str> = resolved
+            .iter()
+            .map(|r| segments[r.original_index].name)
+            .collect();
+
         let right = if self.config.prompt.right_prompt {
-            self.render_right(&ctx)
+            self.render_right(&ctx, &left_segment_names)
         } else {
             None
         };
@@ -103,18 +137,32 @@ impl<'a> PromptRenderer<'a> {
             None
         };
 
+        let notify_threshold_ms = if self.config.segments.notification.enabled {
+            Some(self.config.segments.notification.threshold_ms)
+        } else {
+            None
+        };
+
         PromptResponse {
             left,
             right,
             transient,
             git_stale: git_status.stale,
+            notify_threshold_ms,
         }
     }
 
-    fn render_right(&self, ctx: &SegmentContext<'_>) -> Option<String> {
+    fn render_right(
+        &self,
+        ctx: &SegmentContext<'_>,
+        left_names: &std::collections::HashSet<&str>,
+    ) -> Option<String> {
         let mut parts = Vec::new();
 
-        if ctx.config.segments.command_duration.enabled && ctx.cmd_duration_ms >= ctx.config.segments.command_duration.show_above_ms {
+        if !left_names.contains("command_duration")
+            && ctx.config.segments.command_duration.enabled
+            && ctx.cmd_duration_ms >= ctx.config.segments.command_duration.show_above_ms
+        {
             let secs = ctx.cmd_duration_ms / 1000;
             let ms = ctx.cmd_duration_ms % 1000;
             let time_str = if secs >= 60 {
@@ -126,19 +174,26 @@ impl<'a> PromptRenderer<'a> {
             };
             parts.push(format!(
                 "{}{}{}",
-                ctx.palette.muted.fg_escape(),
+                wrap_np(&ctx.palette.muted.fg_escape()),
                 time_str,
-                RESET
+                wrap_np(RESET)
             ));
         }
 
-        if ctx.git_status.is_repo && !ctx.git_status.branch.is_empty() {
+        if !left_names.contains("git")
+            && ctx.git_status.is_repo
+            && !ctx.git_status.branch.is_empty()
+        {
             parts.push(format!(
                 "{}{} {}{}",
-                if ctx.git_status.stale { ctx.palette.muted.fg_escape() } else { ctx.palette.accent.fg_escape() },
+                wrap_np(&if ctx.git_status.stale {
+                    ctx.palette.muted.fg_escape()
+                } else {
+                    ctx.palette.accent.fg_escape()
+                }),
                 "\u{e0a0}",
                 ctx.git_status.branch,
-                RESET
+                wrap_np(RESET)
             ));
         }
 
@@ -155,12 +210,12 @@ impl<'a> PromptRenderer<'a> {
         for seg in segments {
             let mut styled = String::new();
 
-            styled.push_str(&seg.fg);
+            styled.push_str(&wrap_np(&seg.fg));
             if seg.bold {
-                styled.push_str(BOLD);
+                styled.push_str(&wrap_np(BOLD));
             }
             styled.push_str(&seg.content);
-            styled.push_str(RESET);
+            styled.push_str(&wrap_np(RESET));
 
             parts.push(styled);
         }
@@ -170,5 +225,64 @@ impl<'a> PromptRenderer<'a> {
 
     fn format_line2(&self, ctx: &SegmentContext<'_>) -> String {
         character::render_prompt_char(ctx)
+    }
+
+    fn expand_title_format(&self, format: &str, short_cwd: &str, git_status: &GitStatus) -> String {
+        if format.is_empty() {
+            return short_cwd.to_string();
+        }
+        let user = std::env::var("USER").unwrap_or_default();
+        let host = gethostname_string();
+        let branch = if git_status.is_repo && !git_status.branch.is_empty() {
+            &git_status.branch
+        } else {
+            ""
+        };
+        format
+            .replace("{dir}", short_cwd)
+            .replace("{user}", &user)
+            .replace("{host}", &host)
+            .replace("{branch}", branch)
+    }
+}
+
+fn gethostname_string() -> String {
+    let mut buf = vec![0u8; 256];
+    let ret = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if ret != 0 {
+        return String::new();
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    buf.truncate(len);
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+mod libc {
+    unsafe extern "C" {
+        pub fn gethostname(name: *mut std::ffi::c_char, len: usize) -> std::ffi::c_int;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wrap_np() {
+        let esc = "\x1b[31m";
+        let wrapped = wrap_np(esc);
+        assert_eq!(wrapped, "\x01\x1b[31m\x02");
+        assert!(wrapped.starts_with('\x01'));
+        assert!(wrapped.ends_with('\x02'));
+    }
+
+    #[test]
+    fn test_wrap_np_reset() {
+        assert_eq!(wrap_np(RESET), "\x01\x1b[0m\x02");
+    }
+
+    #[test]
+    fn test_wrap_np_bold() {
+        assert_eq!(wrap_np(BOLD), "\x01\x1b[1m\x02");
     }
 }

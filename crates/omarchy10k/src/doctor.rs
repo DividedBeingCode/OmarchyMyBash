@@ -128,13 +128,48 @@ fn check_terminal() {
 }
 
 async fn check_daemon(socket_path: &Path) {
-    if socket_path.exists() {
-        match crate::prompt::send_command(socket_path, "status").await {
-            Ok(_) => println!("  Daemon                         ✓ running"),
-            Err(_) => println!("  Daemon                         ✘ socket exists but unresponsive"),
+    let runtime_dir = socket_path
+        .parent()
+        .unwrap_or_else(|| Path::new("/tmp"));
+
+    let mut found = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(runtime_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("omarchy10k-") && name_str.ends_with(".sock") {
+                found.push(entry.path());
+            }
         }
-    } else {
+    }
+
+    if found.is_empty() {
         println!("  Daemon                         - not running");
+        return;
+    }
+
+    let mut any_ok = false;
+    for sock in &found {
+        let shell_pid = sock
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("omarchy10k-"))
+            .and_then(|n| n.strip_suffix(".sock"))
+            .unwrap_or("?");
+
+        match crate::prompt::send_command(sock, "status").await {
+            Ok(_) => {
+                println!("  Daemon (shell {shell_pid})           ✓ running");
+                any_ok = true;
+            }
+            Err(_) => {
+                println!("  Daemon (shell {shell_pid})           ✘ unresponsive");
+            }
+        }
+    }
+
+    if !any_ok {
+        println!("  Daemon                         ✘ all sockets unresponsive");
     }
 }
 

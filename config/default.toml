@@ -52,6 +52,48 @@ show = "auto"               # auto | always | never
 success = "❯"
 error = "❯"
 
+# ── v0.3 Context Segments ────────────────────────────────
+
+[segments.container]
+enabled = true
+icon = "auto"               # auto-detects Docker, Podman, LXC, etc.
+
+[segments.python]
+enabled = true              # shows active venv or conda env
+
+[segments.toolchain]
+enabled = true              # shows Mise-managed tool versions
+
+[segments.nix]
+enabled = true              # shows Nix shell (pure/impure)
+
+[segments.k8s]
+enabled = false             # shows current Kubernetes context
+show_namespace = true
+
+[segments.time]
+enabled = false             # shows current time in prompt
+format = "%H:%M"            # %H:%M | %H:%M:%S | %I:%M %p
+
+[segments.battery]
+enabled = false             # shows battery level (laptop only)
+show_above = 100            # always show (set lower to hide when charging)
+threshold_warning = 30
+threshold_critical = 10
+
+[segments.notification]
+enabled = true
+threshold_ms = 10000        # desktop notification for commands longer than this
+
+# ── Terminal Features ────────────────────────────────────
+
+[terminal.title]
+enabled = true
+format = "{dir}"            # placeholders: {dir}, {user}, {host}, {branch}
+
+[terminal.progress]
+enabled = true              # OSC 9;4 progress bar during command execution
+
 [daemon]
 socket = "auto"
 log_level = "warn"          # trace | debug | info | warn | error

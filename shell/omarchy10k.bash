@@ -99,6 +99,8 @@ __o10k_dispatch() {
 
 # ── Daemon Lifecycle ───────────────────────────────────────────────────────
 
+export O10K_PARENT_PID=$$
+
 __o10k_start_daemon() {
     if [[ -S "$__O10K_SOCKET" ]]; then
         if __o10k_socket_send '{"command":"status"}' >/dev/null 2>&1; then
@@ -115,6 +117,14 @@ __o10k_start_daemon() {
         sleep 0.1
         (( i++ ))
     done
+
+    if [[ ! -S "$__O10K_SOCKET" ]]; then
+        local hint_file="${__O10K_CACHE_DIR}/.first-run-hint-shown"
+        if [[ ! -f "$hint_file" ]]; then
+            echo "[omarchy10k] Daemon not running. Run 'omarchy10k doctor' for diagnostics." >&2
+            touch "$hint_file" 2>/dev/null
+        fi
+    fi
 }
 
 __o10k_stop_daemon() {
@@ -146,11 +156,13 @@ __o10k_bridge_request() {
             __o10k_start_bridge
             echo "$request" >&"${__O10K_BRIDGE[1]}" 2>/dev/null || return 1
         }
-        local left
+        local left right
         IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" left 2>/dev/null
+        IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" right 2>/dev/null
         if [[ -n "$left" ]]; then
             PS1="$left"
-            { printf '%s' "$PS1" > "$__O10K_CACHE.tmp" && mv "$__O10K_CACHE.tmp" "$__O10K_CACHE"; } 2>/dev/null &
+            __O10K_LAST_RIGHT="${right:-}"
+            { printf '%s' "$PS1" > "$__O10K_CACHE.$$.tmp" && mv "$__O10K_CACHE.$$.tmp" "$__O10K_CACHE"; } 2>/dev/null &
             return 0
         fi
     fi
@@ -163,21 +175,21 @@ __o10k_socket_send() {
     if command -v socat &>/dev/null; then
         echo "$msg" | socat -T2 - UNIX-CONNECT:"$__O10K_SOCKET"
     elif command -v python3 &>/dev/null; then
-        python3 -c "
+        python3 -c '
 import socket, sys
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.settimeout(2)
-s.connect('$__O10K_SOCKET')
-s.sendall(b'$msg\n')
-data = b''
+s.connect(sys.argv[1])
+s.sendall((sys.argv[2] + "\n").encode())
+data = b""
 while True:
     chunk = s.recv(4096)
     if not chunk: break
     data += chunk
-    if b'\n' in data: break
+    if b"\n" in data: break
 s.close()
 sys.stdout.write(data.decode())
-" 2>/dev/null
+' "$__O10K_SOCKET" "$msg" 2>/dev/null
     else
         return 1
     fi
@@ -188,6 +200,7 @@ sys.stdout.write(data.decode())
 __O10K_CMD_START=0
 __O10K_CMD_DURATION=0
 __O10K_LAST_CMD=""
+__O10K_LAST_RIGHT=""
 __O10K_NOTIFY_THRESHOLD="${O10K_NOTIFY_THRESHOLD:-10000}"
 
 __o10k_timer_start() {
@@ -200,6 +213,9 @@ __o10k_timer_stop() {
         return
     fi
     local now="${EPOCHREALTIME:-$(date +%s%N)}"
+    # Normalize comma decimal separator to period (European locales)
+    now="${now//,/.}"
+    __O10K_CMD_START="${__O10K_CMD_START//,/.}"
     if [[ "$now" == *.* ]]; then
         local start_s="${__O10K_CMD_START%%.*}"
         local start_us="${__O10K_CMD_START##*.}"
@@ -239,8 +255,11 @@ __o10k_render_prompt() {
 
     # Desktop notification for long-running commands
     if (( __O10K_CMD_DURATION > ${__O10K_NOTIFY_THRESHOLD:-10000} )); then
+        local _notify_cmd="${__O10K_LAST_CMD:-command}"
+        # Strip control characters and semicolons that could break OSC 777
+        _notify_cmd="${_notify_cmd//[;$'\a'$'\e']/}"
         printf '\033]777;notify;Command finished;%s took %dms\007' \
-            "${__O10K_LAST_CMD:-command}" "$__O10K_CMD_DURATION"
+            "$_notify_cmd" "$__O10K_CMD_DURATION"
     fi
 
     printf '\033[?2026h'
@@ -250,17 +269,32 @@ __o10k_render_prompt() {
 
     printf '\033]9;4;0\007'
 
+    # Restart daemon/bridge if socket is missing or status probe fails
+    if ! { [[ -S "$__O10K_SOCKET" ]] && (( __O10K_BRIDGE_PID > 0 )) && kill -0 "$__O10K_BRIDGE_PID" 2>/dev/null; }; then
+        local _now_restart="${EPOCHREALTIME:-0}"
+        _now_restart="${_now_restart%%[.,]*}"
+        if (( _now_restart - ${__O10K_LAST_RESTART_ATTEMPT:-0} > 5 )); then
+            __O10K_LAST_RESTART_ATTEMPT="$_now_restart"
+            rm -f "$__O10K_SOCKET"
+            __o10k_start_daemon
+            __o10k_start_bridge
+        fi
+    fi
+
     if [[ -S "$__O10K_SOCKET" ]]; then
         local cols="${COLUMNS:-80}"
-        local jobs_count
-        jobs_count=$(jobs -p 2>/dev/null | wc -l)
+        local -a _jobs_arr=()
+        mapfile -t _jobs_arr < <(jobs -p 2>/dev/null)
+        local jobs_count=${#_jobs_arr[@]}
 
         local si_flag="true"
         (( __O10K_EMIT_OSC133 )) || si_flag="false"
 
+        local escaped_cwd="${PWD//\\/\\\\}"
+        escaped_cwd="${escaped_cwd//\"/\\\"}"
         local request
         request=$(printf '{"cwd":"%s","exit_code":%d,"cmd_duration_ms":%d,"cols":%d,"jobs":%d,"shell_integration":%s}' \
-            "$PWD" "$exit_code" "$__O10K_CMD_DURATION" "$cols" "$jobs_count" "$si_flag")
+            "$escaped_cwd" "$exit_code" "$__O10K_CMD_DURATION" "$cols" "$jobs_count" "$si_flag")
 
         # Try bridge first (no fork/exec in hot path)
         if __o10k_bridge_request "$request"; then
@@ -278,7 +312,15 @@ __o10k_render_prompt() {
             left=$(echo "$response" | "$__O10K_BIN" parse-prompt 2>/dev/null || echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('left',''))" 2>/dev/null)
             if [[ -n "$left" ]]; then
                 PS1="$left"
-                { printf '%s' "$PS1" > "$__O10K_CACHE.tmp" && mv "$__O10K_CACHE.tmp" "$__O10K_CACHE"; } 2>/dev/null &
+                __O10K_LAST_RIGHT=$(echo "$response" | python3 -c "import sys,json; r=json.load(sys.stdin).get('right',''); print(r if r else '')" 2>/dev/null)
+                { printf '%s' "$PS1" > "$__O10K_CACHE.$$.tmp" && mv "$__O10K_CACHE.$$.tmp" "$__O10K_CACHE"; } 2>/dev/null &
+
+                local threshold
+                threshold=$(echo "$response" | python3 -c "import sys,json; t=json.load(sys.stdin).get('notify_threshold_ms'); print(t if t else '')" 2>/dev/null)
+                if [[ -n "$threshold" ]]; then
+                    __O10K_NOTIFY_THRESHOLD="$threshold"
+                fi
+
                 printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$PWD"
                 printf '\033[?2026l'
                 return
@@ -311,7 +353,7 @@ __o10k_preexec() {
 # ── Installation ───────────────────────────────────────────────────────────
 
 __o10k_install_hooks() {
-    if [[ -n "${BLE_VERSION:-}" ]] && (( ${BLE_VERSION%%.*} >= 4 )); then
+    if declare -F blehook &>/dev/null; then
         __o10k_install_blesh_hooks
     else
         __o10k_install_vanilla_hooks
@@ -341,20 +383,11 @@ __o10k_preexec_blesh() {
 }
 
 __o10k_update_rps1() {
-    if [[ -S "$__O10K_SOCKET" ]]; then
-        local response
-        response=$(__o10k_socket_send '{"command":"status"}' 2>/dev/null)
-        # Right prompt is rendered by the daemon; extract from response
-        if [[ -n "$response" ]]; then
-            local right
-            right=$(echo "$response" | python3 -c "import sys,json; r=json.load(sys.stdin).get('right',''); print(r if r else '')" 2>/dev/null)
-            if [[ -n "$right" ]]; then
-                bleopt prompt_rps1="$right"
-                return
-            fi
-        fi
+    if [[ -n "${__O10K_LAST_RIGHT:-}" ]]; then
+        bleopt prompt_rps1="$__O10K_LAST_RIGHT"
+    else
+        bleopt prompt_rps1=""
     fi
-    bleopt prompt_rps1=""
 }
 
 __o10k_install_vanilla_hooks() {
@@ -366,16 +399,12 @@ __o10k_install_vanilla_hooks() {
         PROMPT_COMMAND='__o10k_render_prompt'
     fi
 
-    if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
-        PS0='$(__o10k_preexec 2>/dev/null)'
+    local existing_trap
+    existing_trap=$(trap -p DEBUG 2>/dev/null | command sed "s/trap -- '\\(.*\\)' DEBUG/\\1/")
+    if [[ -n "$existing_trap" ]]; then
+        trap '__o10k_preexec; '"$existing_trap" DEBUG
     else
-        local existing_trap
-        existing_trap=$(trap -p DEBUG | sed "s/trap -- '\\(.*\\)' DEBUG/\\1/")
-        if [[ -n "$existing_trap" ]]; then
-            trap '__o10k_preexec; '"$existing_trap" DEBUG
-        else
-            trap '__o10k_preexec' DEBUG
-        fi
+        trap '__o10k_preexec' DEBUG
     fi
 
     if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then

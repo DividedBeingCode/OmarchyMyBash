@@ -4,6 +4,8 @@
 .pragma library
 
 function configDir() {
+    var xdg = Qt.getenv("XDG_CONFIG_HOME");
+    if (xdg) return xdg + "/omarchy10k";
     return (Qt.getenv("HOME") || "/tmp") + "/.config/omarchy10k";
 }
 

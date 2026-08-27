@@ -75,10 +75,11 @@ pub struct DaemonState {
     pub palette: RwLock<ThemePalette>,
     pub git_cache: GitCache,
     pub config_path: PathBuf,
+    pub socket_path: PathBuf,
 }
 ```
 
-`DaemonState::new` reads `git_ttl_ms` from `config.git.cache_ttl_ms` and passes it to `GitCache::new(ttl_ms)`.
+`DaemonState::new` reads `git_ttl_ms` from `config.git.cache_ttl_ms` and passes it to `GitCache::new(ttl_ms)`. The `socket_path` is used by the shutdown handler to clean up the socket file on exit.
 
 `reload_theme` calls `ThemePalette::resolve_palette(&config)`, which respects `config.theme.source` and custom overrides — the same unified path used at startup.
 
@@ -127,11 +128,11 @@ Connections are persistent — the server reads lines in a loop until EOF. This 
 | `reload_config` | `state.reload_config()` | Re-reads TOML from disk, updates `RwLock<Config>` |
 | `reload_theme` | `state.reload_theme()` | Calls `ThemePalette::resolve_palette(&config)`, updates `RwLock<ThemePalette>` |
 | `invalidate_git` | `state.git_cache.invalidate_all()` | Clears all cached git statuses |
-| `shutdown` | Responds `{"status":"bye"}`, calls `exit(0)` | Immediate clean shutdown |
+| `shutdown` | Responds `{"status":"bye"}`, removes socket file, calls `exit(0)` | Clean shutdown with socket cleanup |
 | `status` | Reads process info | Returns `status`, `pid`, `version`, `protocol_version`, `cwd` |
 | `palette` | Reads in-memory palette | Returns theme colors as hex (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`) |
 | `config_get` | Serializes in-memory config | Returns full config as JSON (requires `Serialize` on Config) |
-| `config_set` | *(via typed `config` message)* | Accepts JSON patch in `rest.config`, merges into TOML on disk, calls `reload_config()` |
+| `config_set` | *(via typed `config` message)* | Accepts JSON patch in `rest.config`, recursively merges into TOML on disk (atomic write via tmp+rename), creates file/dirs if missing, returns structured error on TOML parse failure, auto-calls `reload_theme()` when patch touches `[theme]` |
 
 ### Hello Response
 
@@ -312,12 +313,13 @@ This replaces the separate startup/reload code paths and fixes the previous bug 
 pub struct GitCache {
     cache: Arc<RwLock<HashMap<PathBuf, CachedStatus>>>,
     in_flight: Arc<RwLock<HashSet<PathBuf>>>,
-    ttl: Duration,  // from config.git.cache_ttl_ms
+    ttl_ms: AtomicU64,  // updatable via set_ttl()
 }
 ```
 
 ```rust
 pub fn new(ttl_ms: u64) -> Self
+pub fn set_ttl(&self, ttl_ms: u64)  // called by reload_config()
 ```
 
 Cache key is the **repository root path**, not the cwd. Multiple cwds within the same repo share one cache entry.
@@ -723,3 +725,31 @@ Not a layout `Segment` — rendered directly by `render.rs`:
 - Success: `config.segments.character.success` (default `❯`) in accent color
 - Error: `config.segments.character.error` (default `❯`) in red; undercurl when `TermCaps.has_undercurl`
 - Transient: hardcoded muted `❯` (ignores character config)
+
+## v0.3.0 Bug Fixes
+
+The following issues identified by the [Bug Audit](bug-audit.md) have been fixed:
+
+| Finding | Module | Fix | Severity |
+|---------|--------|-----|----------|
+| [#1](bug-audit.md#1-prompt-escapes-are-not-marked-non-printing-so-bash-miscounts-prompt-width) | `render.rs` | All ANSI escapes (colors, bold, reset, OSC 2 title, OSC 8 hyperlinks, undercurl) are wrapped in `\x01`/`\x02` readline delimiters via `wrap_np()`. Preview responses strip delimiters. | Critical |
+| [#2](bug-audit.md#2-struct-tm-abi-mismatch-corrupts-the-stack-when-the-time-segment-is-enabled) | `segments/time.rs` | `struct Tm` now includes `tm_gmtoff` and `tm_zone` fields matching the C ABI | Critical |
+| [#3](bug-audit.md#3-two-utf-8-byte-slicing-panics-on-ordinary-non-ascii-input) | `segments/git.rs`, `directory.rs` | `truncate_branch` and `unique_prefix` use `char_indices()` for UTF-8-safe slicing | Critical |
+| [#4](bug-audit.md#4-the-daemon-exits-immediately-when-o10k_parent_pid-is-unset) | `main.rs` | `monitor_parent` blocks forever via `std::future::pending()` when PID is unset | Critical |
+| [#9](bug-audit.md#9-the-right-prompt-duplicates-content-already-in-the-left-prompt) | `render.rs` | `render_right` skips segments already rendered in the left prompt | High |
+| [#10](bug-audit.md#10-gitcache_ttl_ms-is-frozen-at-startup) | `git.rs`, `server.rs` | `GitCache::ttl` uses `AtomicU64`; `reload_config` updates it via `set_ttl()` | Medium |
+| [#12](bug-audit.md#12-a-type-less-prompt-request-carrying-command-is-misrouted-to-the-control-handler) | `server.rs` | Type-less messages check `cwd` first (prompt) before `command` (control) | Medium |
+| [#13](bug-audit.md#13-home-prefix-substitution-is-not-path-aware) | `render.rs`, `directory.rs` | Home substitution uses `Path::starts_with` (component-aware) | Medium |
+| [#14](bug-audit.md#14-directoryrepo_root_style-is-ignored-and-the-bold-expression-is-inverted) | `directory.rs` | Bold is now `repo_root_style == "bold"` only; inverted logic removed | Medium |
+| [#16](bug-audit.md#16-kill0-treats-eperm-as-parent-is-dead) | `main.rs` | Parent monitor distinguishes `ESRCH` (dead) from `EPERM` (alive) | Medium |
+| [#17](bug-audit.md#17-shutdown-leaves-the-socket-file-behind) | `server.rs` | Shutdown handler removes socket file before `exit(0)` | Low |
+| [#20b](bug-audit.md#20-smaller-confirmed-defects) | `segments/git.rs` | Empty branch on cold cache displays `…` instead of blank | Low |
+| [#20c](bug-audit.md#20-smaller-confirmed-defects) | `git.rs` | `detect_worktree` checks for `/worktrees/` in gitdir path to distinguish from submodules | Low |
+| [#20d](bug-audit.md#20-smaller-confirmed-defects) | `segments/battery.rs` | `show_above` uses `>` instead of `>=` so 100% battery shows at threshold 100 | Low |
+
+## Remaining Known Issues
+
+| Module | Issue | Severity | Status |
+|--------|-------|----------|--------|
+| segment layer | [Environment segments frozen at daemon start](bug-audit.md#5-every-environment-derived-segment-is-frozen-at-daemon-start) — python_env, toolchain, nix, k8s read `std::env` inside the daemon and never reflect post-startup changes. | High | v0.4 design item |
+| `layout.rs` | [`Segment::display_width` measures escape bytes as columns.](bug-audit.md#20-smaller-confirmed-defects) Unreachable today because every segment sets `compact_content`; a trap for the next one that does not. | Low | Open |

@@ -2,7 +2,7 @@
 
 Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarchy Quattro desktop environment. It replaces Starship with a daemon-driven prompt architecture that renders in under 5ms, integrates natively with the Omarchy theme system, and provides a desktop Control Center through a Quattro bar plugin.
 
-**v0.3** adds terminal capability detection (`TermCaps`), layout presets, git worktree support, instant prompt caching, live Quattro preview via the `preview` protocol message, theme color swatches via the `palette` control command, and extended terminal integration (OSC 7/8/777, OSC 9;4 progress, DEC 2026 sync output, undercurl error styling).
+**v0.3** adds terminal capability detection (`TermCaps`), layout presets, git worktree support, instant prompt caching, live Quattro preview via the `preview` protocol message, theme color swatches via the `palette` control command, extended terminal integration (OSC 7/8/777, OSC 9;4 progress, DEC 2026 sync output, undercurl error styling), a one-script installer (`install.sh`), first-run diagnostics hints, notification threshold wiring from daemon config to bash, title format placeholder expansion (`{dir}`, `{user}`, `{host}`, `{branch}`), and TermCaps-gated OSC 8 hyperlinks.
 
 ## Wiki Pages
 
@@ -19,6 +19,14 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 | [Glossary](glossary.md) | Terms, concepts, environment variables, file paths (includes v0.3 terminal and API terms) |
 | [v0.3 Feature Intel](v03-feature-intel.md) | Research-backed feature catalog that informed v0.3: 30 features, compatibility matrix, priority tiers |
 | [Quattro QoL Intel](quattro-qol-intel.md) | Quality-of-life improvements for Quattro integration: live preview, bar intelligence, notifications |
+| [Bug Audit](bug-audit.md) | Correctness audit of v0.3.0: 20 findings ranked by severity, with reproductions and fix directions |
+
+> **Current known issues:** a full correctness audit of v0.3.0 is recorded in
+> [Bug Audit](bug-audit.md). Four findings are rated critical — unwrapped prompt
+> escapes corrupting readline width accounting, a `struct tm` ABI mismatch in the
+> time segment, two UTF-8 slicing panics, and the daemon exiting immediately
+> without `O10K_PARENT_PID`. Read it before changing `render.rs`, the segment
+> layer, or the Bash adapter.
 
 ## Project Coordinates
 
@@ -63,19 +71,20 @@ omarchy10k/
 ## Quick Start
 
 ```bash
-# Build
+# One-line install (builds, installs binaries, configures shell, sets up Quattro plugin + theme hook)
+cd omarchy10k && ./install.sh
+
+# To uninstall
+./install.sh --uninstall
+```
+
+Or manually:
+
+```bash
 cd omarchy10k && cargo build --release
-
-# Install binaries
 cp target/release/omarchy10k target/release/omarchy10kd ~/.local/bin/
-
-# Activate in .bashrc
 echo 'eval "$(omarchy10k init bash)"' >> ~/.bashrc
-
-# Install Quattro plugin (optional)
 cp -r quattro/ ~/.config/omarchy/plugins/community.omarchy10k/
-
-# Install theme hook (optional)
 mkdir -p ~/.config/omarchy/hooks/theme-set.d
 cp hooks/theme-set ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 chmod +x ~/.config/omarchy/hooks/theme-set.d/omarchy10k

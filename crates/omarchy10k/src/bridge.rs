@@ -80,8 +80,10 @@ pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
 }
 
 fn write_prompt(stdout: &mut io::Stdout, response: &str) {
-    let left = extract_left(response);
+    let (left, right) = extract_prompt_parts(response);
     let _ = stdout.write_all(left.as_bytes());
+    let _ = stdout.write_all(&[0]);
+    let _ = stdout.write_all(right.as_bytes());
     let _ = stdout.write_all(&[0]);
     let _ = stdout.flush();
 }
@@ -89,6 +91,7 @@ fn write_prompt(stdout: &mut io::Stdout, response: &str) {
 fn write_fallback(stdout: &mut io::Stdout) {
     let _ = stdout.write_all(b"\\[\\e[1;34m\\]\\w\\[\\e[0m\\] \\[\\e[1;32m\\]\\xe2\\x9d\\xaf\\[\\e[0m\\] ");
     let _ = stdout.write_all(&[0]);
+    let _ = stdout.write_all(&[0]); // empty right prompt
     let _ = stdout.flush();
 }
 
@@ -119,13 +122,29 @@ async fn connect_with_retry(socket_path: &Path, max_retries: u32) -> anyhow::Res
     anyhow::bail!("failed to connect to daemon socket")
 }
 
-fn extract_left(response: &str) -> String {
+fn extract_prompt_parts(response: &str) -> (String, String) {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(response.trim()) {
-        if let Some(left) = v.get("left").and_then(|l| l.as_str()) {
-            return left.to_string();
-        }
+        let left = v
+            .get("left")
+            .and_then(|l| l.as_str())
+            .unwrap_or("")
+            .to_string();
+        let right = v
+            .get("right")
+            .and_then(|r| r.as_str())
+            .unwrap_or("")
+            .to_string();
+        (
+            if left.is_empty() {
+                response.trim().to_string()
+            } else {
+                left
+            },
+            right,
+        )
+    } else {
+        (response.trim().to_string(), String::new())
     }
-    response.trim().to_string()
 }
 
 fn parse_kv_to_json(line: &str) -> String {

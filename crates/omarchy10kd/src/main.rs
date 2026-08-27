@@ -51,7 +51,13 @@ async fn main() -> anyhow::Result<()> {
     // Load theme palette (unified resolution for startup and reload)
     let palette = ThemePalette::resolve_palette(&config);
 
-    let state = Arc::new(DaemonState::new(config, palette, config_path.clone()));
+    let sock_path = socket_path();
+    let state = Arc::new(DaemonState::new(
+        config,
+        palette,
+        config_path.clone(),
+        sock_path.clone(),
+    ));
 
     // Start filesystem watchers in background
     let state_watcher = Arc::clone(&state);
@@ -62,7 +68,6 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Monitor parent process (clean exit when shell dies)
-    let sock_path = socket_path();
     let sock_for_cleanup = sock_path.clone();
     tokio::spawn(async move {
         monitor_parent().await;
@@ -79,14 +84,20 @@ async fn monitor_parent() {
     let ppid_str = std::env::var("O10K_PARENT_PID").unwrap_or_default();
     let ppid: u32 = ppid_str.parse().unwrap_or(0);
     if ppid == 0 {
-        return; // No parent PID tracking
+        // No parent PID tracking -- sleep forever so daemon stays alive
+        std::future::pending::<()>().await;
+        return;
     }
 
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        // Check if parent is alive via kill(0)
-        let alive = unsafe { libc::kill(ppid as i32, 0) == 0 };
-        if !alive {
+        let ret = unsafe { libc::kill(ppid as i32, 0) };
+        if ret == 0 {
+            continue;
+        }
+        // EPERM means process exists but we can't signal it
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ESRCH) {
             return;
         }
     }
@@ -169,6 +180,8 @@ async fn run_watchers(
 }
 
 mod libc {
+    pub const ESRCH: i32 = 3;
+
     unsafe extern "C" {
         pub fn kill(pid: i32, sig: i32) -> i32;
     }

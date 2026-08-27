@@ -1,3 +1,9 @@
+// TODO(v0.4): Environment segments (python_env, toolchain, nix, k8s) are computed
+// daemon-side from the daemon's own environment, not the shell's. To fix, the shell
+// adapter needs to send an `env` object in the prompt request with the relevant
+// variables (VIRTUAL_ENV, CONDA_DEFAULT_ENV, NODE_VERSION, IN_NIX_SHELL,
+// KUBECONFIG, etc.). See bug-audit.md Finding 5.
+
 pub mod directory;
 pub mod git;
 pub mod exit_status;
@@ -17,6 +23,7 @@ pub mod battery;
 use crate::config::Config;
 use crate::git::GitStatus;
 use crate::layout::Segment;
+use crate::terminal::TermCaps;
 use crate::theme::ThemePalette;
 
 pub struct SegmentContext<'a> {
@@ -30,6 +37,7 @@ pub struct SegmentContext<'a> {
     pub git_status: &'a GitStatus,
     pub config: &'a Config,
     pub palette: &'a ThemePalette,
+    pub term_caps: &'a TermCaps,
 }
 
 pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {

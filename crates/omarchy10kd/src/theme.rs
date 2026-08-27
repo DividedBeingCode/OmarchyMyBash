@@ -109,7 +109,14 @@ impl ThemePalette {
 
     fn load_from_file(path: &Path) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(path)?;
-        let colors: OmarchyColors = toml::from_str(&contents)?;
+        let colors: OmarchyColors = if contents.contains("[colors]") {
+            #[derive(Deserialize)]
+            struct ColorsFile { colors: OmarchyColors }
+            let file: ColorsFile = toml::from_str(&contents)?;
+            file.colors
+        } else {
+            toml::from_str(&contents)?
+        };
         let defaults = Self::default();
 
         let parse_or = |opt: Option<String>, fallback: &AnsiColor| -> AnsiColor {

@@ -302,3 +302,40 @@ Git status fetching now calls `detect_worktree()` after porcelain v2 parse. When
 ```
 
 All modules are private to the daemon binary (no `lib.rs`). This is intentional — the daemon is a self-contained service, not a library.
+
+## Known Architectural Issues
+
+Two findings from the [Bug Audit](bug-audit.md) are architectural rather than
+local, and are worth reading before planning v0.4.
+
+### The prompt string is not readline-safe by construction
+
+Nothing in the pipeline owns the job of marking escapes non-printing. Segments
+emit raw ANSI via `AnsiColor::fg_escape()`, the layout engine passes content
+through untouched, and `render.rs` wraps only its own OSC 133 constants. The Bash
+adapter then assigns the result straight to `PS1`. Because the responsibility sits
+nowhere, every segment added since has inherited the defect — and the OSC 8
+hyperlink added in v0.3 made it worse on exactly the terminals the project
+targets.
+
+The fix belongs at a single chokepoint (escape emission, or a final pass over
+`left`/`transient`), not spread across segments. See
+[Bug Audit #1](bug-audit.md#1-prompt-escapes-are-not-marked-non-printing-so-bash-miscounts-prompt-width).
+
+### The daemon's environment is not the shell's environment
+
+The data flow diagrams above show `cwd`, `exit_code`, `cmd_duration_ms`, `cols`
+and `jobs` crossing the socket — the complete set of per-prompt state the protocol
+carries. But seven segments (`python_env`, `toolchain`, `nix`, `container`, `k8s`,
+`ssh`, and the title's `{user}`/`{host}`) read `std::env` inside the daemon
+process instead.
+
+The daemon is spawned once per shell and lives for the session, so those segments
+see the environment exactly as it was at shell startup and never again. This is
+why the "v0.3 Context Segments" do not track context: activating a venv, switching
+mise tool versions, or entering a nix shell changes the *shell's* environment, not
+the daemon's.
+
+Closing this requires a protocol change — an `env` allowlist on the `prompt`
+message and a `SegmentContext` that reads from it — plus a `PROTOCOL_VERSION`
+bump. See [Bug Audit #5](bug-audit.md#5-every-environment-derived-segment-is-frozen-at-daemon-start).

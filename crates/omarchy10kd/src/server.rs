@@ -74,21 +74,29 @@ pub struct DaemonState {
     pub palette: RwLock<ThemePalette>,
     pub git_cache: GitCache,
     pub config_path: PathBuf,
+    pub socket_path: PathBuf,
 }
 
 impl DaemonState {
-    pub fn new(config: Config, palette: ThemePalette, config_path: PathBuf) -> Self {
+    pub fn new(
+        config: Config,
+        palette: ThemePalette,
+        config_path: PathBuf,
+        socket_path: PathBuf,
+    ) -> Self {
         let git_ttl_ms = config.git.cache_ttl_ms;
         Self {
             config: RwLock::new(config),
             palette: RwLock::new(palette),
             git_cache: GitCache::new(git_ttl_ms),
             config_path,
+            socket_path,
         }
     }
 
     pub async fn reload_config(&self) -> anyhow::Result<()> {
         let new_config = Config::load(&self.config_path)?;
+        self.git_cache.set_ttl(new_config.git.cache_ttl_ms);
         let mut config = self.config.write().await;
         *config = new_config;
         info!("config reloaded");
@@ -160,10 +168,15 @@ async fn handle_control(
 ) -> anyhow::Result<bool> {
     match command {
         "reload_config" => {
-            if let Err(e) = state.reload_config().await {
-                warn!("config reload failed: {e}");
+            match state.reload_config().await {
+                Ok(()) => {
+                    write_response(writer, serde_json::json!({"type":"control","status":"ok"}), request_id).await?;
+                }
+                Err(e) => {
+                    warn!("config reload failed: {e}");
+                    write_response(writer, serde_json::json!({"type":"control","status":"error","error":format!("reload failed: {e}")}), request_id).await?;
+                }
             }
-            write_response(writer, serde_json::json!({"type":"control","status":"ok"}), request_id).await?;
         }
         "reload_theme" => {
             state.reload_theme().await;
@@ -176,6 +189,7 @@ async fn handle_control(
         "shutdown" => {
             info!("shutdown requested");
             write_response(writer, serde_json::json!({"type":"control","status":"bye"}), request_id).await?;
+            let _ = std::fs::remove_file(&state.socket_path);
             std::process::exit(0);
         }
         "status" => {
@@ -289,7 +303,7 @@ async fn handle_preview(
     };
 
     let renderer = PromptRenderer::new(&config, &palette);
-    let prompt = renderer.render(
+    let prompt = renderer.render_with_ssh(
         &req.cwd,
         req.exit_code,
         req.cmd_duration_ms,
@@ -297,6 +311,7 @@ async fn handle_preview(
         req.jobs,
         &git_status,
         false, // no shell integration for preview
+        Some(req.in_ssh),
     );
 
     write_response(
@@ -304,12 +319,16 @@ async fn handle_preview(
         serde_json::json!({
             "type": "preview",
             "status": "ok",
-            "left": prompt.left,
-            "right": prompt.right,
+            "left": strip_np(&prompt.left),
+            "right": prompt.right.as_deref().map(strip_np),
         }),
         request_id,
     )
     .await
+}
+
+fn strip_np(s: &str) -> String {
+    s.replace('\x01', "").replace('\x02', "")
 }
 
 async fn handle_connection(
@@ -385,19 +404,61 @@ async fn handle_connection(
                     if cmd == "set" {
                         if let Some(patch) = msg.rest.get("config") {
                             let config_path = state.config_path.clone();
-                            if let Ok(existing) = std::fs::read_to_string(&config_path) {
-                                let mut doc: toml::Table = toml::from_str(&existing).unwrap_or_default();
-                                if let Some(obj) = patch.as_object() {
-                                    for (k, v) in obj {
-                                        if let Ok(toml_val) = serde_json::from_value::<toml::Value>(v.clone()) {
-                                            doc.insert(k.clone(), toml_val);
-                                        }
+
+                            let mut doc: toml::Table = match std::fs::read_to_string(&config_path) {
+                                Ok(existing) => match toml::from_str(&existing) {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        warn!("config parse error, refusing to overwrite: {e}");
+                                        write_response(&mut writer, serde_json::json!({
+                                            "type": "config",
+                                            "status": "error",
+                                            "error": format!("config.toml has syntax errors: {e}"),
+                                        }), request_id).await?;
+                                        line.clear();
+                                        continue;
+                                    }
+                                },
+                                Err(_) => toml::Table::new(),
+                            };
+
+                            if let Some(obj) = patch.as_object() {
+                                for (k, v) in obj {
+                                    if let Ok(toml_val) = serde_json::from_value::<toml::Value>(v.clone()) {
+                                        merge_toml_value(doc.entry(k.clone()).or_insert(toml::Value::Table(toml::Table::new())), toml_val);
                                     }
                                 }
-                                let new_toml = toml::to_string_pretty(&doc).unwrap_or_default();
-                                std::fs::write(&config_path, new_toml)?;
                             }
-                            state.reload_config().await.ok();
+
+                            if let Some(parent) = config_path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+
+                            let new_toml = toml::to_string_pretty(&doc).unwrap_or_default();
+                            let tmp_path = config_path.with_extension("toml.tmp");
+                            match std::fs::write(&tmp_path, &new_toml)
+                                .and_then(|_| std::fs::rename(&tmp_path, &config_path))
+                            {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    warn!("config write failed: {e}");
+                                    write_response(&mut writer, serde_json::json!({
+                                        "type": "config",
+                                        "status": "error",
+                                        "error": format!("failed to write config: {e}"),
+                                    }), request_id).await?;
+                                    line.clear();
+                                    continue;
+                                }
+                            }
+
+                            let touches_theme = patch.get("theme").is_some();
+                            if let Err(e) = state.reload_config().await {
+                                warn!("config reload after set failed: {e}");
+                            }
+                            if touches_theme {
+                                state.reload_theme().await;
+                            }
                             write_response(&mut writer, serde_json::json!({
                                 "type": "config",
                                 "status": "ok",
@@ -416,7 +477,19 @@ async fn handle_connection(
                 }
             }
             None => {
-                if let Some(ref cmd) = msg.command {
+                // Check for cwd first -- prompt requests always have cwd
+                if msg.rest.get("cwd").is_some() {
+                    match serde_json::from_str::<PromptRequest>(trimmed) {
+                        Ok(req) => handle_prompt(&req, &state, &mut writer, request_id).await?,
+                        Err(e) => {
+                            warn!("invalid request: {e}");
+                            write_response(&mut writer, serde_json::json!({
+                                "type": "error",
+                                "error": e.to_string(),
+                            }), request_id).await?;
+                        }
+                    }
+                } else if let Some(ref cmd) = msg.command {
                     handle_control(cmd, &state, &mut writer, request_id).await?;
                 } else {
                     match serde_json::from_str::<PromptRequest>(trimmed) {
@@ -443,4 +516,20 @@ async fn handle_connection(
     }
 
     Ok(())
+}
+
+fn merge_toml_value(target: &mut toml::Value, patch: toml::Value) {
+    match (&mut *target, patch) {
+        (toml::Value::Table(target_table), toml::Value::Table(patch_table)) => {
+            for (k, v) in patch_table {
+                merge_toml_value(
+                    target_table.entry(k).or_insert(toml::Value::Table(toml::Table::new())),
+                    v,
+                );
+            }
+        }
+        (target, patch) => {
+            *target = patch;
+        }
+    }
 }

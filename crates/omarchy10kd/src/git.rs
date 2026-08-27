@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
@@ -57,7 +58,7 @@ struct CachedStatus {
 pub struct GitCache {
     cache: Arc<RwLock<HashMap<PathBuf, CachedStatus>>>,
     in_flight: Arc<RwLock<HashSet<PathBuf>>>,
-    ttl: Duration,
+    ttl_ms: AtomicU64,
 }
 
 impl GitCache {
@@ -65,8 +66,16 @@ impl GitCache {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
             in_flight: Arc::new(RwLock::new(HashSet::new())),
-            ttl: Duration::from_millis(ttl_ms),
+            ttl_ms: AtomicU64::new(ttl_ms),
         }
+    }
+
+    pub fn set_ttl(&self, ttl_ms: u64) {
+        self.ttl_ms.store(ttl_ms, Ordering::Relaxed);
+    }
+
+    fn ttl(&self) -> Duration {
+        Duration::from_millis(self.ttl_ms.load(Ordering::Relaxed))
     }
 
     pub async fn get_status(&self, cwd: &Path) -> GitStatus {
@@ -77,7 +86,7 @@ impl GitCache {
 
         let cache = self.cache.read().await;
         if let Some(cached) = cache.get(&repo_root) {
-            if cached.fetched_at.elapsed() < self.ttl {
+            if cached.fetched_at.elapsed() < self.ttl() {
                 debug!("git cache fresh hit for {}", repo_root.display());
                 return cached.status.clone();
             }
@@ -156,12 +165,17 @@ fn find_repo_root(mut dir: &Path) -> Option<PathBuf> {
 fn detect_worktree(repo_root: &Path) -> Option<String> {
     let git_path = repo_root.join(".git");
     if git_path.is_file() {
-        // In a worktree, .git is a file containing "gitdir: /path/to/.git/worktrees/name"
-        // The worktree name is the repo_root directory name
-        repo_root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|s| s.to_string())
+        let content = std::fs::read_to_string(&git_path).ok()?;
+        let gitdir = content.strip_prefix("gitdir: ")?.trim();
+        // Only treat as worktree if gitdir points into a worktrees/ directory
+        if gitdir.contains("/worktrees/") {
+            repo_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
     } else {
         // Check if there's a commondir file (alternate worktree detection)
         let commondir = git_path.join("commondir");

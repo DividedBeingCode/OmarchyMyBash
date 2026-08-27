@@ -1,6 +1,6 @@
 use crate::layout::Segment;
+use crate::render::wrap_np;
 use crate::segments::SegmentContext;
-use crate::terminal::TermCaps;
 use unicode_width::UnicodeWidthStr;
 
 const UNDERCURL_ON: &str = "\x1b[4:3m";
@@ -17,8 +17,13 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         format!("✘ {}", ctx.exit_code)
     };
 
-    let content = if TermCaps::detect().has_undercurl {
-        format!("{UNDERCURL_ON}{raw}{UNDERCURL_OFF}")
+    let content = if ctx.term_caps.has_undercurl {
+        format!(
+            "{}{}{}",
+            wrap_np(UNDERCURL_ON),
+            raw,
+            wrap_np(UNDERCURL_OFF)
+        )
     } else {
         raw.clone()
     };

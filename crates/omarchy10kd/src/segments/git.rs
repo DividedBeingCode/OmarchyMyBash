@@ -72,6 +72,8 @@ fn format_compact(git: &GitStatus, _ctx: &SegmentContext<'_>) -> String {
     // Branch or detached HEAD
     let branch_display = if git.is_detached {
         format!(":{}", &git.commit)
+    } else if git.branch.is_empty() {
+        "…".to_string()
     } else {
         truncate_branch(&git.branch, 20)
     };
@@ -113,6 +115,8 @@ fn format_expanded(git: &GitStatus, _ctx: &SegmentContext<'_>) -> String {
 
     let branch_display = if git.is_detached {
         format!(":{}", &git.commit)
+    } else if git.branch.is_empty() {
+        "…".to_string()
     } else {
         truncate_branch(&git.branch, 30)
     };
@@ -161,9 +165,68 @@ fn format_expanded(git: &GitStatus, _ctx: &SegmentContext<'_>) -> String {
 }
 
 fn truncate_branch(branch: &str, max_len: usize) -> String {
-    if branch.len() <= max_len {
+    if branch.chars().count() <= max_len {
         branch.to_string()
     } else {
-        format!("{}…", &branch[..max_len - 1])
+        let end = branch
+            .char_indices()
+            .nth(max_len - 1)
+            .map(|(i, _)| i)
+            .unwrap_or(branch.len());
+        format!("{}…", &branch[..end])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_ascii() {
+        assert_eq!(truncate_branch("main", 20), "main");
+        assert_eq!(truncate_branch("a-very-long-branch-name-here", 10), "a-very-lo…");
+    }
+
+    #[test]
+    fn test_truncate_multibyte_utf8() {
+        let branch = "功能/新しい機能ブランチ";
+        let result = truncate_branch(branch, 6);
+        assert_eq!(result, "功能/新し…");
+        assert!(result.is_char_boundary(result.len()));
+    }
+
+    #[test]
+    fn test_truncate_emoji_branch() {
+        let branch = "🚀🎉🔥feature";
+        let result = truncate_branch(branch, 5);
+        assert_eq!(result, "🚀🎉🔥f…");
+    }
+
+    #[test]
+    fn test_empty_branch_display_compact() {
+        let git = GitStatus {
+            is_repo: true,
+            branch: String::new(),
+            stale: true,
+            ..Default::default()
+        };
+        let ctx_config = crate::config::Config::default();
+        let palette = crate::theme::ThemePalette::default();
+        let term_caps = crate::terminal::TermCaps::default();
+        let ctx = SegmentContext {
+            cwd: "/tmp",
+            home: "/home/test",
+            exit_code: 0,
+            cmd_duration_ms: 0,
+            cols: 80,
+            jobs: 0,
+            in_ssh: false,
+            git_status: &git,
+            config: &ctx_config,
+            palette: &palette,
+            term_caps: &term_caps,
+        };
+        let result = format_compact(&git, &ctx);
+        assert!(result.contains("…"), "empty branch should show ellipsis, got: {result}");
     }
 }

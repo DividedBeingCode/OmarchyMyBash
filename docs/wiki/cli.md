@@ -165,3 +165,31 @@ Pure diagnostic module. Each check is an independent function that probes the en
 | `anyhow` | Error propagation |
 | `directories` | XDG config path resolution (doctor) |
 | `tracing` + `tracing-subscriber` | Logging |
+
+## Known Issues
+
+Recorded by the [Bug Audit](bug-audit.md).
+
+### Socket discovery fails from an interactive shell
+
+`socket_path()` resolves `O10K_PARENT_PID`, then `PPID`, then `"0"`. The Bash
+adapter sets `O10K_PARENT_PID` only as a per-command prefix when launching the
+daemon — it is never exported — and `PPID` is a Bash shell variable, not an
+environment variable. Both lookups fail, so the CLI computes
+`$XDG_RUNTIME_DIR/omarchy10k-0.sock`, which never exists.
+
+Affects `omarchy10k reload`, `debug`, `prompt` and `benchmark`. `prompt` degrades
+silently to the hardcoded fallback string, masking the failure.
+
+`doctor` is the exception: `check_daemon` scans the runtime directory for
+`omarchy10k-*.sock` rather than calling `socket_path()`. This is why doctor can
+report the daemon healthy while `reload` fails in the same shell. See
+[Bug Audit #7](bug-audit.md#7-the-cli-cannot-find-the-daemon-socket).
+
+### `doctor` reports ble.sh availability the adapter does not honour
+
+`check_blesh` prints `✓ enhanced mode available` whenever `BLE_VERSION` is set.
+The adapter gates on `(( ${BLE_VERSION%%.*} >= 4 ))`, which never passes. Doctor
+and the adapter test different conditions, so doctor advertises a mode that is
+never installed. See
+[Bug Audit #8](bug-audit.md#8-the-blesh-version-gate-never-passes).

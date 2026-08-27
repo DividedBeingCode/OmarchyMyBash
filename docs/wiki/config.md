@@ -72,7 +72,7 @@ Controls working directory segment display.
 |-----|------|---------|--------|-------------|-------------|
 | `strategy` | string | `"smart"` | `smart`, `full`, `truncate` | Yes | Path display strategy. |
 | `max_length` | int | `40` | — | Yes | Maximum path display length in characters. |
-| `repo_root_style` | string | `"bold"` | — | Yes | Style for git repo root directory. |
+| `repo_root_style` | string | `"bold"` | `bold`, `none` | Yes | Controls whether directory segment text is bold. Set to `"bold"` to bold the directory; any other value disables bolding. |
 
 ## `[git]`
 
@@ -82,9 +82,9 @@ Controls git integration.
 |-----|------|---------|--------|-------------|-------------|
 | `enabled` | bool | `true` | — | Yes | Toggle git segment entirely. |
 | `mode` | string | `"adaptive"` | `hidden`, `compact`, `expanded`, `adaptive` | Yes | Git segment detail level. `adaptive` shows expanded when dirty, compact when clean. |
-| `stale_display` | bool | `true` | — | Partial | Show grayed-out stale state while git refreshes. `stale` field is set; muted color applied in right prompt only. |
+| `stale_display` | bool | `true` | — | **No** | The key itself is never read. The `stale` flag it nominally gates is honoured unconditionally in both `segments/git.rs` and `render_right`, so stale display is always on and the switch does nothing. |
 | `max_threads` | int | `4` | — | No | Parallelism for git queries. Single-threaded in practice. |
-| `cache_ttl_ms` | int | `5000` | — | Yes | Cache TTL in milliseconds for git status entries. Lower values give fresher data at the cost of more git subprocess calls. |
+| `cache_ttl_ms` | int | `5000` | — | Yes | Cache TTL in milliseconds for git status entries. Updated on config reload via `GitCache::set_ttl()`. |
 
 ## `[segments.os]`
 
@@ -188,7 +188,7 @@ Shows battery level from Linux sysfs. Added in v0.3.
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
 | `enabled` | bool | `false` | — | Yes | Battery level segment (Linux only). |
-| `show_above` | int | `100` | `0`–`100` | Yes | Hide segment when capacity is at or above this percentage. Default `100` shows whenever a battery is detected. |
+| `show_above` | int | `100` | `0`–`100` | Yes | Hide segment when capacity exceeds this percentage. The test is `capacity > show_above`, so the default `100` never hides (100% ≤ 100). Set to `99` to hide when full. |
 | `threshold_warning` | int | `30` | — | Yes | Capacity at or below which the segment uses warning (yellow) color. |
 | `threshold_critical` | int | `10` | — | Yes | Capacity at or below which the segment uses critical (red) color. |
 
@@ -200,8 +200,8 @@ Long-running command desktop notifications. Added in v0.3.
 
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
-| `enabled` | bool | `true` | — | Partial | Toggle notifications. Config key exists; bash adapter does not yet read it — notifications always emit when duration exceeds threshold. |
-| `threshold_ms` | int | `10000` | — | Partial | Minimum command duration (ms) before emitting OSC 777 notification. Config is persisted and editable in Quattro; bash adapter currently uses `$O10K_NOTIFY_THRESHOLD` env var (default `10000`) instead of this key. |
+| `enabled` | bool | `true` | — | Yes | Toggle notifications. When enabled, the daemon includes `notify_threshold_ms` in prompt responses for the bash adapter. |
+| `threshold_ms` | int | `10000` | — | Yes | Minimum command duration (ms) before emitting OSC 777 notification. The daemon sends this value in prompt responses; the bash adapter reads it and updates its threshold. Editable in Quattro Shell tab ("Notify After": 5s/10s/30s). Falls back to `$O10K_NOTIFY_THRESHOLD` env var on first prompt before daemon response. |
 
 Notifications are emitted from the bash adapter via OSC 777 (`\033]777;notify;...\007`), compatible with Ghostty and Foot.
 
@@ -223,7 +223,7 @@ Dynamic terminal window title via OSC 2.
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
 | `enabled` | bool | `true` | — | Yes | Emit `\x1b]2;title\x07` with each prompt render. |
-| `format` | string | `"{dir}"` | — | Partial | Title format string. Config key exists; renderer currently emits shortened cwd only (home → `~` prefix), ignoring format placeholders. |
+| `format` | string | `"{dir}"` | — | Yes | Title format string with placeholder expansion: `{dir}` → shortened CWD, `{user}` → `$USER`, `{host}` → hostname, `{branch}` → git branch (empty if not in repo). Falls back to `{dir}` if format is empty. |
 
 ### `[terminal.progress]`
 
@@ -290,12 +290,12 @@ Reload can also be triggered via:
 | `segments.k8s.enabled` | Yes | Segments |
 | `segments.time.enabled` | Yes | Segments |
 | `segments.battery.enabled` | Yes | Segments |
-| `segments.time.format` | No (loaded but no UI) | — |
+| `segments.time.format` | Yes | Segments (visible when Time enabled) |
 | `segments.k8s.show_namespace` | No | — |
 | `segments.battery.show_above` | No | — |
 | `segments.battery.threshold_*` | No | — |
 | `segments.notification.enabled` | No | — |
-| `segments.notification.threshold_ms` | No (loaded but no UI) | — |
+| `segments.notification.threshold_ms` | Yes | Shell ("Notify After" selector) |
 | `terminal.title.enabled` | Yes | Segments |
 | `terminal.title.format` | No | — |
 | `terminal.progress.enabled` | No | — |
