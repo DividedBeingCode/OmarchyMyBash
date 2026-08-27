@@ -1,6 +1,7 @@
 use crate::git::GitStatus;
 use crate::layout::Segment;
 use crate::segments::SegmentContext;
+use crate::style::GlyphCatalog;
 use unicode_width::UnicodeWidthStr;
 
 pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
@@ -66,18 +67,24 @@ fn is_dirty(git: &GitStatus) -> bool {
     git.staged > 0 || git.unstaged > 0 || git.untracked > 0 || git.conflicted > 0
 }
 
-fn format_compact(git: &GitStatus, _ctx: &SegmentContext<'_>) -> String {
+fn format_compact(git: &GitStatus, ctx: &SegmentContext<'_>) -> String {
     let mut parts = Vec::new();
 
-    // Branch or detached HEAD
+    let branch_icon = GlyphCatalog::branch_icon(&ctx.config.git.branch_icon);
+    let icon_prefix = if branch_icon.is_empty() {
+        String::new()
+    } else {
+        format!("{branch_icon} ")
+    };
+
     let branch_display = if git.is_detached {
         format!(":{}", &git.commit)
     } else if git.branch.is_empty() {
-        "…".to_string()
+        "\u{2026}".to_string()
     } else {
         truncate_branch(&git.branch, 20)
     };
-    parts.push(branch_display);
+    parts.push(format!("{icon_prefix}{branch_display}"));
 
     if let Some(ref wt) = git.worktree {
         parts.push(format!(" {wt}"));
@@ -110,17 +117,24 @@ fn format_compact(git: &GitStatus, _ctx: &SegmentContext<'_>) -> String {
     format!(" {}", parts.join(" "))
 }
 
-fn format_expanded(git: &GitStatus, _ctx: &SegmentContext<'_>) -> String {
+fn format_expanded(git: &GitStatus, ctx: &SegmentContext<'_>) -> String {
     let mut parts = Vec::new();
+
+    let branch_icon = GlyphCatalog::branch_icon(&ctx.config.git.branch_icon);
+    let icon_prefix = if branch_icon.is_empty() {
+        String::new()
+    } else {
+        format!("{branch_icon} ")
+    };
 
     let branch_display = if git.is_detached {
         format!(":{}", &git.commit)
     } else if git.branch.is_empty() {
-        "…".to_string()
+        "\u{2026}".to_string()
     } else {
         truncate_branch(&git.branch, 30)
     };
-    parts.push(branch_display);
+    parts.push(format!("{icon_prefix}{branch_display}"));
 
     if let Some(ref wt) = git.worktree {
         parts.push(format!(" {wt}"));

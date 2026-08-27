@@ -107,6 +107,35 @@ Hidden subcommand for end-to-end shell-level latency benchmarking. Measures real
 | `--iterations` | `100` | Number of prompt render cycles |
 | `--adapter` | — | Optional path to Bash adapter script |
 
+### `omarchy10k update`
+
+One-command upgrade path. Pulls latest source, rebuilds, replaces binaries, refreshes the Quattro plugin and theme hook, and gracefully restarts running daemons.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--no-pull` | false | Skip `git pull` — rebuild from current source tree |
+| `--no-build` | false | Skip `cargo build` — reinstall existing binaries + plugin only |
+
+**Source discovery** (checked in order):
+
+1. `O10K_SOURCE_DIR` environment variable
+2. Walk up from the running binary's path looking for the workspace `Cargo.toml`
+3. Read the breadcrumb file at `~/.local/share/omarchy10k/source-dir` (written by `install.sh`)
+
+**Workflow:**
+
+1. Locate source directory
+2. Print installed vs source version
+3. `git pull --ff-only` (unless `--no-pull`; skips if dirty working tree)
+4. `cargo build --release` (unless `--no-build`)
+5. Atomic binary install to `~/.local/bin/` (write to `.tmp`, rename)
+6. Copy `quattro/*` to plugin directory
+7. Copy `hooks/theme-set` to hook directory
+8. Send `shutdown` command to all running daemon sockets (`omarchy10k-*.sock`)
+9. Print version change summary
+
+Running daemons auto-restart on the next prompt render via the Bash adapter's existing reconnection logic.
+
 ### `omarchy10k debug`
 
 Sends `{"command":"status"}` to the daemon and prints the raw JSON response. Shows daemon PID, version, and status.

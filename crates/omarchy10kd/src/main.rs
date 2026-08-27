@@ -4,6 +4,7 @@ mod layout;
 mod render;
 mod segments;
 mod server;
+mod style;
 mod theme;
 mod terminal;
 

@@ -20,10 +20,82 @@ Controls prompt structure and behavior.
 
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
-| `layout` | string | `"omarchy"` | `omarchy`, `minimal`, `powerline`, `classic`, `pure`, `dense` | No | Prompt layout preset. Currently ignored — always uses omarchy layout. |
-| `transient` | bool | `true` | — | Yes | Replace previous prompts with a minimal `❯` after command execution. Requires ble.sh for full effect. |
+| `layout` | string | `"omarchy"` | `omarchy`, `minimal`, `powerline`, `classic`, `pure`, `dense` | Yes (legacy) | Legacy preset key. Mapped to `style.preset` when `style.preset` is at its default. Prefer `[style] preset` for new configs. |
+| `transient` | bool | `true` | — | Yes | Replace previous prompts with a minimal character after command execution. Glyph configurable via `segments.character.transient`. Requires ble.sh for full effect. |
 | `newline` | bool | `true` | — | Yes | Two-line prompt (segments on line 1, character on line 2) vs one-line. |
-| `right_prompt` | bool | `true` | — | Yes | Enable right-aligned prompt. Right prompt populated with git branch and command duration. |
+| `right_prompt` | bool | `true` | — | Yes | Enable right-aligned prompt. Right prompt populated with git branch and command duration. Disabled when frame mode is active (right content moves inline). |
+
+## `[style]`
+
+Curated visual preset system. Controls separators, frames/ornaments, caps, and segment layout. Added in v0.3. Individual aspects can be overridden independently of the preset.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `preset` | string | `"omarchy"` | `omarchy`, `powerline`, `rainbow`, `framed`, `classic`, `lean`, `dense`, `slanted`, `minimal`, `pure` | Yes | Visual style preset. Each preset defines separator glyphs, frame mode, gap fill, and segment ordering. |
+
+### Style Presets
+
+| Preset | Separator | Frame | Gap | Vibe |
+|--------|-----------|-------|-----|------|
+| **omarchy** | space | none | none | Clean default |
+| **powerline** | `` arrows (U+E0B0) | none | none | Classic powerline |
+| **rainbow** | `` arrows (U+E0B0) | none | none | Vibrant, colorful |
+| **framed** | space | left+right `╭╰╮╯` | `─` fill | Connected lines |
+| **classic** | `│` bars | none | none | Simple vertical dividers |
+| **lean** | space | none | none | Maximum horizontal space |
+| **dense** | space | none | none | Single-line, compressed |
+| **slanted** | `` slanted (U+E0BC) | none | none | Modern angled |
+| **minimal** | space | none | none | Directory only, single-line |
+| **pure** | space | none | none | Directory + git only |
+
+### `[style.separators]`
+
+Override the preset's default separator. Both `left` and `right` can be set independently.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `left` | string | `""` (preset default) | `powerline`, `powerline_thin`, `slanted`, `round`, `vertical`, `dot`, `diamond`, `none`, or custom string | Yes | Left (forward) separator between segments. Empty string uses preset default. |
+| `right` | string | `""` (preset default) | Same as left | Yes | Right (reverse) separator. |
+
+### `[style.frame]`
+
+Connecting lines and ornaments between prompt lines. Only visible in two-line mode.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | *(preset default)* | — | Yes | Enable box-drawing frame ornaments. The `framed` preset enables this by default. |
+| `left` | bool | `true` | — | Yes | Show left frame column (`╭` / `╰`). |
+| `right` | bool | `true` | — | Yes | Show right frame column (`╮` / `╯`). |
+| `gap_char` | string | `""` | `─`, `·`, `⋯`, `none` | Yes | Character used to fill the gap between left and right prompt content on line 1. |
+
+### `[style.caps]`
+
+Edge decorations at prompt segment boundaries.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `left_start` | string | `""` | Any string | Yes | Decoration before first left segment. |
+| `left_end` | string | `""` | Any string | Yes | Decoration after last left segment. |
+| `right_start` | string | `""` | Any string | Yes | Decoration before first right segment. |
+| `right_end` | string | `""` | Any string | Yes | Decoration after last right segment. |
+
+Example — framed preset with dot gap fill:
+```toml
+[style]
+preset = "framed"
+
+[style.frame]
+gap_char = "·"
+```
+
+Example — powerline separators with custom caps:
+```toml
+[style]
+preset = "omarchy"
+
+[style.separators]
+left = "powerline"
+```
 
 ## `[theme]`
 
@@ -82,6 +154,7 @@ Controls git integration.
 |-----|------|---------|--------|-------------|-------------|
 | `enabled` | bool | `true` | — | Yes | Toggle git segment entirely. |
 | `mode` | string | `"adaptive"` | `hidden`, `compact`, `expanded`, `adaptive` | Yes | Git segment detail level. `adaptive` shows expanded when dirty, compact when clean. |
+| `branch_icon` | string | `"powerline"` | `powerline` (U+E0A0), `octicon` (U+F418), `nerd` (U+F126), `text` (`git:`), `none`, custom | Yes | Branch icon glyph displayed before the branch name in both left and right prompt git segments. Routes through `GlyphCatalog::branch_icon()`. Added in v0.3. |
 | `stale_display` | bool | `true` | — | **No** | The key itself is never read. The `stale` flag it nominally gates is honoured unconditionally in both `segments/git.rs` and `render_right`, so stale display is always on and the switch does nothing. |
 | `max_threads` | int | `4` | — | No | Parallelism for git queries. Single-threaded in practice. |
 | `cache_ttl_ms` | int | `5000` | — | Yes | Cache TTL in milliseconds for git status entries. Updated on config reload via `GitCache::set_ttl()`. |
@@ -91,7 +164,7 @@ Controls git integration.
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
 | `enabled` | bool | `true` | — | Yes | OS segment in prompt. |
-| `icon` | string | `"arch"` | `arch`, `linux`, `omarchy`, `custom`, `none` | Yes | OS icon glyph. All icon values work. |
+| `icon` | string | `"arch"` | `arch`, `ubuntu`, `debian`, `fedora`, `nixos`, `macos`, `windows`, `linux`, `omarchy`, `alpine`, `void`, `gentoo`, `manjaro`, `opensuse`, `centos`, `raspberry_pi`, `none`, custom | Yes | OS icon glyph. Routes through `GlyphCatalog::os_icon()` with 16+ distro glyphs. Custom strings are used as literal glyphs. Expanded from 4 to 16+ options in v0.3. |
 
 ## `[segments.exit_status]`
 
@@ -209,8 +282,9 @@ Notifications are emitted from the bash adapter via OSC 777 (`\033]777;notify;..
 
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
-| `success` | string | `"❯"` | Any string | Yes | Prompt character for successful commands. |
-| `error` | string | `"❯"` | Any string | Partial | Prompt character for failed commands. Transient prompt ignores this and hardcodes `❯`. |
+| `success` | string | `"❯"` | `chevron` (❯), `arrow` (➜), `lambda` (λ), `dollar` ($), `angle` (>), `percent` (%), `triangle` (▶), `hash` (#), or custom | Yes | Prompt character for successful commands. Routes through `GlyphCatalog::prompt_char()`. Named aliases and literal glyphs both work. |
+| `error` | string | `"❯"` | Same as success | Yes | Prompt character for failed commands. |
+| `transient` | string | `"❯"` | Same as success | Yes | Glyph for transient (collapsed) prompt. Previously hardcoded to `❯`. Added in v0.3. |
 
 ## `[terminal]`
 
@@ -268,18 +342,28 @@ Reload can also be triggered via:
 
 | TOML Key | Editable in Panel | Tab |
 |----------|-------------------|-----|
-| `prompt.layout` | Yes | Appearance |
+| `prompt.layout` | No (legacy, use `style.preset`) | — |
 | `prompt.transient` | Yes | Appearance |
 | `prompt.newline` | Yes | Appearance |
 | `prompt.right_prompt` | No (loaded but no UI) | — |
+| `style.preset` | Yes | Appearance (Style Gallery) |
+| `style.separators.left` | Yes | Appearance (Separator picker) |
+| `style.separators.right` | Yes | Appearance (Separator picker) |
+| `style.frame.enabled` | Yes | Appearance (Frame Lines toggle) |
+| `style.frame.gap_char` | Yes | Appearance (Gap Fill selector) |
+| `style.caps.*` | No | — |
 | `theme.source` | Yes | Appearance |
 | `theme.custom.*` | No | — |
 | `directory.*` | No | — |
 | `git.enabled` | No (loaded but no UI) | — |
 | `git.mode` | Yes | Context |
+| `git.branch_icon` | Yes | Appearance (Git Icon picker) |
 | `git.stale_display` | No | — |
 | `git.max_threads` | No | — |
-| `segments.os.icon` | Yes | Appearance |
+| `segments.os.icon` | Yes | Appearance (OS Icon picker, 16+ options) |
+| `segments.character.success` | Yes | Appearance (Prompt Char picker) |
+| `segments.character.error` | Yes | Appearance (Prompt Char picker) |
+| `segments.character.transient` | Yes | Appearance (Prompt Char picker) |
 | `segments.exit_status.show_signal_name` | Yes | Context |
 | `segments.command_duration.show_above_ms` | Yes | Context |
 | `segments.ssh.show` | Yes | Context |
@@ -299,5 +383,4 @@ Reload can also be triggered via:
 | `terminal.title.enabled` | Yes | Segments |
 | `terminal.title.format` | No | — |
 | `terminal.progress.enabled` | No | — |
-| `segments.character.*` | No | — |
 | `daemon.*` | No | — |

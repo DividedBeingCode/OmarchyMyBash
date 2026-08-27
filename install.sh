@@ -2,15 +2,17 @@
 set -euo pipefail
 
 # Omarchy10k Installer
-# Usage: ./install.sh [--uninstall]
+# Usage: ./install.sh [--uninstall] [--update]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
 CONFIG_DIR="${HOME}/.config/omarchy10k"
+DATA_DIR="${HOME}/.local/share/omarchy10k"
 PLUGIN_DIR="${HOME}/.config/omarchy/plugins/community.omarchy10k"
 HOOK_DIR="${HOME}/.config/omarchy/hooks/theme-set.d"
 BASHRC="${HOME}/.bashrc"
 INIT_LINE='eval "$(omarchy10k init bash)"'
+UPDATE_MODE=false
 
 C_GREEN='\033[1;32m'
 C_RED='\033[1;31m'
@@ -24,29 +26,39 @@ ok()    { printf "${C_GREEN}      ✓${C_RESET} %s\n" "$*"; }
 warn()  { printf "${C_YELLOW}      ⚠${C_RESET} %s\n" "$*"; }
 fail()  { printf "${C_RED}      ✘${C_RESET} %s\n" "$*"; exit 1; }
 
-# ── Uninstall ────────────────────────────────────────────────────────────────
+# ── Flag parsing ─────────────────────────────────────────────────────────────
 
-if [[ "${1:-}" == "--uninstall" ]]; then
-    info "Uninstalling Omarchy10k..."
+case "${1:-}" in
+    --uninstall)
+        info "Uninstalling Omarchy10k..."
 
-    rm -f "${BIN_DIR}/omarchy10k" "${BIN_DIR}/omarchy10kd" && ok "Removed binaries" || warn "Binaries not found"
-    rm -rf "${PLUGIN_DIR}" && ok "Removed Quattro plugin" || warn "Plugin not found"
-    rm -f "${HOOK_DIR}/omarchy10k" && ok "Removed theme hook" || warn "Hook not found"
+        rm -f "${BIN_DIR}/omarchy10k" "${BIN_DIR}/omarchy10kd" && ok "Removed binaries" || warn "Binaries not found"
+        rm -rf "${PLUGIN_DIR}" && ok "Removed Quattro plugin" || warn "Plugin not found"
+        rm -f "${HOOK_DIR}/omarchy10k" && ok "Removed theme hook" || warn "Hook not found"
+        rm -rf "${DATA_DIR}" && ok "Removed data directory" || true
 
-    if [[ -f "$BASHRC" ]] && grep -qF "$INIT_LINE" "$BASHRC"; then
-        sed -i "\|${INIT_LINE}|d" "$BASHRC"
-        ok "Removed init line from .bashrc"
-    else
-        warn "Init line not found in .bashrc"
-    fi
+        if [[ -f "$BASHRC" ]] && grep -qF "$INIT_LINE" "$BASHRC"; then
+            sed -i "\|${INIT_LINE}|d" "$BASHRC"
+            ok "Removed init line from .bashrc"
+        else
+            warn "Init line not found in .bashrc"
+        fi
 
-    info "Done. Open a new terminal to complete removal."
-    exit 0
-fi
+        info "Done. Open a new terminal to complete removal."
+        exit 0
+        ;;
+    --update)
+        UPDATE_MODE=true
+        ;;
+esac
 
 # ── Install ──────────────────────────────────────────────────────────────────
 
-printf "\n${C_BOLD}  OMARCHY10K INSTALLER${C_RESET}\n\n"
+if [[ "$UPDATE_MODE" == true ]]; then
+    printf "\n${C_BOLD}  OMARCHY10K UPDATE${C_RESET}\n\n"
+else
+    printf "\n${C_BOLD}  OMARCHY10K INSTALLER${C_RESET}\n\n"
+fi
 
 # Step 1: Build
 if [[ -f "${SCRIPT_DIR}/Cargo.toml" ]]; then
@@ -72,21 +84,28 @@ for bin in omarchy10k omarchy10kd; do
     fi
 done
 
+# Record source directory breadcrumb
+mkdir -p "${DATA_DIR}"
+echo "$SCRIPT_DIR" > "${DATA_DIR}/source-dir"
+ok "Source directory breadcrumb saved"
+
 # Ensure ~/.local/bin is in PATH
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
     warn "${BIN_DIR} is not in your PATH."
     warn "Add this to your .bashrc:  export PATH=\"\${HOME}/.local/bin:\${PATH}\""
 fi
 
-# Step 3: Shell init
-info "Configuring shell..."
-if [[ -f "$BASHRC" ]] && grep -qF "$INIT_LINE" "$BASHRC"; then
-    ok ".bashrc already configured"
-else
-    echo "" >> "$BASHRC"
-    echo "# Omarchy10k shell prompt" >> "$BASHRC"
-    echo "$INIT_LINE" >> "$BASHRC"
-    ok "Added init line to .bashrc"
+# Step 3: Shell init (skip on update -- already configured)
+if [[ "$UPDATE_MODE" == false ]]; then
+    info "Configuring shell..."
+    if [[ -f "$BASHRC" ]] && grep -qF "$INIT_LINE" "$BASHRC"; then
+        ok ".bashrc already configured"
+    else
+        echo "" >> "$BASHRC"
+        echo "# Omarchy10k shell prompt" >> "$BASHRC"
+        echo "$INIT_LINE" >> "$BASHRC"
+        ok "Added init line to .bashrc"
+    fi
 fi
 
 # Step 4: Quattro plugin (optional)
@@ -111,9 +130,16 @@ else
 fi
 
 # Summary
-printf "\n${C_GREEN}${C_BOLD}  Installation complete!${C_RESET}\n\n"
-printf "  ${C_BOLD}Next steps:${C_RESET}\n"
-printf "    1. Open a new terminal (or run: source ~/.bashrc)\n"
-printf "    2. Run: ${C_BLUE}omarchy10k doctor${C_RESET} to verify\n"
-printf "    3. Add the Omarchy10k widget to your Quattro bar\n"
-printf "\n  To uninstall: ${C_BLUE}./install.sh --uninstall${C_RESET}\n\n"
+if [[ "$UPDATE_MODE" == true ]]; then
+    printf "\n${C_GREEN}${C_BOLD}  Update complete!${C_RESET}\n\n"
+    printf "  New terminals will use the updated prompt automatically.\n"
+    printf "  Running terminals will restart their daemon on next command.\n\n"
+else
+    printf "\n${C_GREEN}${C_BOLD}  Installation complete!${C_RESET}\n\n"
+    printf "  ${C_BOLD}Next steps:${C_RESET}\n"
+    printf "    1. Open a new terminal (or run: source ~/.bashrc)\n"
+    printf "    2. Run: ${C_BLUE}omarchy10k doctor${C_RESET} to verify\n"
+    printf "    3. Add the Omarchy10k widget to your Quattro bar\n"
+    printf "\n  To uninstall: ${C_BLUE}./install.sh --uninstall${C_RESET}\n"
+    printf "  To update:    ${C_BLUE}omarchy10k update${C_RESET}  or  ${C_BLUE}./install.sh --update${C_RESET}\n\n"
+fi

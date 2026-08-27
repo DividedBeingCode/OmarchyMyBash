@@ -1,6 +1,7 @@
 mod bridge;
 mod doctor;
 mod prompt;
+mod update;
 
 use clap::{Parser, Subcommand};
 
@@ -64,6 +65,16 @@ enum Commands {
     /// Extract the left prompt from a JSON daemon response (used internally)
     #[command(name = "parse-prompt", hide = true)]
     ParsePrompt,
+
+    /// Update Omarchy10k: pull latest source, rebuild, and reinstall
+    Update {
+        /// Skip git pull (rebuild from current source tree)
+        #[arg(long)]
+        no_pull: bool,
+        /// Skip rebuilding (just reinstall existing binaries + plugin)
+        #[arg(long)]
+        no_build: bool,
+    },
 
     /// Run a shell-level end-to-end benchmark measuring real prompt latency
     #[command(name = "benchmark-shell", hide = true)]
@@ -130,6 +141,10 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Debug => {
             prompt::send_command(&socket_path(), "status").await?;
+        }
+
+        Commands::Update { no_pull, no_build } => {
+            update::run(no_pull, no_build)?;
         }
 
         Commands::Bridge { socket } => {

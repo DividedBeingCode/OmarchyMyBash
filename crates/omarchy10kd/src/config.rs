@@ -15,6 +15,8 @@ pub struct Config {
     #[serde(default)]
     pub prompt: PromptConfig,
     #[serde(default)]
+    pub style: StyleConfig,
+    #[serde(default)]
     pub theme: ThemeConfig,
     #[serde(default)]
     pub directory: DirectoryConfig,
@@ -26,6 +28,54 @@ pub struct Config {
     pub terminal: TerminalConfig,
     #[serde(default)]
     pub daemon: DaemonConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct StyleConfig {
+    pub preset: String,
+    #[serde(default)]
+    pub separators: SeparatorConfig,
+    #[serde(default)]
+    pub frame: FrameConfig,
+    #[serde(default)]
+    pub caps: CapsConfig,
+}
+
+impl Default for StyleConfig {
+    fn default() -> Self {
+        Self {
+            preset: "omarchy".into(),
+            separators: SeparatorConfig::default(),
+            frame: FrameConfig::default(),
+            caps: CapsConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SeparatorConfig {
+    pub left: Option<String>,
+    pub right: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FrameConfig {
+    pub enabled: Option<bool>,
+    pub left: Option<bool>,
+    pub right: Option<bool>,
+    pub gap_char: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CapsConfig {
+    pub left_start: Option<String>,
+    pub left_end: Option<String>,
+    pub right_start: Option<String>,
+    pub right_end: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -102,6 +152,7 @@ pub struct GitConfig {
     pub stale_display: bool,
     pub max_threads: usize,
     pub cache_ttl_ms: u64,
+    pub branch_icon: String,
 }
 
 impl Default for GitConfig {
@@ -112,6 +163,7 @@ impl Default for GitConfig {
             stale_display: true,
             max_threads: 4,
             cache_ttl_ms: 5000,
+            branch_icon: "powerline".into(),
         }
     }
 }
@@ -237,13 +289,15 @@ impl Default for SshConfig {
 pub struct CharacterConfig {
     pub success: String,
     pub error: String,
+    pub transient: String,
 }
 
 impl Default for CharacterConfig {
     fn default() -> Self {
         Self {
-            success: "❯".into(),
-            error: "❯".into(),
+            success: "\u{276f}".into(),
+            error: "\u{276f}".into(),
+            transient: "\u{276f}".into(),
         }
     }
 }
@@ -432,6 +486,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             prompt: PromptConfig::default(),
+            style: StyleConfig::default(),
             theme: ThemeConfig::default(),
             directory: DirectoryConfig::default(),
             git: GitConfig::default(),

@@ -207,6 +207,29 @@ cp omarchy10k/hooks/theme-set ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 chmod +x ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 ```
 
+### Updating
+
+Once installed, update Omarchy10k with a single command:
+
+```bash
+omarchy10k update
+```
+
+This pulls the latest source, rebuilds, replaces binaries, refreshes the Quattro plugin and theme hook, and gracefully restarts any running daemons. New terminals pick up the update automatically; running terminals restart their daemon on the next command.
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--no-pull` | Skip `git pull` (rebuild from current source tree) |
+| `--no-build` | Skip `cargo build` (reinstall existing binaries + plugin only) |
+
+You can also update via the installer script:
+
+```bash
+./install.sh --update
+```
+
 ### Verify
 
 ```bash
@@ -341,6 +364,7 @@ COMMANDS:
   prompt          Render the prompt (used internally by the adapter)
   doctor          Run diagnostics and check system compatibility
   reload          Signal the daemon to re-read config and theme
+  update          Pull, rebuild, and reinstall (--no-pull, --no-build)
   benchmark       Render prompts in a loop and report p50/p95/p99 latency
   debug           Dump daemon state (PID, version, cache status)
 ```
@@ -540,7 +564,7 @@ The foundation: replace Starship with equal or better prompt quality.
 
 - [ ] Stable config schema with migration guarantees
 - [ ] Performance targets verified (sub-5ms cached, sub-50ms cold git)
-- [ ] Tested upgrade path
+- [x] Tested upgrade path (`omarchy10k update`)
 - [ ] Full documentation
 - [ ] Curated plugin catalog
 

@@ -49,7 +49,7 @@ omarchy10k/
 ├── .github/workflows/benchmark.yml  # CI benchmark workflow
 ├── crates/
 │   ├── omarchy10k/               # CLI client binary
-│   │   └── src/{main,prompt,doctor,bridge}.rs
+│   │   └── src/{main,prompt,doctor,bridge,update}.rs
 │   └── omarchy10kd/              # Persistent daemon binary
 │       └── src/{main,server,config,git,layout,theme,render,terminal}.rs
 │       └── src/segments/{mod,directory,git,exit_status,command_duration,character,os,ssh,jobs,
@@ -73,6 +73,9 @@ omarchy10k/
 ```bash
 # One-line install (builds, installs binaries, configures shell, sets up Quattro plugin + theme hook)
 cd omarchy10k && ./install.sh
+
+# Update to latest
+omarchy10k update
 
 # To uninstall
 ./install.sh --uninstall

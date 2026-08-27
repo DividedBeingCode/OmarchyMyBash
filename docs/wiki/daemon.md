@@ -8,7 +8,7 @@ The daemon is the computational core of Omarchy10k. It holds all state, renders 
 
 Bootstraps everything: config loading, tracing initialization, theme palette, shared state, filesystem watchers, parent-process monitor, and the socket server.
 
-Module tree: `config`, `git`, `layout`, `render`, `segments`, `server`, `theme`, `terminal`.
+Module tree: `config`, `git`, `layout`, `render`, `segments`, `server`, `style`, `theme`, `terminal`.
 
 ### Startup Sequence
 
@@ -162,9 +162,81 @@ Default preview cwd is `~/projects/my-app`; default cols is 120.
 {"type":"control","status":"ok","palette":{"accent":"#7aa2f7","foreground":"#c0caf5","muted":"#565f89","background":"#1a1b26","red":"#f7768e","green":"#9ece6a","yellow":"#e0af68","blue":"#7aa2f7"}}
 ```
 
+## Style (`src/style.rs`)
+
+Added in v0.3. The style module provides a curated preset system, glyph catalogs, and style resolution that replaces the simpler `LayoutPreset` approach.
+
+### StyleResolver
+
+```rust
+pub struct StyleResolver;
+
+impl StyleResolver {
+    pub fn resolve(config: &Config) -> ResolvedStyle;
+    fn effective_preset(config: &Config) -> String;
+}
+```
+
+Resolution pipeline:
+1. **Determine effective preset** — if `style.preset` is explicitly set (not `"omarchy"`), use it. Otherwise fall back to `prompt.layout` for backward compatibility.
+2. **Load preset defaults** — each preset defines separator glyphs, frame mode, gap char, segment ordering, and single-line override.
+3. **Apply config overrides** — `style.separators`, `style.frame`, and `style.caps` can override any preset aspect independently. `Option<>` wrapping means unset values inherit from the preset.
+
+### ResolvedStyle
+
+```rust
+pub struct ResolvedStyle {
+    pub left_separator: String,
+    pub right_separator: String,
+    pub frame: FrameStyle,
+    pub gap_char: Option<char>,
+    pub left_cap_start: String,
+    pub left_cap_end: String,
+    pub right_cap_start: String,
+    pub right_cap_end: String,
+    pub segment_order: &'static [&'static str],
+    pub force_single_line: bool,
+}
+```
+
+### GlyphCatalog
+
+Static lookup tables for configurable glyphs. All methods accept a key string and return the corresponding glyph, or the key itself as a custom fallback:
+
+| Method | Options |
+|--------|---------|
+| `os_icon(key)` | 16 distro glyphs + `none` + custom |
+| `separator(key)` | powerline, powerline_thin, slanted, round, vertical, dot, diamond, none |
+| `prompt_char(key)` | chevron, arrow, lambda, dollar, angle, percent, triangle, hash + custom |
+| `branch_icon(key)` | powerline (U+E0A0), octicon, nerd, text (`git:`), none + custom |
+
+### FrameStyle
+
+Controls box-drawing ornaments around prompt lines:
+
+```rust
+pub struct FrameStyle {
+    pub enabled: bool,
+    pub left: bool,     // ╭ ╰ column
+    pub right: bool,    // ╮ ╯ column
+    pub top_left: &'static str,     // "╭─"
+    pub bottom_left: &'static str,  // "╰─"
+    pub top_right: &'static str,    // "─╮"
+    pub bottom_right: &'static str, // "─╯"
+}
+```
+
+### Migration from LayoutPreset
+
+The `LayoutPreset` struct in `layout.rs` is retained but no longer called from the render pipeline. `StyleResolver::effective_preset()` handles backward compatibility:
+
+- If `style.preset` is explicitly set to anything other than `"omarchy"`, it takes precedence
+- If `style.preset` is at its default (`"omarchy"`) and `prompt.layout` is set to a different value, `prompt.layout` drives the style
+- Existing configs with `prompt.layout = "powerline"` continue to work identically
+
 ## Config (`src/config.rs`)
 
-TOML schema with layered defaults via `#[serde(default)]`. All Config structs derive `Serialize` (enables the `config_get` API). v0.3 adds ten new config structs: `ContainerConfig`, `PythonConfig`, `ToolchainConfig`, `NixConfig`, `K8sConfig`, `TimeConfig`, `BatteryConfig`, `NotificationConfig`, `TerminalConfig` (with nested `TitleConfig` and `ProgressConfig`). See [Configuration](config.md) for the full key reference.
+TOML schema with layered defaults via `#[serde(default)]`. All Config structs derive `Serialize` (enables the `config_get` API). v0.3 adds `StyleConfig` (with nested `SeparatorConfig`, `FrameConfig`, `CapsConfig`), plus `ContainerConfig`, `PythonConfig`, `ToolchainConfig`, `NixConfig`, `K8sConfig`, `TimeConfig`, `BatteryConfig`, `NotificationConfig`, `TerminalConfig` (with nested `TitleConfig` and `ProgressConfig`). See [Configuration](config.md) for the full key reference.
 
 ### GitConfig
 
@@ -407,16 +479,18 @@ pub struct Segment {
 ### LayoutEngine Resolution Algorithm
 
 ```
-Input: segments[], terminal_cols
+Input: segments[], terminal_cols, separator_width
 Output: ResolvedSegment[]
 
 1. Filter: remove segments where cols < hide_below_cols
-2. Calculate total preferred width (sum of preferred_width + 1-space separators)
+2. Calculate total preferred width (sum of preferred_width + separator_width between segments)
 3. If fits: return all segments at preferred width
 4. Else: sort by priority (ascending = most important first)
 5. Greedy fit: iterate sorted, add segment (using compact if preferred doesn't fit)
 6. Re-sort by original_index to restore display order
 ```
+
+`LayoutEngine::new_with_separator_width(cols, sep_width)` uses the actual separator display width from the resolved style (e.g. 3 for powerline arrows ` \u{e0b0} `), fixing the previous hardcoded `separator_width = 1` which caused width miscalculations with multi-char separators.
 
 Uses `unicode-width` crate for accurate East Asian character width measurement.
 
@@ -479,29 +553,42 @@ Orchestrates the full render pipeline:
 ```rust
 pub fn render(&self, cwd, exit_code, cmd_duration_ms, cols, jobs, git_status, shell_integration: bool) -> PromptResponse {
     // Build SegmentContext with all inputs + config + palette
+    // StyleResolver::resolve(config) → ResolvedStyle
     // collect_segments(ctx) → Vec<Segment>
-    // LayoutPreset::apply_filter(segments, prompt.layout)
-    // LayoutEngine::new(cols).resolve(segments) → Vec<ResolvedSegment>
-    // format_line1(resolved, LayoutPreset::separator(layout)) → ANSI string
-    // format_line2(prompt_char) → ANSI string (undercurl on error via TermCaps)
+    // Filter segments by resolved_style.segment_order
+    // LayoutEngine::new_with_separator_width(cols, sep_width).resolve(segments)
+    // format_line1(resolved, style.left_separator) → ANSI string
+    // format_line2(prompt_char via GlyphCatalog) → ANSI string
     // OSC 2 title when terminal.title.enabled
     // Wrap in OSC 133 markers when shell_integration is true
-    // Single-line override when LayoutPreset::is_single_line(layout)
-    // render_right(ctx) when prompt.right_prompt enabled
-    // Build transient prompt if enabled
+    // Single-line override when resolved_style.force_single_line
+    // Frame rendering when style.frame.enabled (gap filler, ornaments)
+    // render_right(ctx) when prompt.right_prompt enabled (disabled in frame mode)
+    // Build transient prompt with configurable glyph if enabled
 }
 ```
+
+### Frame Rendering
+
+When `style.frame.enabled` is true and the prompt is two-line, `render_framed()` produces:
+
+```
+╭─ {segments} ──────── {right} ─╮    ← line 1 with gap fill
+╰─ ❯                            ─╯    ← line 2 with prompt char
+```
+
+The gap filler uses `gap_char` (e.g. `─`) rendered in muted color between left content and right content, padded to terminal width. Right prompt content is inlined into line 1 when framing is active (not sent as a separate `right` field).
 
 The `shell_integration` parameter controls OSC 133 emission. When `false`, prompt start/end markers are omitted (empty strings). Preview requests always pass `false`. Defaults to `true` when not specified in the prompt request.
 
 ### render_right
 
-Returns an optional right prompt string when `config.prompt.right_prompt` is enabled:
+Returns an optional right prompt string when `config.prompt.right_prompt` is enabled (and frame mode is not active):
 
 - **Command duration** (muted) — shown when above threshold
-- **Git branch** (accent, or muted when `git_status.stale`) — branch icon + name
+- **Git branch** (accent, or muted when `git_status.stale`) — configurable branch icon via `GlyphCatalog::branch_icon(config.git.branch_icon)` + name
 
-Parts are space-separated. Returns `None` when both would be empty.
+Parts are space-separated. Returns `None` when both would be empty. When frame mode is active, right content is inlined into the framed line 1 and the `right` field in `PromptResponse` is `None`.
 
 ### OSC 2 Terminal Title
 
@@ -631,15 +718,21 @@ Priority: 56, hide_below_cols: 40. Disabled by default.
 
 ### OS Segment (`segments/os.rs`)
 
-Renders an OS icon based on `config.segments.os.icon`:
+Renders an OS icon based on `config.segments.os.icon`, routed through `GlyphCatalog::os_icon()`:
 
-| Icon value | Glyph |
-|------------|-------|
-| `"arch"` | U+F303 |
-| `"linux"` | U+F17C |
-| `"omarchy"` | U+F312 |
-| `"none"` | hidden |
-| custom | literal string |
+| Icon value | Glyph | Icon value | Glyph |
+|------------|-------|------------|-------|
+| `"arch"` | U+F303 | `"alpine"` | U+F300 |
+| `"ubuntu"` | U+F31B | `"void"` | U+F32E |
+| `"debian"` | U+F306 | `"gentoo"` | U+F30D |
+| `"fedora"` | U+F30A | `"manjaro"` | U+F312 |
+| `"nixos"` | U+F313 | `"opensuse"` | U+F314 |
+| `"macos"` / `"apple"` | U+F179 | `"centos"` | U+F304 |
+| `"windows"` | U+F17A | `"raspberry_pi"` | U+F315 |
+| `"linux"` | U+F17C | `"none"` | hidden |
+| `"omarchy"` | U+F312 | custom | literal string |
+
+Expanded from 4 options to 16+ in v0.3.
 
 Priority: 5, hide_below_cols: 40, color: accent
 
@@ -720,11 +813,11 @@ Format progression: `500ms` → `1.5s` → `1m5s` → `1h1m`
 
 ### Character (Line 2 / Transient)
 
-Not a layout `Segment` — rendered directly by `render.rs`:
+Not a layout `Segment` — rendered directly by `render.rs` via `GlyphCatalog::prompt_char()`:
 
 - Success: `config.segments.character.success` (default `❯`) in accent color
 - Error: `config.segments.character.error` (default `❯`) in red; undercurl when `TermCaps.has_undercurl`
-- Transient: hardcoded muted `❯` (ignores character config)
+- Transient: `config.segments.character.transient` (default `❯`) in muted color. Previously hardcoded; now configurable in v0.3.
 
 ## v0.3.0 Bug Fixes
 

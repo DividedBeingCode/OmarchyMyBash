@@ -1,9 +1,11 @@
 use crate::config::Config;
 use crate::git::GitStatus;
-use crate::layout::{LayoutEngine, LayoutPreset, ResolvedSegment};
+use crate::layout::{LayoutEngine, ResolvedSegment};
 use crate::segments::{self, SegmentContext, character};
+use crate::style::{GlyphCatalog, ResolvedStyle, StyleResolver};
 use crate::terminal::TermCaps;
 use crate::theme::ThemePalette;
+use unicode_width::UnicodeWidthStr;
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -79,13 +81,18 @@ impl<'a> PromptRenderer<'a> {
             term_caps: &term_caps,
         };
 
+        let resolved_style = StyleResolver::resolve(self.config);
+
         let mut segments = segments::collect_segments(&ctx);
-        LayoutPreset::apply_filter(&mut segments, &self.config.prompt.layout);
-        let layout = LayoutEngine::new(cols);
+        // Filter segments by style preset's allowed list
+        let allowed = resolved_style.segment_order;
+        segments.retain(|s| allowed.contains(&s.name));
+
+        let sep_display_width = UnicodeWidthStr::width(resolved_style.left_separator.as_str()) as u16;
+        let layout = LayoutEngine::new_with_separator_width(cols, sep_display_width);
         let resolved = layout.resolve(&segments);
 
-        let separator = LayoutPreset::separator(&self.config.prompt.layout);
-        let line1 = self.format_line1(&resolved, separator);
+        let line1 = self.format_line1(&resolved, &resolved_style.left_separator);
         let line2 = self.format_line2(&ctx);
 
         let (prompt_start, prompt_end) = if shell_integration {
@@ -108,24 +115,33 @@ impl<'a> PromptRenderer<'a> {
             String::new()
         };
 
-        let force_single = LayoutPreset::is_single_line(&self.config.prompt.layout);
-        let use_newline = self.config.prompt.newline && !force_single;
-
-        let left = if use_newline {
-            format!("{title_escape}{prompt_start}{line1}\n{line2} {prompt_end}")
-        } else {
-            format!("{title_escape}{prompt_start}{line1} {line2} {prompt_end}")
-        };
+        let use_newline = self.config.prompt.newline && !resolved_style.force_single_line;
 
         let left_segment_names: std::collections::HashSet<&str> = resolved
             .iter()
             .map(|r| segments[r.original_index].name)
             .collect();
 
-        let right = if self.config.prompt.right_prompt {
+        let right = if self.config.prompt.right_prompt && !resolved_style.frame.enabled {
             self.render_right(&ctx, &left_segment_names)
         } else {
             None
+        };
+
+        let left = if resolved_style.frame.enabled && use_newline {
+            let right_content = if self.config.prompt.right_prompt {
+                self.render_right_raw(&ctx, &left_segment_names)
+            } else {
+                None
+            };
+            self.render_framed(
+                &title_escape, &line1, &line2, right_content.as_deref(),
+                cols, &resolved_style, prompt_start, prompt_end,
+            )
+        } else if use_newline {
+            format!("{title_escape}{prompt_start}{line1}\n{line2} {prompt_end}")
+        } else {
+            format!("{title_escape}{prompt_start}{line1} {line2} {prompt_end}")
         };
 
         let transient = if self.config.prompt.transient {
@@ -143,12 +159,97 @@ impl<'a> PromptRenderer<'a> {
             None
         };
 
+        let right_for_response = if resolved_style.frame.enabled { None } else { right };
+
         PromptResponse {
             left,
-            right,
+            right: right_for_response,
             transient,
             git_stale: git_status.stale,
             notify_threshold_ms,
+        }
+    }
+
+    fn render_framed(
+        &self,
+        title_escape: &str,
+        line1: &str,
+        line2: &str,
+        right_content: Option<&str>,
+        cols: u16,
+        style: &ResolvedStyle,
+        prompt_start: &str,
+        prompt_end: &str,
+    ) -> String {
+        let frame_fg = wrap_np(&self.palette.muted.fg_escape());
+        let reset = wrap_np(RESET);
+
+        let top_left = style.frame.top_left;
+        let bottom_left = style.frame.bottom_left;
+        let top_right = style.frame.top_right;
+        let bottom_right = style.frame.bottom_right;
+
+        let frame_prefix = if style.frame.left {
+            format!("{frame_fg}{top_left}{reset} ")
+        } else {
+            String::new()
+        };
+
+        let bottom_prefix = if style.frame.left {
+            format!("{frame_fg}{bottom_left}{reset} ")
+        } else {
+            String::new()
+        };
+
+        if let (Some(gap_char), true) = (style.gap_char, style.frame.right) {
+            let left_visible = strip_ansi_width(line1);
+            let right_text = right_content.unwrap_or("");
+            let right_visible = strip_ansi_width(right_text);
+
+            let frame_overhead = if style.frame.left { 3 } else { 0 }
+                + if style.frame.right { 3 } else { 0 };
+            let content_width = left_visible + right_visible;
+            let gap_width = (cols as usize).saturating_sub(content_width + frame_overhead + 1);
+
+            let gap_str: String = std::iter::repeat(gap_char).take(gap_width).collect();
+            let gap_styled = format!("{frame_fg}{gap_str}{reset}");
+
+            let right_frame = if style.frame.right {
+                format!(" {frame_fg}{top_right}{reset}")
+            } else {
+                String::new()
+            };
+
+            let bottom_frame = if style.frame.right {
+                format!("{frame_fg}{bottom_right}{reset}")
+            } else {
+                String::new()
+            };
+
+            let right_part = if !right_text.is_empty() {
+                format!(" {right_text}")
+            } else {
+                String::new()
+            };
+
+            format!(
+                "{title_escape}{prompt_start}{frame_prefix}{line1} {gap_styled}{right_part}{right_frame}\n{bottom_prefix}{line2} {bottom_frame}{prompt_end}"
+            )
+        } else {
+            let right_part = match right_content {
+                Some(r) if !r.is_empty() => format!("  {r}"),
+                _ => String::new(),
+            };
+
+            let bottom_frame = if style.frame.right {
+                format!("{frame_fg}{bottom_right}{reset}")
+            } else {
+                String::new()
+            };
+
+            format!(
+                "{title_escape}{prompt_start}{frame_prefix}{line1}{right_part}\n{bottom_prefix}{line2} {bottom_frame}{prompt_end}"
+            )
         }
     }
 
@@ -184,14 +285,20 @@ impl<'a> PromptRenderer<'a> {
             && ctx.git_status.is_repo
             && !ctx.git_status.branch.is_empty()
         {
+            let branch_icon = GlyphCatalog::branch_icon(&ctx.config.git.branch_icon);
+            let icon_part = if branch_icon.is_empty() {
+                String::new()
+            } else {
+                format!("{branch_icon} ")
+            };
             parts.push(format!(
-                "{}{} {}{}",
+                "{}{}{}{}",
                 wrap_np(&if ctx.git_status.stale {
                     ctx.palette.muted.fg_escape()
                 } else {
                     ctx.palette.accent.fg_escape()
                 }),
-                "\u{e0a0}",
+                icon_part,
                 ctx.git_status.branch,
                 wrap_np(RESET)
             ));
@@ -202,6 +309,14 @@ impl<'a> PromptRenderer<'a> {
         } else {
             Some(parts.join(" "))
         }
+    }
+
+    fn render_right_raw(
+        &self,
+        ctx: &SegmentContext<'_>,
+        left_names: &std::collections::HashSet<&str>,
+    ) -> Option<String> {
+        self.render_right(ctx, left_names)
     }
 
     fn format_line1(&self, segments: &[ResolvedSegment], separator: &str) -> String {
@@ -246,6 +361,40 @@ impl<'a> PromptRenderer<'a> {
     }
 }
 
+fn strip_ansi_width(s: &str) -> usize {
+    let mut clean = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x01' | '\x02' => {}
+            '\x1b' => {
+                match chars.peek() {
+                    Some('[') => {
+                        chars.next();
+                        while let Some(&nc) = chars.peek() {
+                            chars.next();
+                            if nc.is_ascii_alphabetic() { break; }
+                        }
+                    }
+                    Some(']') => {
+                        chars.next();
+                        for nc in chars.by_ref() {
+                            if nc == '\x07' { break; }
+                            if nc == '\x1b' {
+                                if chars.peek() == Some(&'\\') { chars.next(); }
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => clean.push(c),
+        }
+    }
+    UnicodeWidthStr::width(clean.as_str())
+}
+
 fn gethostname_string() -> String {
     let mut buf = vec![0u8; 256];
     let ret = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
@@ -284,5 +433,12 @@ mod tests {
     #[test]
     fn test_wrap_np_bold() {
         assert_eq!(wrap_np(BOLD), "\x01\x1b[1m\x02");
+    }
+
+    #[test]
+    fn test_strip_ansi_width() {
+        assert_eq!(strip_ansi_width("hello"), 5);
+        assert_eq!(strip_ansi_width("\x1b[31mhello\x1b[0m"), 5);
+        assert_eq!(strip_ansi_width("\x01\x1b[31m\x02hello\x01\x1b[0m\x02"), 5);
     }
 }

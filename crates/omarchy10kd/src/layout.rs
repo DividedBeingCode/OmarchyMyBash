@@ -31,28 +31,30 @@ impl Segment {
 #[derive(Debug)]
 pub struct LayoutEngine {
     pub cols: u16,
+    pub separator_width: u16,
 }
 
 impl LayoutEngine {
     pub fn new(cols: u16) -> Self {
-        Self { cols }
+        Self { cols, separator_width: 1 }
+    }
+
+    pub fn new_with_separator_width(cols: u16, separator_width: u16) -> Self {
+        Self { cols, separator_width }
     }
 
     /// Resolve which segments to show and whether to use compact form.
     /// Returns (visible_segments, total_width)
     pub fn resolve(&self, segments: &[Segment]) -> Vec<ResolvedSegment> {
-        // First pass: filter segments below column threshold
         let mut candidates: Vec<(usize, &Segment)> = segments
             .iter()
             .enumerate()
             .filter(|(_, s)| s.hide_below_cols <= self.cols)
             .collect();
 
-        // Sort by priority (lower = more important, kept first)
         candidates.sort_by_key(|(_, s)| s.priority);
 
-        // Calculate total preferred width including separators
-        let separator_width = 1u16; // space between segments
+        let separator_width = self.separator_width;
         let mut total_preferred: u16 = 0;
         for (i, (_, seg)) in candidates.iter().enumerate() {
             total_preferred += seg.preferred_width;

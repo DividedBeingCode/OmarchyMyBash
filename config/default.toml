@@ -1,8 +1,31 @@
 [prompt]
-layout = "omarchy"         # omarchy | minimal | powerline | classic | pure | dense
+layout = "omarchy"         # legacy key — use [style] preset instead
 transient = true
 newline = true             # two-line prompt
 right_prompt = true
+
+# ── Style System ────────────────────────────────────────
+# Curated visual presets that control separators, frames, and layout.
+# Override individual aspects with [style.separators], [style.frame], [style.caps].
+
+[style]
+preset = "omarchy"         # omarchy | powerline | rainbow | framed | classic | lean | dense | slanted | minimal | pure
+
+# [style.separators]      # override preset separator (powerline|slanted|round|vertical|dot|diamond|none)
+# left = ""
+# right = ""
+
+# [style.frame]           # connecting lines between prompt lines
+# enabled = false
+# left = true
+# right = true
+# gap_char = ""            # ─ | · | none
+
+# [style.caps]            # edge decorations at prompt boundaries
+# left_start = ""
+# left_end = ""
+# right_start = ""
+# right_end = ""
 
 [theme]
 source = "omarchy"         # omarchy | custom | hybrid | terminal
@@ -28,10 +51,11 @@ mode = "adaptive"           # hidden | compact | expanded | adaptive
 stale_display = true        # show stale (grey) state while refreshing
 max_threads = 4
 cache_ttl_ms = 5000         # git status cache lifetime in milliseconds
+branch_icon = "powerline"   # powerline | octicon | nerd | text | none
 
 [segments.os]
 enabled = true
-icon = "arch"               # arch | linux | omarchy | custom | none
+icon = "arch"               # arch | ubuntu | debian | fedora | nixos | macos | windows | linux | omarchy | alpine | void | gentoo | none
 
 [segments.exit_status]
 enabled = true
@@ -49,8 +73,9 @@ enabled = true
 show = "auto"               # auto | always | never
 
 [segments.character]
-success = "❯"
+success = "❯"               # chevron | arrow | lambda | dollar | angle | percent | triangle | hash | custom
 error = "❯"
+transient = "❯"             # glyph for transient (collapsed) prompt
 
 # ── v0.3 Context Segments ────────────────────────────────
 

@@ -50,7 +50,7 @@ Panel (qs.Ui.Panel, manageIpc: false)
 ├── Tab bar: Appearance, Context, Segments, Shell, Advanced
 ├── 5× Component tabs (Loader-switched)
 ├── Error toast (red, 5s) + config diff toast (accent, 2s fade)
-├── Inline components: ControlRow, StatusRow, ActionButton
+├── Inline components: ControlRow, StatusRow, ActionButton, GlyphRow
 ├── 11× Process (config, socket, tools, doctor, benchmark, install, clipboard, …)
 ├── 1× Socket (daemonSocket + SplitParser)
 └── 4× Timer (save 300ms, reconnect 5s, error 5s, toast 2s)
@@ -282,7 +282,7 @@ Model.buildTOML(_configFlat) → TOML string (single-quote escaped)
 
 ### CONFIG_MAP
 
-Maps TOML keys to QML property names:
+Maps TOML keys to QML property names (31 keys):
 
 | TOML Key | QML Property |
 |----------|-------------|
@@ -290,10 +290,19 @@ Maps TOML keys to QML property names:
 | `prompt.transient` | `cfgTransient` |
 | `prompt.newline` | `cfgNewline` |
 | `prompt.right_prompt` | `cfgRightPrompt` |
+| `style.preset` | `cfgStylePreset` |
+| `style.separators.left` | `cfgSepLeft` |
+| `style.separators.right` | `cfgSepRight` |
+| `style.frame.enabled` | `cfgFrameEnabled` |
+| `style.frame.gap_char` | `cfgFrameGapChar` |
 | `theme.source` | `cfgThemeSource` |
 | `git.mode` | `cfgGitMode` |
 | `git.enabled` | `cfgGitEnabled` |
+| `git.branch_icon` | `cfgGitBranchIcon` |
 | `segments.os.icon` | `cfgOsIcon` |
+| `segments.character.success` | `cfgCharSuccess` |
+| `segments.character.error` | `cfgCharError` |
+| `segments.character.transient` | `cfgCharTransient` |
 | `segments.exit_status.show_signal_name` | `cfgExitSignalNames` |
 | `segments.command_duration.show_above_ms` | `cfgCmdDurationMs` |
 | `segments.ssh.show` | `cfgSshShow` |
@@ -320,14 +329,56 @@ Five tabs: `["Appearance", "Context", "Segments", "Shell", "Advanced"]`
 
 ### Appearance Tab
 
+Redesigned in v0.3 with a visual style gallery, glyph pickers, and frame controls.
+
+#### Style Gallery
+
+An 8-card grid replaces the old Preset dropdown. Each card shows a visual preview of the style, its name, and a short description. Clicking a card sets `style.preset`:
+
+| Card | Preview | Description |
+|------|---------|-------------|
+| omarchy | `~ ❯` | Clean |
+| powerline | `~ ▶ git` | Classic |
+| rainbow | `~ ▶▶▶` | Vibrant |
+| framed | `╭─ ~ ─╮` | Framed |
+| classic | `~ │ git` | Divided |
+| lean | `~/src` | Minimal |
+| dense | `~ git ❯` | Compact |
+| slanted | `~ ╲ git` | Modern |
+
+#### Glyph Pickers
+
+Four scrollable glyph rows below the gallery, each showing clickable icon buttons:
+
+| Picker | TOML Key(s) | Options |
+|--------|------------|---------|
+| OS Icon | `segments.os.icon` | 13 distro icons (Arch, Ubuntu, Debian, Fedora, NixOS, macOS, Win, Linux, Omarchy, Alpine, Void, Gentoo) + None |
+| Prompt Char | `segments.character.success` + `.error` + `.transient` | ❯, ➜, λ, $, >, %, ▶, # |
+| Git Icon | `git.branch_icon` | Powerline, Octicon, Nerd, git:, None |
+| Separator | `style.separators.left` + `.right` | Default, Arrow, Thin, Slant, Round, Bar, Dot, Diamond |
+
+The Prompt Char and Separator pickers use custom handlers to set multiple config keys at once (e.g. prompt char sets success, error, and transient simultaneously).
+
+#### Frame Controls
+
 | Control | TOML Key | Options |
 |---------|----------|---------|
-| Preset | `prompt.layout` | omarchy, minimal, powerline, classic, pure, dense |
-| Theme | `theme.source` | omarchy, custom, hybrid, terminal |
-| Theme swatches | (from `palette` IPC) | accent, foreground, muted, background, red, green, yellow, blue |
+| Frame Lines | `style.frame.enabled` | On / Off |
+| Gap Fill (visible when Frame is On) | `style.frame.gap_char` | Line ─, Dots ·, Ellipsis ⋯, None |
+
+#### Layout Controls
+
+| Control | TOML Key | Options |
+|---------|----------|---------|
 | Lines | `prompt.newline` | Two-line / One-line |
 | Transient | `prompt.transient` | On / Off |
-| OS Icon | `segments.os.icon` | arch, linux, omarchy, none |
+
+#### Theme Section
+
+| Control | TOML Key | Options |
+|---------|----------|---------|
+| Source | `theme.source` | omarchy, custom, hybrid, terminal |
+| Theme swatches | (from `palette` IPC) | accent, foreground, muted, background, red, green, yellow, blue |
 
 Changing theme source triggers `requestPalette()` to refresh the color swatch row. Swatches appear when `paletteColors` is populated from the daemon response.
 
@@ -438,7 +489,7 @@ Stateless helper library (`.pragma library`):
 | `parseDaemonResponse(json)` | Safe JSON parse with error wrapping |
 | `parseTOML(text)` | Subset TOML parser → flat key-value object |
 | `buildTOML(flat)` | Flat object → sectioned TOML string |
-| `CONFIG_MAP` | TOML key ↔ QML property mapping (21 keys) |
+| `CONFIG_MAP` | TOML key ↔ QML property mapping (31 keys) |
 | `applyConfig(flat, target)` | Load parsed config into QML properties |
 | `collectConfig(source)` | Export QML properties to flat object |
 | `parseToolOutput(text)` | Parse `name=path\|missing` format |

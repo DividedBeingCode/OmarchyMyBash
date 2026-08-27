@@ -19,9 +19,18 @@ Panel {
     property bool cfgNewline: true
     property bool cfgTransient: true
     property bool cfgRightPrompt: true
+    property string cfgStylePreset: "omarchy"
+    property string cfgSepLeft: ""
+    property string cfgSepRight: ""
+    property bool cfgFrameEnabled: false
+    property string cfgFrameGapChar: ""
     property string cfgGitMode: "adaptive"
     property bool cfgGitEnabled: true
+    property string cfgGitBranchIcon: "powerline"
     property string cfgOsIcon: "arch"
+    property string cfgCharSuccess: "\u276f"
+    property string cfgCharError: "\u276f"
+    property string cfgCharTransient: "\u276f"
     property bool cfgExitSignalNames: true
     property int cfgCmdDurationMs: 1500
     property string cfgSshShow: "auto"
@@ -708,15 +717,240 @@ Panel {
         Column {
             spacing: Style.space(10)
 
-            ControlRow {
-                label: "Preset"
-                value: root.cfgLayout
-                options: ["omarchy", "minimal", "powerline", "classic", "pure", "dense"]
-                onChanged: function(val) { root.setConfigValue("prompt.layout", val) }
+            // ── Style Gallery ──────────────────────────────────────────
+            Text {
+                text: "Style"
+                color: root.barForeground || "#a9b1d6"
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.body
+                font.bold: true
+            }
+
+            Grid {
+                columns: 4
+                spacing: Style.space(6)
+                width: parent.width
+
+                Repeater {
+                    model: [
+                        { name: "omarchy",    preview: "  ~ \u276f",               desc: "Clean" },
+                        { name: "powerline",  preview: "  ~ \ue0b0 git",          desc: "Classic" },
+                        { name: "rainbow",    preview: "  ~ \ue0b0\ue0b0\ue0b0",  desc: "Vibrant" },
+                        { name: "framed",     preview: "\u256d\u2500 ~ \u2500\u256e",  desc: "Framed" },
+                        { name: "classic",    preview: "  ~ \u2502 git",          desc: "Divided" },
+                        { name: "lean",       preview: "  ~/src",                  desc: "Minimal" },
+                        { name: "dense",      preview: "  ~ git \u276f",          desc: "Compact" },
+                        { name: "slanted",    preview: "  ~ \ue0bc git",          desc: "Modern" }
+                    ]
+                    delegate: Rectangle {
+                        width: (parent.width - Style.space(18)) / 4
+                        height: styleCardCol.implicitHeight + Style.space(12)
+                        radius: Style.space(4)
+                        color: root.cfgStylePreset === modelData.name
+                            ? (Color.accent || "#7aa2f7")
+                            : (Color.lighter_background || "#24283b")
+                        border.width: root.cfgStylePreset === modelData.name ? 2 : 0
+                        border.color: Color.accent || "#7aa2f7"
+
+                        Column {
+                            id: styleCardCol
+                            anchors.centerIn: parent
+                            spacing: Style.space(2)
+
+                            Text {
+                                text: modelData.preview
+                                color: root.cfgStylePreset === modelData.name
+                                    ? (Color.background || "#1a1b26")
+                                    : (Color.foreground || "#a9b1d6")
+                                font.family: "monospace"
+                                font.pixelSize: Style.font.caption - 2
+                                horizontalAlignment: Text.AlignHCenter
+                                width: parent.parent.width - Style.space(8)
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                text: modelData.name
+                                color: root.cfgStylePreset === modelData.name
+                                    ? (Color.background || "#1a1b26")
+                                    : (root.barForeground || "#a9b1d6")
+                                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                font.pixelSize: Style.font.caption - 1
+                                font.bold: true
+                                horizontalAlignment: Text.AlignHCenter
+                                width: parent.parent.width - Style.space(8)
+                            }
+
+                            Text {
+                                text: modelData.desc
+                                color: root.cfgStylePreset === modelData.name
+                                    ? Qt.lighter(Color.background || "#1a1b26", 1.5)
+                                    : (Color.muted || "#414868")
+                                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                font.pixelSize: Style.font.caption - 2
+                                horizontalAlignment: Text.AlignHCenter
+                                width: parent.parent.width - Style.space(8)
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.setConfigValue("style.preset", modelData.name)
+                        }
+                    }
+                }
+            }
+
+            Rectangle { width: parent.width - Style.space(32); height: 1; color: Color.muted || "#414868"; x: Style.space(16) }
+
+            // ── Glyph Pickers ──────────────────────────────────────────
+            Text {
+                text: "Glyphs"
+                color: root.barForeground || "#a9b1d6"
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.body
+                font.bold: true
+            }
+
+            GlyphRow {
+                label: "OS Icon"
+                configKey: "segments.os.icon"
+                currentValue: root.cfgOsIcon
+                glyphs: [
+                    { key: "arch",    glyph: "\uf303",  label: "Arch" },
+                    { key: "ubuntu",  glyph: "\uf31b",  label: "Ubuntu" },
+                    { key: "debian",  glyph: "\uf306",  label: "Debian" },
+                    { key: "fedora",  glyph: "\uf30a",  label: "Fedora" },
+                    { key: "nixos",   glyph: "\uf313",  label: "NixOS" },
+                    { key: "macos",   glyph: "\uf179",  label: "macOS" },
+                    { key: "windows", glyph: "\uf17a",  label: "Win" },
+                    { key: "linux",   glyph: "\uf17c",  label: "Linux" },
+                    { key: "omarchy", glyph: "\uf312",  label: "Omarchy" },
+                    { key: "alpine",  glyph: "\uf300",  label: "Alpine" },
+                    { key: "void",    glyph: "\uf32e",  label: "Void" },
+                    { key: "gentoo",  glyph: "\uf30d",  label: "Gentoo" },
+                    { key: "none",    glyph: "\u2205",  label: "None" }
+                ]
+            }
+
+            GlyphRow {
+                label: "Prompt Char"
+                configKey: "segments.character.success"
+                currentValue: root.cfgCharSuccess
+                customHandler: function(key) {
+                    root.setConfigValue("segments.character.success", key)
+                    root.setConfigValue("segments.character.error", key)
+                    root.setConfigValue("segments.character.transient", key)
+                }
+                glyphs: [
+                    { key: "\u276f",  glyph: "\u276f",  label: "Chevron" },
+                    { key: "\u279c",  glyph: "\u279c",  label: "Arrow" },
+                    { key: "\u03bb",  glyph: "\u03bb",  label: "Lambda" },
+                    { key: "$",       glyph: "$",       label: "Dollar" },
+                    { key: ">",       glyph: ">",       label: "Angle" },
+                    { key: "%",       glyph: "%",       label: "Percent" },
+                    { key: "\u25b6",  glyph: "\u25b6",  label: "Triangle" },
+                    { key: "#",       glyph: "#",       label: "Hash" }
+                ]
+            }
+
+            GlyphRow {
+                label: "Git Icon"
+                configKey: "git.branch_icon"
+                currentValue: root.cfgGitBranchIcon
+                glyphs: [
+                    { key: "powerline", glyph: "\ue0a0",  label: "Powerline" },
+                    { key: "octicon",   glyph: "\uf418",  label: "Octicon" },
+                    { key: "nerd",      glyph: "\uf126",  label: "Nerd" },
+                    { key: "text",      glyph: "git:",    label: "Text" },
+                    { key: "none",      glyph: "\u2205",  label: "None" }
+                ]
+            }
+
+            GlyphRow {
+                label: "Separator"
+                configKey: "style.separators.left"
+                currentValue: root.cfgSepLeft || "none"
+                customHandler: function(key) {
+                    var val = key === "none" ? "" : key
+                    root.setConfigValue("style.separators.left", val)
+                    root.setConfigValue("style.separators.right", val)
+                }
+                glyphs: [
+                    { key: "none",           glyph: "\u2205",  label: "Default" },
+                    { key: "powerline",      glyph: "\ue0b0",  label: "Arrow" },
+                    { key: "powerline_thin", glyph: "\ue0b1",  label: "Thin" },
+                    { key: "slanted",        glyph: "\ue0bc",  label: "Slant" },
+                    { key: "round",          glyph: "\ue0b4",  label: "Round" },
+                    { key: "vertical",       glyph: "\u2502",  label: "Bar" },
+                    { key: "dot",            glyph: "\u00b7",  label: "Dot" },
+                    { key: "diamond",        glyph: "\u25c6",  label: "Diamond" }
+                ]
+            }
+
+            Rectangle { width: parent.width - Style.space(32); height: 1; color: Color.muted || "#414868"; x: Style.space(16) }
+
+            // ── Frame Controls ─────────────────────────────────────────
+            Text {
+                text: "Frame & Layout"
+                color: root.barForeground || "#a9b1d6"
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.body
+                font.bold: true
             }
 
             ControlRow {
-                label: "Theme"
+                label: "Frame Lines"
+                value: root.cfgFrameEnabled ? "On" : "Off"
+                options: ["On", "Off"]
+                onChanged: function(val) { root.setConfigValue("style.frame.enabled", val === "On") }
+            }
+
+            ControlRow {
+                visible: root.cfgFrameEnabled
+                label: "Gap Fill"
+                value: root.cfgFrameGapChar === "\u2500" ? "Line \u2500"
+                     : root.cfgFrameGapChar === "\u00b7" ? "Dots \u00b7"
+                     : root.cfgFrameGapChar === "\u22ef" ? "Ellipsis \u22ef"
+                     : "None"
+                options: ["Line \u2500", "Dots \u00b7", "Ellipsis \u22ef", "None"]
+                onChanged: function(val) {
+                    var ch = val.indexOf("\u2500") >= 0 ? "\u2500"
+                           : val.indexOf("\u00b7") >= 0 ? "\u00b7"
+                           : val.indexOf("\u22ef") >= 0 ? "\u22ef"
+                           : ""
+                    root.setConfigValue("style.frame.gap_char", ch)
+                }
+            }
+
+            ControlRow {
+                label: "Lines"
+                value: root.cfgNewline ? "Two-line" : "One-line"
+                options: ["Two-line", "One-line"]
+                onChanged: function(val) { root.setConfigValue("prompt.newline", val === "Two-line") }
+            }
+
+            ControlRow {
+                label: "Transient"
+                value: root.cfgTransient ? "On" : "Off"
+                options: ["On", "Off"]
+                onChanged: function(val) { root.setConfigValue("prompt.transient", val === "On") }
+            }
+
+            Rectangle { width: parent.width - Style.space(32); height: 1; color: Color.muted || "#414868"; x: Style.space(16) }
+
+            // ── Theme ──────────────────────────────────────────────────
+            Text {
+                text: "Theme"
+                color: root.barForeground || "#a9b1d6"
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.body
+                font.bold: true
+            }
+
+            ControlRow {
+                label: "Source"
                 value: root.cfgThemeSource
                 options: ["omarchy", "custom", "hybrid", "terminal"]
                 onChanged: function(val) {
@@ -747,36 +981,6 @@ Panel {
                         }
                     }
                 }
-            }
-
-            Text {
-                visible: !root._featureAvailable("0.3") && Object.keys(root.paletteColors).length === 0
-                text: "Palette preview requires daemon v0.3+"
-                color: Color.muted || "#414868"
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.caption
-                font.italic: true
-            }
-
-            ControlRow {
-                label: "Lines"
-                value: root.cfgNewline ? "Two-line" : "One-line"
-                options: ["Two-line", "One-line"]
-                onChanged: function(val) { root.setConfigValue("prompt.newline", val === "Two-line") }
-            }
-
-            ControlRow {
-                label: "Transient"
-                value: root.cfgTransient ? "On" : "Off"
-                options: ["On", "Off"]
-                onChanged: function(val) { root.setConfigValue("prompt.transient", val === "On") }
-            }
-
-            ControlRow {
-                label: "OS Icon"
-                value: root.cfgOsIcon
-                options: ["arch", "linux", "omarchy", "none"]
-                onChanged: function(val) { root.setConfigValue("segments.os.icon", val) }
             }
         }
     }
@@ -1347,6 +1551,90 @@ Panel {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: parent.clicked()
+        }
+    }
+
+    component GlyphRow: Column {
+        property string label
+        property string configKey
+        property string currentValue
+        property var glyphs: []
+        property var customHandler: null
+
+        spacing: Style.space(4)
+        width: parent ? parent.width : 200
+
+        Row {
+            spacing: Style.space(8)
+            width: parent.width
+
+            Text {
+                width: parent.width * 0.22
+                text: label
+                color: root.barForeground || "#a9b1d6"
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.body
+                verticalAlignment: Text.AlignVCenter
+                height: glyphFlow.height
+            }
+
+            Flow {
+                id: glyphFlow
+                width: parent.width * 0.75
+                spacing: Style.space(3)
+
+                Repeater {
+                    model: glyphs
+                    delegate: Rectangle {
+                        width: glyphCol.implicitWidth + Style.space(10)
+                        height: glyphCol.implicitHeight + Style.space(6)
+                        radius: Style.space(3)
+                        color: currentValue === modelData.key
+                            ? (Color.accent || "#7aa2f7")
+                            : (Color.lighter_background || "#24283b")
+
+                        Column {
+                            id: glyphCol
+                            anchors.centerIn: parent
+                            spacing: 1
+
+                            Text {
+                                text: modelData.glyph
+                                color: currentValue === modelData.key
+                                    ? (Color.background || "#1a1b26")
+                                    : (Color.foreground || "#a9b1d6")
+                                font.family: "monospace"
+                                font.pixelSize: Style.font.body
+                                horizontalAlignment: Text.AlignHCenter
+                                width: parent.parent.width - Style.space(6)
+                            }
+
+                            Text {
+                                text: modelData.label
+                                color: currentValue === modelData.key
+                                    ? Qt.lighter(Color.background || "#1a1b26", 1.4)
+                                    : (Color.muted || "#414868")
+                                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                font.pixelSize: Style.font.caption - 2
+                                horizontalAlignment: Text.AlignHCenter
+                                width: parent.parent.width - Style.space(6)
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (customHandler) {
+                                    customHandler(modelData.key)
+                                } else {
+                                    root.setConfigValue(configKey, modelData.key)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

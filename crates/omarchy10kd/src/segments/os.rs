@@ -1,4 +1,5 @@
 use crate::layout::Segment;
+use crate::style::GlyphCatalog;
 use super::SegmentContext;
 
 pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
@@ -6,12 +7,9 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         return None;
     }
 
-    let icon = match ctx.config.segments.os.icon.as_str() {
-        "arch" => "\u{f303}",
-        "linux" => "\u{f17c}",
-        "omarchy" => "\u{f312}",
-        "none" => return None,
-        custom => custom,
+    let icon = match GlyphCatalog::os_icon(ctx.config.segments.os.icon.as_str()) {
+        Some(i) => i,
+        None => return None,
     };
 
     Some(Segment {
