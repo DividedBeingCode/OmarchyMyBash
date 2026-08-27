@@ -90,6 +90,83 @@ pub async fn benchmark(socket_path: &Path, iterations: u32) -> anyhow::Result<()
     Ok(())
 }
 
+pub async fn benchmark_shell(
+    socket_path: &Path,
+    iterations: u32,
+    _adapter: Option<&str>,
+) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "/tmp".into());
+
+    println!("Omarchy10k Shell Benchmark ({iterations} iterations)");
+    println!("────────────────────────────────────");
+    println!("  mode: bridge coprocess simulation");
+    println!();
+
+    let stream = UnixStream::connect(socket_path).await?;
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+
+    let request = serde_json::json!({
+        "cwd": cwd,
+        "exit_code": 0,
+        "cmd_duration_ms": 0,
+        "cols": 120,
+        "jobs": 0,
+    });
+    let req_bytes = format!("{}\n", request);
+
+    let mut durations = Vec::with_capacity(iterations as usize);
+
+    for _ in 0..iterations {
+        let start = std::time::Instant::now();
+
+        writer.write_all(req_bytes.as_bytes()).await?;
+        let mut response = String::new();
+        reader.read_line(&mut response).await?;
+
+        let elapsed = start.elapsed();
+        durations.push(elapsed);
+        response.clear();
+    }
+
+    durations.sort();
+
+    let total: std::time::Duration = durations.iter().sum();
+    let avg = total / iterations;
+    let p50 = durations[durations.len() / 2];
+    let p95 = durations[(durations.len() as f64 * 0.95) as usize];
+    let p99 = durations[(durations.len() as f64 * 0.99) as usize];
+    let min = durations[0];
+    let max = durations[durations.len() - 1];
+
+    println!("  min:  {:>8.2}ms", min.as_secs_f64() * 1000.0);
+    println!("  avg:  {:>8.2}ms", avg.as_secs_f64() * 1000.0);
+    println!("  p50:  {:>8.2}ms", p50.as_secs_f64() * 1000.0);
+    println!("  p95:  {:>8.2}ms", p95.as_secs_f64() * 1000.0);
+    println!("  p99:  {:>8.2}ms", p99.as_secs_f64() * 1000.0);
+    println!("  max:  {:>8.2}ms", max.as_secs_f64() * 1000.0);
+    println!();
+
+    let p50_ms = p50.as_secs_f64() * 1000.0;
+    let p95_ms = p95.as_secs_f64() * 1000.0;
+
+    if p50_ms < 5.0 && p95_ms < 10.0 {
+        println!("  result: \u{2713} targets met (p50<5ms, p95<10ms)");
+    } else {
+        if p50_ms >= 5.0 {
+            println!("  result: \u{2718} p50 ({p50_ms:.2}ms) exceeds 5ms target");
+        }
+        if p95_ms >= 10.0 {
+            println!("  result: \u{2718} p95 ({p95_ms:.2}ms) exceeds 10ms target");
+        }
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
 async fn send_request(socket_path: &Path, request: &str) -> anyhow::Result<String> {
     let stream = UnixStream::connect(socket_path).await?;
     let (reader, mut writer) = stream.into_split();

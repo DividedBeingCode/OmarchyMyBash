@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -10,7 +10,7 @@ pub enum ConfigError {
     Parse(#[from] toml::de::Error),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub prompt: PromptConfig,
@@ -26,7 +26,7 @@ pub struct Config {
     pub daemon: DaemonConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PromptConfig {
     pub layout: String,
@@ -46,7 +46,7 @@ impl Default for PromptConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ThemeConfig {
     pub source: String,
@@ -62,7 +62,7 @@ impl Default for ThemeConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CustomPalette {
     pub accent: Option<String>,
     pub foreground: Option<String>,
@@ -74,7 +74,7 @@ pub struct CustomPalette {
     pub blue: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DirectoryConfig {
     pub strategy: String,
@@ -92,13 +92,14 @@ impl Default for DirectoryConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct GitConfig {
     pub enabled: bool,
     pub mode: String,
     pub stale_display: bool,
     pub max_threads: usize,
+    pub cache_ttl_ms: u64,
 }
 
 impl Default for GitConfig {
@@ -108,11 +109,12 @@ impl Default for GitConfig {
             mode: "adaptive".into(),
             stale_display: true,
             max_threads: 4,
+            cache_ttl_ms: 5000,
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SegmentsConfig {
     pub os: OsSegmentConfig,
@@ -136,7 +138,7 @@ impl Default for SegmentsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct OsSegmentConfig {
     pub enabled: bool,
@@ -152,7 +154,7 @@ impl Default for OsSegmentConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ExitStatusConfig {
     pub enabled: bool,
@@ -168,7 +170,7 @@ impl Default for ExitStatusConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CommandDurationConfig {
     pub enabled: bool,
@@ -184,7 +186,7 @@ impl Default for CommandDurationConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct JobsConfig {
     pub enabled: bool,
@@ -196,7 +198,7 @@ impl Default for JobsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SshConfig {
     pub enabled: bool,
@@ -212,7 +214,7 @@ impl Default for SshConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CharacterConfig {
     pub success: String,
@@ -228,7 +230,7 @@ impl Default for CharacterConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DaemonConfig {
     pub socket: String,

@@ -1,6 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -56,14 +55,16 @@ struct CachedStatus {
 #[derive(Debug)]
 pub struct GitCache {
     cache: Arc<RwLock<HashMap<PathBuf, CachedStatus>>>,
+    in_flight: Arc<RwLock<HashSet<PathBuf>>>,
     ttl: Duration,
 }
 
 impl GitCache {
-    pub fn new(ttl_seconds: u64) -> Self {
+    pub fn new(ttl_ms: u64) -> Self {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
-            ttl: Duration::from_secs(ttl_seconds),
+            in_flight: Arc::new(RwLock::new(HashSet::new())),
+            ttl: Duration::from_millis(ttl_ms),
         }
     }
 
@@ -73,30 +74,60 @@ impl GitCache {
             None => return GitStatus::default(),
         };
 
-        // Check cache
-        {
-            let cache = self.cache.read().await;
-            if let Some(cached) = cache.get(&repo_root) {
-                if cached.fetched_at.elapsed() < self.ttl {
-                    debug!("git cache hit for {}", repo_root.display());
-                    return cached.status.clone();
-                }
+        let cache = self.cache.read().await;
+        if let Some(cached) = cache.get(&repo_root) {
+            if cached.fetched_at.elapsed() < self.ttl {
+                debug!("git cache fresh hit for {}", repo_root.display());
+                return cached.status.clone();
             }
-        }
 
-        // Cache miss — fetch fresh status
-        let status = fetch_git_status(&repo_root).await;
-        {
-            let mut cache = self.cache.write().await;
-            cache.insert(
-                repo_root,
-                CachedStatus {
-                    status: status.clone(),
-                    fetched_at: Instant::now(),
-                },
-            );
+            debug!("git cache stale hit for {}", repo_root.display());
+            let mut stale = cached.status.clone();
+            stale.stale = true;
+            drop(cache);
+            self.schedule_refresh(repo_root);
+            return stale;
         }
-        status
+        drop(cache);
+
+        debug!("git cache cold miss for {}", repo_root.display());
+        self.schedule_refresh(repo_root.clone());
+        GitStatus {
+            is_repo: true,
+            repo_root,
+            stale: true,
+            ..Default::default()
+        }
+    }
+
+    fn schedule_refresh(&self, repo_root: PathBuf) {
+        let cache = Arc::clone(&self.cache);
+        let in_flight = Arc::clone(&self.in_flight);
+
+        tokio::spawn(async move {
+            {
+                let mut flights = in_flight.write().await;
+                if flights.contains(&repo_root) {
+                    return;
+                }
+                flights.insert(repo_root.clone());
+            }
+
+            let status = fetch_git_status(&repo_root).await;
+
+            {
+                let mut c = cache.write().await;
+                c.insert(repo_root.clone(), CachedStatus {
+                    status,
+                    fetched_at: Instant::now(),
+                });
+            }
+
+            {
+                let mut flights = in_flight.write().await;
+                flights.remove(&repo_root);
+            }
+        });
     }
 
     pub async fn invalidate(&self, repo_root: &Path) {
@@ -123,10 +154,11 @@ fn find_repo_root(mut dir: &Path) -> Option<PathBuf> {
 async fn fetch_git_status(repo_root: &Path) -> GitStatus {
     let start = Instant::now();
 
-    let output = match Command::new("git")
+    let output = match tokio::process::Command::new("git")
         .args(["--no-optional-locks", "status", "--porcelain=v2", "--branch"])
         .current_dir(repo_root)
         .output()
+        .await
     {
         Ok(o) => o,
         Err(e) => {
@@ -152,18 +184,17 @@ async fn fetch_git_status(repo_root: &Path) -> GitStatus {
     status.is_repo = true;
     status.repo_root = repo_root.to_path_buf();
 
-    // Check for stashes
-    if let Ok(stash_out) = Command::new("git")
+    if let Ok(stash_out) = tokio::process::Command::new("git")
         .args(["stash", "list"])
         .current_dir(repo_root)
         .output()
+        .await
     {
         status.stashes = String::from_utf8_lossy(&stash_out.stdout)
             .lines()
             .count() as u32;
     }
 
-    // Detect ongoing operations
     status.action = detect_git_action(repo_root);
 
     debug!(

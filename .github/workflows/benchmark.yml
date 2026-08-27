@@ -1,0 +1,55 @@
+name: Benchmark Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Start daemon
+        run: |
+          export O10K_PARENT_PID=$$
+          ./target/release/omarchy10kd &
+          sleep 1
+
+      - name: Run benchmark
+        run: |
+          export O10K_PARENT_PID=$$
+          ./target/release/omarchy10k benchmark --iterations 200
+
+      - name: Run shell benchmark
+        run: |
+          export O10K_PARENT_PID=$$
+          ./target/release/omarchy10k benchmark-shell --iterations 200
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-*.json
+          if-no-files-found: ignore

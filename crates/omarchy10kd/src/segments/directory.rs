@@ -7,20 +7,36 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let path = ctx.cwd;
     let home = ctx.home;
 
-    let display_path = if path.starts_with(home) {
+    let display_path = if !home.is_empty() && path.starts_with(home) {
         format!("~{}", &path[home.len()..])
     } else {
         path.to_string()
     };
 
-    let compact = smart_truncate(&display_path, ctx.config.directory.max_length);
+    let strategy = ctx.config.directory.strategy.as_str();
+    let max_len = ctx.config.directory.max_length;
 
-    let preferred_width = UnicodeWidthStr::width(display_path.as_str()) as u16;
+    let (content, compact) = match strategy {
+        "full" => (display_path.clone(), display_path.clone()),
+        "truncate" => {
+            let truncated = truncate_path(&display_path, max_len);
+            (truncated.clone(), truncated)
+        }
+        _ => {
+            let compact = smart_truncate(&display_path, max_len, ctx.config.directory.repo_root_style.as_str());
+            (display_path.clone(), compact)
+        }
+    };
+
+    let bold = strategy != "truncate"
+        || ctx.config.directory.repo_root_style == "bold";
+
+    let preferred_width = UnicodeWidthStr::width(content.as_str()) as u16;
     let compact_width = UnicodeWidthStr::width(compact.as_str()) as u16;
 
     Some(Segment {
         name: "directory",
-        content: display_path,
+        content,
         compact_content: Some(compact),
         priority: 10,
         min_width: compact_width.min(10),
@@ -28,12 +44,25 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         hide_below_cols: 0,
         fg: ctx.palette.accent.fg_escape(),
         bg: None,
-        bold: true,
+        bold,
         separator: None,
     })
 }
 
-fn smart_truncate(path: &str, max_len: usize) -> String {
+fn truncate_path(path: &str, max_len: usize) -> String {
+    if path.len() <= max_len {
+        return path.to_string();
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() <= 2 {
+        return path.to_string();
+    }
+    let first = parts[0];
+    let last = parts[parts.len() - 1];
+    format!("{first}/\u{2026}/{last}")
+}
+
+fn smart_truncate(path: &str, max_len: usize, _repo_root_style: &str) -> String {
     if path.len() <= max_len {
         return path.to_string();
     }
@@ -115,6 +144,6 @@ mod tests {
 
     #[test]
     fn test_short_path_no_truncation() {
-        assert_eq!(smart_truncate("~/Code", 40), "~/Code");
+        assert_eq!(smart_truncate("~/Code", 40, "bold"), "~/Code");
     }
 }

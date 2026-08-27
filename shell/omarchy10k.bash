@@ -17,6 +17,38 @@ __O10K_DAEMON_BIN="${O10K_DAEMON_BIN:-omarchy10kd}"
 __O10K_SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}"
 __O10K_SOCKET="${__O10K_SOCKET_DIR}/omarchy10k-$$.sock"
 
+# ── Shell Integration Guard ───────────────────────────────────────────────
+# O10K_SHELL_INTEGRATION=auto|force|off
+# auto: emit OSC 133 unless terminal already provides integration
+# force: always emit
+# off: never emit
+
+__O10K_SHELL_INTEGRATION="${O10K_SHELL_INTEGRATION:-auto}"
+__O10K_HAS_TERMINAL_INTEGRATION=0
+
+__o10k_detect_terminal_integration() {
+    if [[ "$__O10K_SHELL_INTEGRATION" == "off" ]]; then
+        __O10K_EMIT_OSC133=0
+        return
+    fi
+    if [[ "$__O10K_SHELL_INTEGRATION" == "force" ]]; then
+        __O10K_EMIT_OSC133=1
+        return
+    fi
+    # Detect known terminal shell integrations
+    if declare -F __ghostty_precmd &>/dev/null \
+        || declare -F __vte_prompt_command &>/dev/null \
+        || declare -F __wezterm_set_user_var &>/dev/null \
+        || [[ -n "${KITTY_SHELL_INTEGRATION:-}" ]]; then
+        __O10K_HAS_TERMINAL_INTEGRATION=1
+        __O10K_EMIT_OSC133=0
+    else
+        __O10K_EMIT_OSC133=1
+    fi
+}
+
+__o10k_detect_terminal_integration
+
 # ── Hook Broker ────────────────────────────────────────────────────────────
 # Public API for tools (Mise, Atuin, Zoxide, etc.) to register callbacks
 # Usage: o10k_hook_add <event> <function_name>
@@ -61,7 +93,6 @@ __o10k_dispatch() {
 
 __o10k_start_daemon() {
     if [[ -S "$__O10K_SOCKET" ]]; then
-        # Socket exists — check if daemon is alive
         if __o10k_socket_send '{"command":"status"}' >/dev/null 2>&1; then
             return 0
         fi
@@ -71,7 +102,6 @@ __o10k_start_daemon() {
     O10K_PARENT_PID=$$ "$__O10K_DAEMON_BIN" &>/dev/null &
     disown
 
-    # Wait for socket (up to 2s)
     local i=0
     while [[ ! -S "$__O10K_SOCKET" ]] && (( i < 20 )); do
         sleep 0.1
@@ -86,7 +116,39 @@ __o10k_stop_daemon() {
     fi
 }
 
-# Portable Unix socket send — prefers socat, falls back to bash /dev/tcp workaround or python
+# ── Bridge Coprocess ──────────────────────────────────────────────────────
+# Persistent Rust process that holds a daemon connection and avoids
+# fork/exec on every prompt render. Falls back to socket_send if unavailable.
+
+__O10K_BRIDGE_PID=0
+
+__o10k_start_bridge() {
+    if (( __O10K_BRIDGE_PID > 0 )) && kill -0 "$__O10K_BRIDGE_PID" 2>/dev/null; then
+        return 0
+    fi
+
+    coproc __O10K_BRIDGE { "$__O10K_BIN" bridge --socket "$__O10K_SOCKET" 2>/dev/null; }
+    __O10K_BRIDGE_PID=$!
+}
+
+__o10k_bridge_request() {
+    local request="$1"
+    if (( __O10K_BRIDGE_PID > 0 )) && kill -0 "$__O10K_BRIDGE_PID" 2>/dev/null; then
+        echo "$request" >&"${__O10K_BRIDGE[1]}" 2>/dev/null || {
+            __o10k_start_bridge
+            echo "$request" >&"${__O10K_BRIDGE[1]}" 2>/dev/null || return 1
+        }
+        local left
+        IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" left 2>/dev/null
+        if [[ -n "$left" ]]; then
+            PS1="$left"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Portable Unix socket send — legacy fallback when bridge is unavailable
 __o10k_socket_send() {
     local msg="$1"
     if command -v socat &>/dev/null; then
@@ -127,13 +189,11 @@ __o10k_timer_stop() {
         return
     fi
     local now="${EPOCHREALTIME:-$(date +%s%N)}"
-    # EPOCHREALTIME is float seconds; convert to ms
     if [[ "$now" == *.* ]]; then
         local start_s="${__O10K_CMD_START%%.*}"
         local start_us="${__O10K_CMD_START##*.}"
         local now_s="${now%%.*}"
         local now_us="${now##*.}"
-        # Pad to 6 digits
         start_us="${start_us}000000"; start_us="${start_us:0:6}"
         now_us="${now_us}000000"; now_us="${now_us:0:6}"
         __O10K_CMD_DURATION=$(( (now_s - start_s) * 1000 + (10#$now_us - 10#$start_us) / 1000 ))
@@ -160,22 +220,32 @@ __O10K_FALLBACK_PS1='\[\e[1;34m\]\w\[\e[0m\] \[\e[1;32m\]❯\[\e[0m\] '
 
 __o10k_render_prompt() {
     local exit_code=$?
-    __o10k_timer_stop
 
-    # Dispatch precmd hooks (mise, atuin, zoxide, etc.)
+    # OSC 133;D — mark end of previous command output
+    (( __O10K_EMIT_OSC133 )) && printf '\e]133;D;%d\a' "$exit_code"
+
+    __o10k_timer_stop
     __o10k_check_chpwd
     __o10k_dispatch precmd
 
-    # Request prompt from daemon
     if [[ -S "$__O10K_SOCKET" ]]; then
         local cols="${COLUMNS:-80}"
         local jobs_count
         jobs_count=$(jobs -p 2>/dev/null | wc -l)
 
-        local request
-        request=$(printf '{"cwd":"%s","exit_code":%d,"cmd_duration_ms":%d,"cols":%d,"jobs":%d}' \
-            "$PWD" "$exit_code" "$__O10K_CMD_DURATION" "$cols" "$jobs_count")
+        local si_flag="true"
+        (( __O10K_EMIT_OSC133 )) || si_flag="false"
 
+        local request
+        request=$(printf '{"cwd":"%s","exit_code":%d,"cmd_duration_ms":%d,"cols":%d,"jobs":%d,"shell_integration":%s}' \
+            "$PWD" "$exit_code" "$__O10K_CMD_DURATION" "$cols" "$jobs_count" "$si_flag")
+
+        # Try bridge first (no fork/exec in hot path)
+        if __o10k_bridge_request "$request"; then
+            return
+        fi
+
+        # Fallback: socket send + parse-prompt
         local response
         response=$(__o10k_socket_send "$request" 2>/dev/null)
 
@@ -189,7 +259,6 @@ __o10k_render_prompt() {
         fi
     fi
 
-    # Fallback prompt if daemon is unreachable
     PS1="$__O10K_FALLBACK_PS1"
 }
 
@@ -198,49 +267,65 @@ __o10k_render_prompt() {
 __O10K_PREEXEC_READY=0
 
 __o10k_preexec() {
-    # Only fire once per command (avoid DEBUG trap re-fires)
     [[ "$__O10K_PREEXEC_READY" == "1" ]] || return
     __O10K_PREEXEC_READY=0
+
+    # OSC 133;C — mark start of command output
+    (( __O10K_EMIT_OSC133 )) && printf '\e]133;C\a'
+
     __o10k_timer_start
     __o10k_dispatch preexec "$BASH_COMMAND"
 }
 
 # ── Installation ───────────────────────────────────────────────────────────
-# Detects ble.sh and installs hooks via the best available mechanism
 
 __o10k_install_hooks() {
     if [[ -n "${BLE_VERSION:-}" ]] && (( ${BLE_VERSION%%.*} >= 4 )); then
-        # ble.sh enhanced mode
         __o10k_install_blesh_hooks
     else
-        # Vanilla Bash mode
         __o10k_install_vanilla_hooks
     fi
 }
 
 __o10k_install_blesh_hooks() {
-    # Register via ble.sh hook system (no PROMPT_COMMAND clobbering)
     blehook PRECMD+='__o10k_render_prompt'
     blehook PREEXEC+='__o10k_preexec_blesh'
     blehook CHPWD+='__o10k_dispatch chpwd'
 
-    # Transient prompt support
     bleopt prompt_ps1_transient='always'
-    # The transient content is set dynamically by the renderer
 
-    # Mark preexec ready after each prompt (ble.sh manages this lifecycle)
+    # Right prompt support via ble.sh
+    blehook PRECMD+='__o10k_update_rps1'
+
     blehook PRECMD+='__O10K_PREEXEC_READY=1'
 }
 
 __o10k_preexec_blesh() {
+    # OSC 133;C
+    (( __O10K_EMIT_OSC133 )) && printf '\e]133;C\a'
     __o10k_timer_start
     __o10k_dispatch preexec "$1"
 }
 
+__o10k_update_rps1() {
+    if [[ -S "$__O10K_SOCKET" ]]; then
+        local response
+        response=$(__o10k_socket_send '{"command":"status"}' 2>/dev/null)
+        # Right prompt is rendered by the daemon; extract from response
+        if [[ -n "$response" ]]; then
+            local right
+            right=$(echo "$response" | python3 -c "import sys,json; r=json.load(sys.stdin).get('right',''); print(r if r else '')" 2>/dev/null)
+            if [[ -n "$right" ]]; then
+                bleopt prompt_rps1="$right"
+                return
+            fi
+        fi
+    fi
+    bleopt prompt_rps1=""
+}
+
 __o10k_install_vanilla_hooks() {
-    # Install PROMPT_COMMAND (array-aware for Bash 5.1+)
     if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
-        # PROMPT_COMMAND is already an array
         PROMPT_COMMAND=('__o10k_render_prompt' "${PROMPT_COMMAND[@]}")
     elif [[ -n "${PROMPT_COMMAND:-}" ]]; then
         PROMPT_COMMAND="__o10k_render_prompt;${PROMPT_COMMAND}"
@@ -248,12 +333,9 @@ __o10k_install_vanilla_hooks() {
         PROMPT_COMMAND='__o10k_render_prompt'
     fi
 
-    # Install preexec via PS0 (Bash 4.4+) or DEBUG trap
     if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
-        # PS0 method — fires once per command line, not per simple command
         PS0='$(__o10k_preexec 2>/dev/null)'
     else
-        # DEBUG trap fallback — save and chain existing trap
         local existing_trap
         existing_trap=$(trap -p DEBUG | sed "s/trap -- '\\(.*\\)' DEBUG/\\1/")
         if [[ -n "$existing_trap" ]]; then
@@ -263,7 +345,6 @@ __o10k_install_vanilla_hooks() {
         fi
     fi
 
-    # Mark preexec ready after each prompt render
     if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
         PROMPT_COMMAND+=('__O10K_PREEXEC_READY=1')
     else
@@ -275,6 +356,10 @@ __o10k_install_vanilla_hooks() {
 
 __o10k_cleanup() {
     __o10k_dispatch shell_exit
+    # Kill bridge coprocess
+    if (( __O10K_BRIDGE_PID > 0 )); then
+        kill "$__O10K_BRIDGE_PID" 2>/dev/null
+    fi
     __o10k_stop_daemon
 }
 
@@ -283,4 +368,5 @@ trap __o10k_cleanup EXIT
 # ── Init ───────────────────────────────────────────────────────────────────
 
 __o10k_start_daemon
+__o10k_start_bridge
 __o10k_install_hooks

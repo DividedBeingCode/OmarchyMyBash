@@ -131,3 +131,23 @@ pub struct ResolvedSegment {
     pub bold: bool,
     pub is_compact: bool,
 }
+
+pub struct LayoutPreset;
+
+impl LayoutPreset {
+    pub fn segment_order(preset: &str) -> &'static [&'static str] {
+        match preset {
+            "minimal" => &["directory", "character"],
+            "powerline" => &["os", "ssh", "directory", "git", "exit_status", "command_duration", "jobs"],
+            "classic" => &["ssh", "directory", "git", "exit_status", "character"],
+            "pure" => &["directory", "git"],
+            "dense" => &["os", "ssh", "directory", "git", "exit_status", "command_duration", "jobs"],
+            _ => &["os", "directory", "git", "exit_status", "command_duration", "jobs", "ssh"],
+        }
+    }
+
+    pub fn apply_filter(segments: &mut Vec<Segment>, preset: &str) {
+        let allowed = Self::segment_order(preset);
+        segments.retain(|s| allowed.contains(&s.name));
+    }
+}

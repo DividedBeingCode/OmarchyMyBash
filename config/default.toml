@@ -27,6 +27,7 @@ enabled = true
 mode = "adaptive"           # hidden | compact | expanded | adaptive
 stale_display = true        # show stale (grey) state while refreshing
 max_threads = 4
+cache_ttl_ms = 5000         # git status cache lifetime in milliseconds
 
 [segments.os]
 enabled = true

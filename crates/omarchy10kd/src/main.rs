@@ -47,25 +47,8 @@ async fn main() -> anyhow::Result<()> {
         std::process::id()
     );
 
-    // Load theme palette
-    let palette = match config.theme.source.as_str() {
-        "omarchy" => ThemePalette::load_omarchy(),
-        "custom" => {
-            let mut p = ThemePalette::default();
-            if let Some(ref custom) = config.theme.custom {
-                p.apply_custom_overrides(custom);
-            }
-            p
-        }
-        "hybrid" => {
-            let mut p = ThemePalette::load_omarchy();
-            if let Some(ref custom) = config.theme.custom {
-                p.apply_custom_overrides(custom);
-            }
-            p
-        }
-        _ => ThemePalette::default(),
-    };
+    // Load theme palette (unified resolution for startup and reload)
+    let palette = ThemePalette::resolve_palette(&config);
 
     let state = Arc::new(DaemonState::new(config, palette, config_path.clone()));
 

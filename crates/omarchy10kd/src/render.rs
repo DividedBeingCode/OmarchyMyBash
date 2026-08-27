@@ -35,6 +35,7 @@ impl<'a> PromptRenderer<'a> {
         cols: u16,
         jobs: u32,
         git_status: &GitStatus,
+        shell_integration: bool,
     ) -> PromptResponse {
         let home = std::env::var("HOME").unwrap_or_default();
         let in_ssh = std::env::var("SSH_TTY").is_ok() || std::env::var("SSH_CONNECTION").is_ok();
@@ -59,19 +60,27 @@ impl<'a> PromptRenderer<'a> {
         let line1 = self.format_line1(&resolved);
         let line2 = self.format_line2(&ctx);
 
-        let left = if self.config.prompt.newline {
-            format!(
-                "{OSC_133_PROMPT_START}{line1}\n{line2} {OSC_133_PROMPT_END}"
-            )
+        let (prompt_start, prompt_end) = if shell_integration {
+            (OSC_133_PROMPT_START, OSC_133_PROMPT_END)
         } else {
-            format!(
-                "{OSC_133_PROMPT_START}{line1} {line2} {OSC_133_PROMPT_END}"
-            )
+            ("", "")
+        };
+
+        let left = if self.config.prompt.newline {
+            format!("{prompt_start}{line1}\n{line2} {prompt_end}")
+        } else {
+            format!("{prompt_start}{line1} {line2} {prompt_end}")
+        };
+
+        let right = if self.config.prompt.right_prompt {
+            self.render_right(&ctx)
+        } else {
+            None
         };
 
         let transient = if self.config.prompt.transient {
             Some(format!(
-                "{OSC_133_PROMPT_START}{} {OSC_133_PROMPT_END}",
+                "{prompt_start}{} {prompt_end}",
                 character::render_transient_char(&ctx)
             ))
         } else {
@@ -80,9 +89,47 @@ impl<'a> PromptRenderer<'a> {
 
         PromptResponse {
             left,
-            right: None,
+            right,
             transient,
             git_stale: git_status.stale,
+        }
+    }
+
+    fn render_right(&self, ctx: &SegmentContext<'_>) -> Option<String> {
+        let mut parts = Vec::new();
+
+        if ctx.config.segments.command_duration.enabled && ctx.cmd_duration_ms >= ctx.config.segments.command_duration.show_above_ms {
+            let secs = ctx.cmd_duration_ms / 1000;
+            let ms = ctx.cmd_duration_ms % 1000;
+            let time_str = if secs >= 60 {
+                format!("{}m{}s", secs / 60, secs % 60)
+            } else if secs > 0 {
+                format!("{secs}.{:01}s", ms / 100)
+            } else {
+                format!("{ms}ms")
+            };
+            parts.push(format!(
+                "{}{}{}",
+                ctx.palette.muted.fg_escape(),
+                time_str,
+                RESET
+            ));
+        }
+
+        if ctx.git_status.is_repo && !ctx.git_status.branch.is_empty() {
+            parts.push(format!(
+                "{}{} {}{}",
+                if ctx.git_status.stale { ctx.palette.muted.fg_escape() } else { ctx.palette.accent.fg_escape() },
+                "\u{e0a0}",
+                ctx.git_status.branch,
+                RESET
+            ));
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" "))
         }
     }
 

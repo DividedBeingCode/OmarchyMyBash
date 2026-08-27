@@ -131,6 +131,27 @@ impl ThemePalette {
         })
     }
 
+    pub fn resolve_palette(config: &crate::config::Config) -> Self {
+        match config.theme.source.as_str() {
+            "omarchy" => Self::load_omarchy(),
+            "custom" => {
+                let mut p = Self::default();
+                if let Some(ref custom) = config.theme.custom {
+                    p.apply_custom_overrides(custom);
+                }
+                p
+            }
+            "hybrid" => {
+                let mut p = Self::load_omarchy();
+                if let Some(ref custom) = config.theme.custom {
+                    p.apply_custom_overrides(custom);
+                }
+                p
+            }
+            _ => Self::default(),
+        }
+    }
+
     pub fn apply_custom_overrides(&mut self, custom: &crate::config::CustomPalette) {
         if let Some(ref h) = custom.accent {
             if let Some(c) = AnsiColor::from_hex(h) { self.accent = c; }
@@ -156,5 +177,81 @@ impl ThemePalette {
         if let Some(ref h) = custom.blue {
             if let Some(c) = AnsiColor::from_hex(h) { self.blue = c; }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, ThemeConfig, CustomPalette};
+
+    #[test]
+    fn test_resolve_omarchy_is_default() {
+        let config = Config {
+            theme: ThemeConfig { source: "omarchy".into(), custom: None },
+            ..Config::default()
+        };
+        let palette = ThemePalette::resolve_palette(&config);
+        assert!(palette.is_dark);
+        assert_eq!(palette.accent.r, 122);
+    }
+
+    #[test]
+    fn test_resolve_custom_applies_overrides() {
+        let config = Config {
+            theme: ThemeConfig {
+                source: "custom".into(),
+                custom: Some(CustomPalette {
+                    accent: Some("#ff0000".into()),
+                    foreground: None, muted: None, background: None,
+                    red: None, green: None, yellow: None, blue: None,
+                }),
+            },
+            ..Config::default()
+        };
+        let palette = ThemePalette::resolve_palette(&config);
+        assert_eq!(palette.accent.r, 255);
+        assert_eq!(palette.accent.g, 0);
+        assert_eq!(palette.accent.b, 0);
+    }
+
+    #[test]
+    fn test_resolve_hybrid_merges() {
+        let config = Config {
+            theme: ThemeConfig {
+                source: "hybrid".into(),
+                custom: Some(CustomPalette {
+                    accent: Some("#00ff00".into()),
+                    foreground: None, muted: None, background: None,
+                    red: None, green: None, yellow: None, blue: None,
+                }),
+            },
+            ..Config::default()
+        };
+        let palette = ThemePalette::resolve_palette(&config);
+        assert_eq!(palette.accent.g, 255);
+        assert!(palette.is_dark);
+    }
+
+    #[test]
+    fn test_resolve_terminal_returns_default() {
+        let config = Config {
+            theme: ThemeConfig { source: "terminal".into(), custom: None },
+            ..Config::default()
+        };
+        let palette = ThemePalette::resolve_palette(&config);
+        let default_palette = ThemePalette::default();
+        assert_eq!(palette.accent.r, default_palette.accent.r);
+    }
+
+    #[test]
+    fn test_hex_parsing() {
+        let c = AnsiColor::from_hex("#7aa2f7").unwrap();
+        assert_eq!(c.r, 122);
+        assert_eq!(c.g, 162);
+        assert_eq!(c.b, 247);
+
+        assert!(AnsiColor::from_hex("invalid").is_none());
+        assert!(AnsiColor::from_hex("#fff").is_none());
     }
 }

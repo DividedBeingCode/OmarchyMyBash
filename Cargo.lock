@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "omarchy10k"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -401,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "omarchy10kd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "directories",

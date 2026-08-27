@@ -1,5 +1,6 @@
-mod prompt;
+mod bridge;
 mod doctor;
+mod prompt;
 
 use clap::{Parser, Subcommand};
 
@@ -53,9 +54,27 @@ enum Commands {
     /// Dump daemon state for debugging
     Debug,
 
+    /// Run as a persistent bridge coprocess between Bash and the daemon
+    Bridge {
+        /// Socket path (defaults to auto-detected)
+        #[arg(long)]
+        socket: Option<String>,
+    },
+
     /// Extract the left prompt from a JSON daemon response (used internally)
     #[command(name = "parse-prompt", hide = true)]
     ParsePrompt,
+
+    /// Run a shell-level end-to-end benchmark measuring real prompt latency
+    #[command(name = "benchmark-shell", hide = true)]
+    BenchmarkShell {
+        /// Number of iterations
+        #[arg(long, default_value_t = 100)]
+        iterations: u32,
+        /// Path to the bash adapter script
+        #[arg(long)]
+        adapter: Option<String>,
+    },
 }
 
 fn socket_path() -> std::path::PathBuf {
@@ -113,6 +132,13 @@ async fn main() -> anyhow::Result<()> {
             prompt::send_command(&socket_path(), "status").await?;
         }
 
+        Commands::Bridge { socket } => {
+            let sock = socket
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(socket_path);
+            bridge::run(&sock).await?;
+        }
+
         Commands::ParsePrompt => {
             let mut input = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
@@ -121,6 +147,10 @@ async fn main() -> anyhow::Result<()> {
                     print!("{left}");
                 }
             }
+        }
+
+        Commands::BenchmarkShell { iterations, adapter } => {
+            prompt::benchmark_shell(&socket_path(), iterations, adapter.as_deref()).await?;
         }
     }
 

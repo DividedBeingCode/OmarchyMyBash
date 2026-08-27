@@ -3,6 +3,9 @@ pub mod git;
 pub mod exit_status;
 pub mod command_duration;
 pub mod character;
+pub mod os;
+pub mod ssh;
+pub mod jobs;
 
 use crate::config::Config;
 use crate::git::GitStatus;
@@ -25,6 +28,14 @@ pub struct SegmentContext<'a> {
 pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {
     let mut segments = Vec::new();
 
+    if let Some(seg) = os::render(ctx) {
+        segments.push(seg);
+    }
+
+    if let Some(seg) = ssh::render(ctx) {
+        segments.push(seg);
+    }
+
     if let Some(seg) = directory::render(ctx) {
         segments.push(seg);
     }
@@ -45,6 +56,10 @@ pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {
         if let Some(seg) = command_duration::render(ctx) {
             segments.push(seg);
         }
+    }
+
+    if let Some(seg) = jobs::render(ctx) {
+        segments.push(seg);
     }
 
     segments

@@ -15,8 +15,28 @@ function runtimeDir() {
     return Qt.getenv("XDG_RUNTIME_DIR") || "/tmp";
 }
 
-function buildCommand(name) {
-    return JSON.stringify({ command: name }) + "\n";
+function buildCommand(name, id) {
+    var msg = { type: "control", command: name };
+    if (id) msg.id = id;
+    return JSON.stringify(msg) + "\n";
+}
+
+function buildConfigGet(id) {
+    var msg = { type: "config" };
+    if (id) msg.id = id;
+    return JSON.stringify(msg) + "\n";
+}
+
+function buildConfigSet(patch, id) {
+    var msg = { type: "config", command: "set", config: patch };
+    if (id) msg.id = id;
+    return JSON.stringify(msg) + "\n";
+}
+
+function buildHello(id) {
+    var msg = { type: "hello", version: "0.2" };
+    if (id) msg.id = id;
+    return JSON.stringify(msg) + "\n";
 }
 
 // ── TOML Parser ─────────────────────────────────────────────────────────────
@@ -99,7 +119,8 @@ function formatValue(v) {
 }
 
 // ── Config ↔ QML Property Mapping ──────────────────────────────────────────
-// Maps between flat TOML keys and the QML property names on Panel.qml.
+// Maps between flat dotted keys and the QML property names on Panel.qml.
+// These same keys are used in daemon config_get/config_set JSON patches.
 
 var CONFIG_MAP = {
     "prompt.layout":                      "cfgLayout",
@@ -134,6 +155,46 @@ function collectConfig(source) {
         flat[tomlKey] = source[prop];
     }
     return flat;
+}
+
+// ── JSON Config Flattening ─────────────────────────────────────────────────
+// Converts nested JSON config from daemon into flat dot-keyed object.
+
+function flattenConfig(obj, prefix) {
+    var result = {};
+    prefix = prefix || "";
+    var keys = Object.keys(obj);
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var full = prefix ? prefix + "." + k : k;
+        var v = obj[k];
+        if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+            var sub = flattenConfig(v, full);
+            var subKeys = Object.keys(sub);
+            for (var j = 0; j < subKeys.length; j++) {
+                result[subKeys[j]] = sub[subKeys[j]];
+            }
+        } else {
+            result[full] = v;
+        }
+    }
+    return result;
+}
+
+// Converts flat dot-keyed patch into nested JSON for config_set.
+function unflattenPatch(flat) {
+    var result = {};
+    var keys = Object.keys(flat);
+    for (var i = 0; i < keys.length; i++) {
+        var parts = keys[i].split(".");
+        var obj = result;
+        for (var p = 0; p < parts.length - 1; p++) {
+            if (!obj[parts[p]]) obj[parts[p]] = {};
+            obj = obj[parts[p]];
+        }
+        obj[parts[parts.length - 1]] = flat[keys[i]];
+    }
+    return result;
 }
 
 // ── Daemon Response Parsing ────────────────────────────────────────────────

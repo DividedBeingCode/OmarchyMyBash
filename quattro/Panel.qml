@@ -30,7 +30,12 @@ Panel {
     property string daemonStatus: "unknown"
     property string daemonPid: ""
     property string daemonVersion: ""
+    property string daemonProtocolVersion: ""
     property string discoveredSocketPath: ""
+
+    // ── Multi-Session State ─────────────────────────────────────────────────
+    property var sessionList: []
+    property int activeSessionIndex: 0
 
     // ── Reactive Tool State ────────────────────────────────────────────────
     property string bleshStatus: "checking..."
@@ -48,8 +53,7 @@ Panel {
     // ── Panel Lifecycle ────────────────────────────────────────────────────
     function open() {
         root.controller.show()
-        loadConfig()
-        discoverSocket()
+        discoverAllSockets()
         detectTools()
     }
 
@@ -64,9 +68,14 @@ Panel {
         return false
     }
 
-    // ── Config Read ────────────────────────────────────────────────────────
+    // ── Config Read (via daemon IPC) ──────────────────────────────────────
     function loadConfig() {
-        configReader.exec(["cat", _configPath])
+        if (!daemonSocket.connected) {
+            configReader.exec(["cat", _configPath])
+            return
+        }
+        daemonSocket.write(Model.buildConfigGet("cfg-load"))
+        daemonSocket.flush()
     }
 
     function _applyParsedConfig(text) {
@@ -74,7 +83,12 @@ Panel {
         Model.applyConfig(root._configFlat, root)
     }
 
-    // ── Config Write ───────────────────────────────────────────────────────
+    function _applyDaemonConfig(configObj) {
+        root._configFlat = Model.flattenConfig(configObj)
+        Model.applyConfig(root._configFlat, root)
+    }
+
+    // ── Config Write (via daemon IPC) ──────────────────────────────────────
     function setConfigValue(tomlKey, value) {
         var prop = Model.CONFIG_MAP[tomlKey]
         if (prop) root[prop] = value
@@ -92,20 +106,37 @@ Panel {
 
     function _flushSave() {
         root._configDirty = false
-        var toml = Model.buildTOML(root._configFlat)
-        configWriter.exec({
-            command: ["sh", "-c",
-                "mkdir -p '" + Model.configDir() + "' && cat > '" + _configPath + "'"]
-        })
-        configWriter.write(toml)
-        configWriter.write("")
-        configWriter.running = false
+
+        if (daemonSocket.connected) {
+            var patch = Model.unflattenPatch(Model.collectConfig(root))
+            daemonSocket.write(Model.buildConfigSet(patch, "cfg-save"))
+            daemonSocket.flush()
+        } else {
+            var toml = Model.buildTOML(root._configFlat)
+            configWriter.exec({
+                command: ["sh", "-c",
+                    "mkdir -p '" + Model.configDir() + "' && cat > '" + _configPath + "'"]
+            })
+            configWriter.write(toml)
+            configWriter.write("")
+            configWriter.running = false
+        }
     }
 
     // ── Daemon IPC ─────────────────────────────────────────────────────────
-    function discoverSocket() {
+    function discoverAllSockets() {
         socketFinder.exec(["sh", "-c",
-            "ls " + Model.runtimeDir() + "/omarchy10k-*.sock 2>/dev/null | head -1"])
+            "ls " + Model.runtimeDir() + "/omarchy10k-*.sock 2>/dev/null"])
+    }
+
+    function connectToSession(idx) {
+        if (idx < 0 || idx >= root.sessionList.length) return
+        root.activeSessionIndex = idx
+        var session = root.sessionList[idx]
+        daemonSocket.connected = false
+        root.discoveredSocketPath = session.path
+        daemonSocket.path = session.path
+        daemonSocket.connected = true
     }
 
     function sendDaemonCommand(name) {
@@ -116,10 +147,29 @@ Panel {
 
     function _handleDaemonMessage(raw) {
         var resp = Model.parseDaemonResponse(raw)
+
+        if (resp.type === "hello") {
+            root.daemonProtocolVersion = resp.protocol_version || ""
+            root.daemonVersion = resp.server_version || ""
+            sendDaemonCommand("status")
+            return
+        }
+
+        if (resp.type === "config" && resp.config) {
+            root._applyDaemonConfig(resp.config)
+            return
+        }
+
         if (resp.status === "ok" && resp.pid !== undefined) {
             root.daemonStatus = "running"
             root.daemonPid = String(resp.pid)
-            root.daemonVersion = resp.version || ""
+            root.daemonVersion = resp.version || root.daemonVersion
+            root.daemonProtocolVersion = resp.protocol_version || root.daemonProtocolVersion
+            if (root.sessionList.length > 0 && root.activeSessionIndex < root.sessionList.length) {
+                root.sessionList[root.activeSessionIndex].pid = String(resp.pid)
+                root.sessionList[root.activeSessionIndex].cwd = resp.cwd || ""
+            }
+            loadConfig()
         } else if (resp.status === "ok") {
             root.daemonStatus = "running"
         } else if (resp.status === "bye") {
@@ -130,7 +180,8 @@ Panel {
     }
 
     function _onSocketConnected() {
-        sendDaemonCommand("status")
+        daemonSocket.write(Model.buildHello("handshake"))
+        daemonSocket.flush()
     }
 
     function _onSocketDisconnected() {
@@ -185,13 +236,28 @@ Panel {
         id: socketFinder
         stdout: StdioCollector {
             onStreamFinished: {
-                var path = this.text.trim()
-                if (path.length > 0) {
-                    root.discoveredSocketPath = path
-                    daemonSocket.path = path
-                    daemonSocket.connected = true
-                } else {
+                var text = this.text.trim()
+                if (text.length === 0) {
                     root.daemonStatus = "not running"
+                    root.sessionList = []
+                    return
+                }
+                var paths = text.split("\n")
+                var sessions = []
+                for (var i = 0; i < paths.length; i++) {
+                    var p = paths[i].trim()
+                    if (p.length === 0) continue
+                    var pidMatch = p.match(/omarchy10k-(\d+)\.sock$/)
+                    sessions.push({
+                        path: p,
+                        shellPid: pidMatch ? pidMatch[1] : "?",
+                        pid: "",
+                        cwd: ""
+                    })
+                }
+                root.sessionList = sessions
+                if (sessions.length > 0) {
+                    root.connectToSession(0)
                 }
             }
         }
@@ -238,7 +304,7 @@ Panel {
         interval: 5000
         repeat: true
         running: root.opened && root.daemonStatus !== "running"
-        onTriggered: root.discoverSocket()
+        onTriggered: root.discoverAllSockets()
     }
 
     // ── Panel UI ───────────────────────────────────────────────────────────
@@ -509,10 +575,59 @@ Panel {
                         font.pixelSize: Style.font.caption
                     }
                     Text {
-                        text: "Version: " + (root.daemonVersion || "\u2014")
+                        text: "Version: " + (root.daemonVersion || "\u2014") + " (protocol " + (root.daemonProtocolVersion || "\u2014") + ")"
                         color: Color.muted || "#414868"
                         font.family: root.bar ? root.bar.fontFamily : Style.font.family
                         font.pixelSize: Style.font.caption
+                    }
+                    Text {
+                        text: "Sessions: " + root.sessionList.length
+                        color: Color.muted || "#414868"
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                    }
+                }
+            }
+
+            Repeater {
+                model: root.sessionList
+                delegate: Rectangle {
+                    width: parent.width
+                    height: sessionRow.implicitHeight + Style.space(8)
+                    radius: Style.space(3)
+                    color: index === root.activeSessionIndex
+                        ? (Color.accent || "#7aa2f7")
+                        : (Color.lighter_background || "#24283b")
+
+                    Row {
+                        id: sessionRow
+                        anchors.fill: parent
+                        anchors.margins: Style.space(4)
+                        spacing: Style.space(8)
+
+                        Text {
+                            text: "Shell " + modelData.shellPid
+                            color: index === root.activeSessionIndex
+                                ? (Color.background || "#1a1b26")
+                                : (root.barForeground || "#a9b1d6")
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: Style.font.caption
+                            font.bold: index === root.activeSessionIndex
+                        }
+                        Text {
+                            text: modelData.cwd || ""
+                            color: Color.muted || "#414868"
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: Style.font.caption
+                            elide: Text.ElideMiddle
+                            width: parent.width * 0.5
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.connectToSession(index)
                     }
                 }
             }
