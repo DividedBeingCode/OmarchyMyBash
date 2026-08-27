@@ -1,6 +1,6 @@
 # Theme Integration
 
-[← Index](INDEX.md) | [Daemon](daemon.md) | [Configuration](config.md)
+[← Index](INDEX.md) | [Daemon](daemon.md) | [Protocol](protocol.md) | [Configuration](config.md)
 
 Omarchy10k integrates with the Omarchy desktop theme system to keep shell prompt colors in sync with the desktop environment. When the user switches themes, every running shell session updates its palette within seconds.
 
@@ -92,6 +92,17 @@ chmod +x ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 
 ## Daemon Theme Loading
 
+All palette resolution goes through `ThemePalette::resolve_palette(&config)` — the same unified path used at daemon startup and on `reload_theme`. This respects `theme.source` and re-applies `[theme.custom]` overrides for `custom` and `hybrid` modes.
+
+### `ThemePalette::resolve_palette(config)`
+
+| `theme.source` | Behavior |
+|----------------|----------|
+| `omarchy` | `load_omarchy()` — read `colors.toml`, fall back to Tokyo Night defaults |
+| `custom` | Tokyo Night defaults + `apply_custom_overrides()` |
+| `hybrid` | `load_omarchy()` + `apply_custom_overrides()` |
+| `terminal` / other | Tokyo Night defaults only |
+
 ### `ThemePalette::load_omarchy()`
 
 1. Reads `~/.local/state/omarchy/current/theme/colors.toml`
@@ -108,14 +119,59 @@ Applied when `theme.source` is `"custom"` or `"hybrid"`:
 2. Affected: `accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`
 3. Not affected: `dark_foreground`, `bright_foreground`, `is_dark`
 
-### Known Issue
+### Reload behavior
 
-When `reload_theme` is triggered (via hook or protocol command), the daemon always calls `load_omarchy()` regardless of `config.theme.source`. Custom overrides from the config are not re-applied. This means:
-- `source = "omarchy"` → reload works correctly
-- `source = "custom"` → reload overwrites custom with Omarchy palette
-- `source = "hybrid"` → reload loads Omarchy base but loses custom overrides
+When `reload_theme` is triggered (via the theme-set hook, filesystem watcher, or protocol command), the daemon re-reads config and calls `resolve_palette()` — custom overrides are preserved for `custom` and `hybrid` sources.
 
-Fix would require `reload_theme` to re-read config and conditionally apply overrides.
+## Palette API
+
+The daemon exposes a `palette` control command that returns the current in-memory `ThemePalette` as hex strings. This is the server-side equivalent of converting each `AnsiColor` to hex (the palette handler formats RGB components as `#rrggbb` at response time rather than via a dedicated `AnsiColor::to_hex()` method).
+
+### Request
+
+```json
+{"type":"control","command":"palette","id":"palette-req"}
+```
+
+### Response
+
+```json
+{
+  "type": "control",
+  "status": "ok",
+  "id": "palette-req",
+  "palette": {
+    "accent": "#7aa2f7",
+    "foreground": "#c0caf5",
+    "muted": "#565f89",
+    "background": "#1a1b26",
+    "red": "#f7768e",
+    "green": "#9ece6a",
+    "yellow": "#e0af68",
+    "blue": "#7aa2f7"
+  }
+}
+```
+
+Returned keys match the semantic roles used by prompt segments. `dark_foreground`, `bright_foreground`, and `is_dark` are not included — Quattro swatches focus on the eight segment-facing colors.
+
+The palette reflects whatever `resolve_palette()` produced at startup or last reload, including custom overrides in `hybrid`/`custom` mode. No filesystem read occurs on each request.
+
+See [Protocol](protocol.md) for the full control-command specification.
+
+## Quattro Theme Sync
+
+The Quattro Control Center displays theme color swatches using the Palette API instead of reading `colors.toml` directly. This keeps swatches in sync with the daemon's effective palette (including custom overrides).
+
+### Sync triggers
+
+1. **Socket connect** — `_onSocketConnected()` sends `hello`, then calls `requestPalette()` (alongside `requestPreview()`)
+2. **Theme source change** — when the user changes `theme.source` in the Appearance tab, `requestPalette()` runs immediately after the config patch
+3. **External theme switch** — when Omarchy's theme-set hook broadcasts `reload_theme` to all daemons, Quattro picks up new colors on the next palette request (e.g., reconnect or theme source toggle)
+
+### QML integration
+
+`Panel.qml` stores the response in `paletteColors` and renders a row of 20×20 px swatches for `accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, and `blue`. The swatch row is hidden until the first successful palette response.
 
 ## ANSI Color Output
 

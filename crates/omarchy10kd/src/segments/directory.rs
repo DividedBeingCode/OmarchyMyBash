@@ -31,12 +31,21 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let bold = strategy != "truncate"
         || ctx.config.directory.repo_root_style == "bold";
 
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_default();
+    let abs_path = ctx.cwd;
+    let hyperlink_content = format!(
+        "\x1b]8;;file://{hostname}{abs_path}\x1b\\{content}\x1b]8;;\x1b\\"
+    );
+
     let preferred_width = UnicodeWidthStr::width(content.as_str()) as u16;
     let compact_width = UnicodeWidthStr::width(compact.as_str()) as u16;
 
     Some(Segment {
         name: "directory",
-        content,
+        content: hyperlink_content,
         compact_content: Some(compact),
         priority: 10,
         min_width: compact_width.min(10),
@@ -124,6 +133,27 @@ fn unique_prefix(target: &str, before: &[&str], after: &[&str]) -> String {
     }
 
     target.to_string()
+}
+
+mod hostname {
+    use std::ffi::OsString;
+
+    pub fn get() -> std::io::Result<OsString> {
+        let mut buf = vec![0u8; 256];
+        let ret = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+        if ret != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        buf.truncate(len);
+        Ok(OsString::from(String::from_utf8_lossy(&buf).into_owned()))
+    }
+
+    mod libc {
+        unsafe extern "C" {
+            pub fn gethostname(name: *mut std::ffi::c_char, len: usize) -> std::ffi::c_int;
+        }
+    }
 }
 
 #[cfg(test)]

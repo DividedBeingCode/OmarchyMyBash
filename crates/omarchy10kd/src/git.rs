@@ -22,6 +22,7 @@ pub struct GitStatus {
     pub action: Option<GitAction>,
     pub is_detached: bool,
     pub repo_root: PathBuf,
+    pub worktree: Option<String>,
     pub stale: bool,
 }
 
@@ -144,10 +145,34 @@ impl GitCache {
 
 fn find_repo_root(mut dir: &Path) -> Option<PathBuf> {
     loop {
-        if dir.join(".git").exists() {
+        let git_path = dir.join(".git");
+        if git_path.exists() {
             return Some(dir.to_path_buf());
         }
         dir = dir.parent()?;
+    }
+}
+
+fn detect_worktree(repo_root: &Path) -> Option<String> {
+    let git_path = repo_root.join(".git");
+    if git_path.is_file() {
+        // In a worktree, .git is a file containing "gitdir: /path/to/.git/worktrees/name"
+        // The worktree name is the repo_root directory name
+        repo_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+    } else {
+        // Check if there's a commondir file (alternate worktree detection)
+        let commondir = git_path.join("commondir");
+        if commondir.exists() {
+            repo_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
     }
 }
 
@@ -183,6 +208,7 @@ async fn fetch_git_status(repo_root: &Path) -> GitStatus {
     let mut status = parse_porcelain_v2(&stdout);
     status.is_repo = true;
     status.repo_root = repo_root.to_path_buf();
+    status.worktree = detect_worktree(repo_root);
 
     if let Ok(stash_out) = tokio::process::Command::new("git")
         .args(["stash", "list"])

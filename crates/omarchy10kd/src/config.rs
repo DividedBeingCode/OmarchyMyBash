@@ -23,6 +23,8 @@ pub struct Config {
     #[serde(default)]
     pub segments: SegmentsConfig,
     #[serde(default)]
+    pub terminal: TerminalConfig,
+    #[serde(default)]
     pub daemon: DaemonConfig,
 }
 
@@ -123,6 +125,14 @@ pub struct SegmentsConfig {
     pub jobs: JobsConfig,
     pub ssh: SshConfig,
     pub character: CharacterConfig,
+    pub container: ContainerConfig,
+    pub python: PythonConfig,
+    pub toolchain: ToolchainConfig,
+    pub nix: NixConfig,
+    pub k8s: K8sConfig,
+    pub time: TimeConfig,
+    pub battery: BatteryConfig,
+    pub notification: NotificationConfig,
 }
 
 impl Default for SegmentsConfig {
@@ -134,6 +144,14 @@ impl Default for SegmentsConfig {
             jobs: JobsConfig::default(),
             ssh: SshConfig::default(),
             character: CharacterConfig::default(),
+            container: ContainerConfig::default(),
+            python: PythonConfig::default(),
+            toolchain: ToolchainConfig::default(),
+            nix: NixConfig::default(),
+            k8s: K8sConfig::default(),
+            time: TimeConfig::default(),
+            battery: BatteryConfig::default(),
+            notification: NotificationConfig::default(),
         }
     }
 }
@@ -232,6 +250,170 @@ impl Default for CharacterConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+pub struct ContainerConfig {
+    pub enabled: bool,
+    pub icon: String,
+}
+
+impl Default for ContainerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            icon: "auto".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PythonConfig {
+    pub enabled: bool,
+}
+
+impl Default for PythonConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ToolchainConfig {
+    pub enabled: bool,
+}
+
+impl Default for ToolchainConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct NixConfig {
+    pub enabled: bool,
+}
+
+impl Default for NixConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct K8sConfig {
+    pub enabled: bool,
+    pub show_namespace: bool,
+}
+
+impl Default for K8sConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            show_namespace: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TimeConfig {
+    pub enabled: bool,
+    pub format: String,
+}
+
+impl Default for TimeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            format: "%H:%M".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BatteryConfig {
+    pub enabled: bool,
+    pub show_above: u32,
+    pub threshold_warning: u32,
+    pub threshold_critical: u32,
+}
+
+impl Default for BatteryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            show_above: 100,
+            threshold_warning: 30,
+            threshold_critical: 10,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct NotificationConfig {
+    pub enabled: bool,
+    pub threshold_ms: u64,
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold_ms: 10000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TerminalConfig {
+    pub title: TitleConfig,
+    pub progress: ProgressConfig,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            title: TitleConfig::default(),
+            progress: ProgressConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TitleConfig {
+    pub enabled: bool,
+    pub format: String,
+}
+
+impl Default for TitleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            format: "{dir}".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProgressConfig {
+    pub enabled: bool,
+}
+
+impl Default for ProgressConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct DaemonConfig {
     pub socket: String,
     pub log_level: String,
@@ -254,6 +436,7 @@ impl Default for Config {
             directory: DirectoryConfig::default(),
             git: GitConfig::default(),
             segments: SegmentsConfig::default(),
+            terminal: TerminalConfig::default(),
             daemon: DaemonConfig::default(),
         }
     }

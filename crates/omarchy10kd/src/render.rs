@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::git::GitStatus;
-use crate::layout::{LayoutEngine, ResolvedSegment};
+use crate::layout::{LayoutEngine, LayoutPreset, ResolvedSegment};
 use crate::segments::{self, SegmentContext, character};
 use crate::theme::ThemePalette;
 
@@ -53,11 +53,13 @@ impl<'a> PromptRenderer<'a> {
             palette: self.palette,
         };
 
-        let segments = segments::collect_segments(&ctx);
+        let mut segments = segments::collect_segments(&ctx);
+        LayoutPreset::apply_filter(&mut segments, &self.config.prompt.layout);
         let layout = LayoutEngine::new(cols);
         let resolved = layout.resolve(&segments);
 
-        let line1 = self.format_line1(&resolved);
+        let separator = LayoutPreset::separator(&self.config.prompt.layout);
+        let line1 = self.format_line1(&resolved, separator);
         let line2 = self.format_line2(&ctx);
 
         let (prompt_start, prompt_end) = if shell_integration {
@@ -66,10 +68,24 @@ impl<'a> PromptRenderer<'a> {
             ("", "")
         };
 
-        let left = if self.config.prompt.newline {
-            format!("{prompt_start}{line1}\n{line2} {prompt_end}")
+        let title_escape = if self.config.terminal.title.enabled {
+            let short_cwd = if !home.is_empty() && cwd.starts_with(&home) {
+                format!("~{}", &cwd[home.len()..])
+            } else {
+                cwd.to_string()
+            };
+            format!("\x1b]2;{short_cwd}\x07")
         } else {
-            format!("{prompt_start}{line1} {line2} {prompt_end}")
+            String::new()
+        };
+
+        let force_single = LayoutPreset::is_single_line(&self.config.prompt.layout);
+        let use_newline = self.config.prompt.newline && !force_single;
+
+        let left = if use_newline {
+            format!("{title_escape}{prompt_start}{line1}\n{line2} {prompt_end}")
+        } else {
+            format!("{title_escape}{prompt_start}{line1} {line2} {prompt_end}")
         };
 
         let right = if self.config.prompt.right_prompt {
@@ -133,7 +149,7 @@ impl<'a> PromptRenderer<'a> {
         }
     }
 
-    fn format_line1(&self, segments: &[ResolvedSegment]) -> String {
+    fn format_line1(&self, segments: &[ResolvedSegment], separator: &str) -> String {
         let mut parts = Vec::new();
 
         for seg in segments {
@@ -149,7 +165,7 @@ impl<'a> PromptRenderer<'a> {
             parts.push(styled);
         }
 
-        parts.join(" ")
+        parts.join(separator)
     }
 
     fn format_line2(&self, ctx: &SegmentContext<'_>) -> String {

@@ -10,7 +10,7 @@ use crate::git::GitCache;
 use crate::render::PromptRenderer;
 use crate::theme::ThemePalette;
 
-pub const PROTOCOL_VERSION: &str = "0.2";
+pub const PROTOCOL_VERSION: &str = "0.3";
 
 #[derive(Debug, serde::Deserialize)]
 pub struct PromptRequest {
@@ -23,6 +23,36 @@ pub struct PromptRequest {
     pub command: Option<String>,
     #[serde(default)]
     pub shell_integration: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct PreviewRequest {
+    #[serde(default = "default_preview_cwd")]
+    pub cwd: String,
+    #[serde(default)]
+    pub exit_code: i32,
+    #[serde(default)]
+    pub cmd_duration_ms: u64,
+    #[serde(default = "default_cols")]
+    pub cols: u16,
+    #[serde(default)]
+    pub jobs: u32,
+    #[serde(default)]
+    pub in_ssh: bool,
+    #[serde(default)]
+    pub git_branch: String,
+    #[serde(default)]
+    pub git_staged: u32,
+    #[serde(default)]
+    pub git_unstaged: u32,
+}
+
+fn default_preview_cwd() -> String {
+    "~/projects/my-app".into()
+}
+
+fn default_cols() -> u16 {
+    120
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -161,6 +191,23 @@ async fn handle_control(
                 "cwd": cwd,
             }), request_id).await?;
         }
+        "palette" => {
+            let palette = state.palette.read().await;
+            write_response(writer, serde_json::json!({
+                "type": "control",
+                "status": "ok",
+                "palette": {
+                    "accent": format!("#{:02x}{:02x}{:02x}", palette.accent.r, palette.accent.g, palette.accent.b),
+                    "foreground": format!("#{:02x}{:02x}{:02x}", palette.foreground.r, palette.foreground.g, palette.foreground.b),
+                    "muted": format!("#{:02x}{:02x}{:02x}", palette.muted.r, palette.muted.g, palette.muted.b),
+                    "background": format!("#{:02x}{:02x}{:02x}", palette.background.r, palette.background.g, palette.background.b),
+                    "red": format!("#{:02x}{:02x}{:02x}", palette.red.r, palette.red.g, palette.red.b),
+                    "green": format!("#{:02x}{:02x}{:02x}", palette.green.r, palette.green.g, palette.green.b),
+                    "yellow": format!("#{:02x}{:02x}{:02x}", palette.yellow.r, palette.yellow.g, palette.yellow.b),
+                    "blue": format!("#{:02x}{:02x}{:02x}", palette.blue.r, palette.blue.g, palette.blue.b),
+                }
+            }), request_id).await?;
+        }
         "config_get" => {
             let config = state.config.read().await;
             let config_json = serde_json::to_value(&*config).unwrap_or_default();
@@ -220,6 +267,51 @@ async fn handle_prompt(
     write_response(writer, resp, request_id).await
 }
 
+async fn handle_preview(
+    req: &PreviewRequest,
+    state: &Arc<DaemonState>,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    request_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let config = state.config.read().await;
+    let palette = state.palette.read().await;
+
+    let git_status = crate::git::GitStatus {
+        is_repo: !req.git_branch.is_empty(),
+        branch: if req.git_branch.is_empty() {
+            "main".into()
+        } else {
+            req.git_branch.clone()
+        },
+        staged: req.git_staged,
+        unstaged: req.git_unstaged,
+        ..Default::default()
+    };
+
+    let renderer = PromptRenderer::new(&config, &palette);
+    let prompt = renderer.render(
+        &req.cwd,
+        req.exit_code,
+        req.cmd_duration_ms,
+        req.cols,
+        req.jobs,
+        &git_status,
+        false, // no shell integration for preview
+    );
+
+    write_response(
+        writer,
+        serde_json::json!({
+            "type": "preview",
+            "status": "ok",
+            "left": prompt.left,
+            "right": prompt.right,
+        }),
+        request_id,
+    )
+    .await
+}
+
 async fn handle_connection(
     stream: tokio::net::UnixStream,
     state: Arc<DaemonState>,
@@ -269,6 +361,17 @@ async fn handle_connection(
             Some("prompt") => {
                 match serde_json::from_value::<PromptRequest>(msg.rest) {
                     Ok(req) => handle_prompt(&req, &state, &mut writer, request_id).await?,
+                    Err(e) => {
+                        write_response(&mut writer, serde_json::json!({
+                            "type": "error",
+                            "error": e.to_string(),
+                        }), request_id).await?;
+                    }
+                }
+            }
+            Some("preview") => {
+                match serde_json::from_value::<PreviewRequest>(msg.rest) {
+                    Ok(req) => handle_preview(&req, &state, &mut writer, request_id).await?,
                     Err(e) => {
                         write_response(&mut writer, serde_json::json!({
                             "type": "error",

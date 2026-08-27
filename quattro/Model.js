@@ -34,9 +34,25 @@ function buildConfigSet(patch, id) {
 }
 
 function buildHello(id) {
-    var msg = { type: "hello", version: "0.2" };
+    var msg = { type: "hello", version: "0.3" };
     if (id) msg.id = id;
     return JSON.stringify(msg) + "\n";
+}
+
+function buildPreview(context, id) {
+    var msg = { type: "preview" };
+    if (context) {
+        for (var k in context) msg[k] = context[k];
+    }
+    if (id) msg.id = id;
+    return JSON.stringify(msg) + "\n";
+}
+
+function stripAnsi(str) {
+    return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+              .replace(/\x1b\][^\x07]*\x07/g, "")
+              .replace(/\x1b\][^\x1b]*\x1b\\/g, "")
+              .replace(/[\x01\x02]/g, "");
 }
 
 // ── TOML Parser ─────────────────────────────────────────────────────────────
@@ -134,6 +150,16 @@ var CONFIG_MAP = {
     "segments.exit_status.show_signal_name": "cfgExitSignalNames",
     "segments.command_duration.show_above_ms": "cfgCmdDurationMs",
     "segments.ssh.show":                  "cfgSshShow",
+    "segments.container.enabled":          "cfgContainerEnabled",
+    "segments.python.enabled":             "cfgPythonEnabled",
+    "segments.toolchain.enabled":          "cfgToolchainEnabled",
+    "segments.nix.enabled":                "cfgNixEnabled",
+    "segments.k8s.enabled":                "cfgK8sEnabled",
+    "segments.time.enabled":               "cfgTimeEnabled",
+    "segments.time.format":                "cfgTimeFormat",
+    "segments.battery.enabled":            "cfgBatteryEnabled",
+    "segments.notification.threshold_ms":  "cfgNotifyThresholdMs",
+    "terminal.title.enabled":              "cfgTitleEnabled",
 };
 
 function applyConfig(flat, target) {
@@ -202,6 +228,21 @@ function unflattenPatch(flat) {
 function parseDaemonResponse(json) {
     try { return JSON.parse(json); }
     catch (e) { return { error: "invalid JSON: " + e }; }
+}
+
+// Compares dotted protocol version strings (e.g. "0.3" >= "0.2").
+function protocolAtLeast(current, min) {
+    if (!current) return false;
+    var cur = String(current).split(".").map(function (p) { return parseInt(p, 10) || 0; });
+    var req = String(min).split(".").map(function (p) { return parseInt(p, 10) || 0; });
+    var len = Math.max(cur.length, req.length);
+    for (var i = 0; i < len; i++) {
+        var c = i < cur.length ? cur[i] : 0;
+        var r = i < req.length ? req[i] : 0;
+        if (c > r) return true;
+        if (c < r) return false;
+    }
+    return true;
 }
 
 // ── Tool Detection Parsing ─────────────────────────────────────────────────

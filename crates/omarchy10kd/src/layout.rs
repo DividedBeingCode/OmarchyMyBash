@@ -135,14 +135,37 @@ pub struct ResolvedSegment {
 pub struct LayoutPreset;
 
 impl LayoutPreset {
+    pub fn separator(preset: &str) -> &'static str {
+        match preset {
+            "powerline" => " \u{e0b0} ", // Powerline arrow
+            "classic" => " │ ",
+            "dense" => " ",
+            "pure" => " ",
+            "minimal" => " ",
+            _ => " ", // omarchy default
+        }
+    }
+
+    pub fn is_single_line(preset: &str) -> bool {
+        matches!(preset, "minimal" | "dense")
+    }
+
     pub fn segment_order(preset: &str) -> &'static [&'static str] {
         match preset {
-            "minimal" => &["directory", "character"],
-            "powerline" => &["os", "ssh", "directory", "git", "exit_status", "command_duration", "jobs"],
-            "classic" => &["ssh", "directory", "git", "exit_status", "character"],
+            "minimal" => &["directory"],
+            "powerline" => &[
+                "os", "ssh", "container", "directory", "git", "python_env", "toolchain", "nix",
+                "k8s", "exit_status", "command_duration", "jobs", "time", "battery",
+            ],
+            "classic" => &["ssh", "directory", "git", "exit_status"],
             "pure" => &["directory", "git"],
-            "dense" => &["os", "ssh", "directory", "git", "exit_status", "command_duration", "jobs"],
-            _ => &["os", "directory", "git", "exit_status", "command_duration", "jobs", "ssh"],
+            "dense" => &[
+                "os", "ssh", "directory", "git", "exit_status", "command_duration", "jobs",
+            ],
+            _ => &[
+                "os", "ssh", "container", "directory", "git", "python_env", "toolchain", "nix",
+                "k8s", "exit_status", "command_duration", "jobs", "time", "battery",
+            ],
         }
     }
 

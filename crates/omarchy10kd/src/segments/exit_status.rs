@@ -1,19 +1,29 @@
 use crate::layout::Segment;
 use crate::segments::SegmentContext;
+use crate::terminal::TermCaps;
 use unicode_width::UnicodeWidthStr;
+
+const UNDERCURL_ON: &str = "\x1b[4:3m";
+const UNDERCURL_OFF: &str = "\x1b[4:0m";
 
 pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     if ctx.exit_code == 0 {
         return None;
     }
 
-    let content = if ctx.config.segments.exit_status.show_signal_name {
+    let raw = if ctx.config.segments.exit_status.show_signal_name {
         format_exit_code(ctx.exit_code)
     } else {
         format!("✘ {}", ctx.exit_code)
     };
 
-    let preferred_width = UnicodeWidthStr::width(content.as_str()) as u16;
+    let content = if TermCaps::detect().has_undercurl {
+        format!("{UNDERCURL_ON}{raw}{UNDERCURL_OFF}")
+    } else {
+        raw.clone()
+    };
+
+    let preferred_width = UnicodeWidthStr::width(raw.as_str()) as u16;
 
     Some(Segment {
         name: "exit_status",

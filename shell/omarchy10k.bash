@@ -17,6 +17,14 @@ __O10K_DAEMON_BIN="${O10K_DAEMON_BIN:-omarchy10kd}"
 __O10K_SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}"
 __O10K_SOCKET="${__O10K_SOCKET_DIR}/omarchy10k-$$.sock"
 
+# ── Instant Prompt Cache ──────────────────────────────────────────────────
+__O10K_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy10k"
+__O10K_CACHE="${__O10K_CACHE_DIR}/last_prompt"
+
+if [[ -f "$__O10K_CACHE" ]]; then
+    PS1=$(<"$__O10K_CACHE")
+fi
+
 # ── Shell Integration Guard ───────────────────────────────────────────────
 # O10K_SHELL_INTEGRATION=auto|force|off
 # auto: emit OSC 133 unless terminal already provides integration
@@ -142,6 +150,7 @@ __o10k_bridge_request() {
         IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" left 2>/dev/null
         if [[ -n "$left" ]]; then
             PS1="$left"
+            { printf '%s' "$PS1" > "$__O10K_CACHE.tmp" && mv "$__O10K_CACHE.tmp" "$__O10K_CACHE"; } 2>/dev/null &
             return 0
         fi
     fi
@@ -178,6 +187,8 @@ sys.stdout.write(data.decode())
 
 __O10K_CMD_START=0
 __O10K_CMD_DURATION=0
+__O10K_LAST_CMD=""
+__O10K_NOTIFY_THRESHOLD="${O10K_NOTIFY_THRESHOLD:-10000}"
 
 __o10k_timer_start() {
     __O10K_CMD_START="${EPOCHREALTIME:-$(date +%s%N)}"
@@ -225,8 +236,19 @@ __o10k_render_prompt() {
     (( __O10K_EMIT_OSC133 )) && printf '\e]133;D;%d\a' "$exit_code"
 
     __o10k_timer_stop
+
+    # Desktop notification for long-running commands
+    if (( __O10K_CMD_DURATION > ${__O10K_NOTIFY_THRESHOLD:-10000} )); then
+        printf '\033]777;notify;Command finished;%s took %dms\007' \
+            "${__O10K_LAST_CMD:-command}" "$__O10K_CMD_DURATION"
+    fi
+
+    printf '\033[?2026h'
+
     __o10k_check_chpwd
     __o10k_dispatch precmd
+
+    printf '\033]9;4;0\007'
 
     if [[ -S "$__O10K_SOCKET" ]]; then
         local cols="${COLUMNS:-80}"
@@ -242,6 +264,8 @@ __o10k_render_prompt() {
 
         # Try bridge first (no fork/exec in hot path)
         if __o10k_bridge_request "$request"; then
+            printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$PWD"
+            printf '\033[?2026l'
             return
         fi
 
@@ -254,12 +278,17 @@ __o10k_render_prompt() {
             left=$(echo "$response" | "$__O10K_BIN" parse-prompt 2>/dev/null || echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin).get('left',''))" 2>/dev/null)
             if [[ -n "$left" ]]; then
                 PS1="$left"
+                { printf '%s' "$PS1" > "$__O10K_CACHE.tmp" && mv "$__O10K_CACHE.tmp" "$__O10K_CACHE"; } 2>/dev/null &
+                printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$PWD"
+                printf '\033[?2026l'
                 return
             fi
         fi
     fi
 
     PS1="$__O10K_FALLBACK_PS1"
+    printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$PWD"
+    printf '\033[?2026l'
 }
 
 # ── Preexec ────────────────────────────────────────────────────────────────
@@ -273,6 +302,8 @@ __o10k_preexec() {
     # OSC 133;C — mark start of command output
     (( __O10K_EMIT_OSC133 )) && printf '\e]133;C\a'
 
+    __O10K_LAST_CMD="$BASH_COMMAND"
+    printf '\033]9;4;3\007'
     __o10k_timer_start
     __o10k_dispatch preexec "$BASH_COMMAND"
 }
@@ -303,6 +334,8 @@ __o10k_install_blesh_hooks() {
 __o10k_preexec_blesh() {
     # OSC 133;C
     (( __O10K_EMIT_OSC133 )) && printf '\e]133;C\a'
+    __O10K_LAST_CMD="$1"
+    printf '\033]9;4;3\007'
     __o10k_timer_start
     __o10k_dispatch preexec "$1"
 }
@@ -366,6 +399,8 @@ __o10k_cleanup() {
 trap __o10k_cleanup EXIT
 
 # ── Init ───────────────────────────────────────────────────────────────────
+
+[[ -d "$__O10K_CACHE_DIR" ]] || mkdir -p "$__O10K_CACHE_DIR" 2>/dev/null
 
 __o10k_start_daemon
 __o10k_start_bridge

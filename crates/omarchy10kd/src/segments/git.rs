@@ -77,6 +77,10 @@ fn format_compact(git: &GitStatus, _ctx: &SegmentContext<'_>) -> String {
     };
     parts.push(branch_display);
 
+    if let Some(ref wt) = git.worktree {
+        parts.push(format!(" {wt}"));
+    }
+
     // Action state
     if let Some(ref action) = git.action {
         parts.push(format!("{action}"));
@@ -113,6 +117,10 @@ fn format_expanded(git: &GitStatus, _ctx: &SegmentContext<'_>) -> String {
         truncate_branch(&git.branch, 30)
     };
     parts.push(branch_display);
+
+    if let Some(ref wt) = git.worktree {
+        parts.push(format!(" {wt}"));
+    }
 
     if let Some(ref action) = git.action {
         parts.push(format!("{action}"));

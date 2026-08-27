@@ -2,7 +2,9 @@
 
 [← Index](INDEX.md) | [Protocol](protocol.md) | [Configuration](config.md)
 
-The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as a bar widget in the Omarchy Quattro panel. It reads and writes config files, communicates with running daemon instances over Unix sockets, and detects installed shell tools.
+The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as a bar widget in the Omarchy Quattro panel. It reads and writes config files, communicates with running daemon instances over Unix sockets, detects installed shell tools, and previews prompt output in real time.
+
+**Protocol version:** 0.3 (hello handshake and feature gating)
 
 ## Manifest (`quattro/manifest.json`)
 
@@ -31,22 +33,57 @@ The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as
 
 ```
 BarWidget (qs.Ui.BarWidget)
+├── barDaemonStatus / barSocketPath (daemon poll state)
+├── barSocketFinder Process → discovers first socket
+├── barStatusSocket Socket + SplitParser (independent IPC)
+├── barPollTimer Timer (5s, runs when panel closed)
 ├── Loader → Panel.qml
 ├── WidgetButton
 │   ├── text: "❯"
-│   ├── tooltip: "Omarchy10k"
+│   ├── tooltip: "Omarchy10k ✓" or "Omarchy10k ✗"
 │   └── onClicked: toggle()
 └── panel ↔ bar wiring (injectPanel on load/bar change)
 
 Panel (qs.Ui.Panel, manageIpc: false)
-├── KeyboardPanel → PanelKeyCatcher (Escape, Tab)
-├── Tab bar (Appearance, Context, Shell, Advanced)
-├── 4× Component tabs (Loader-switched)
+├── Header: connection dot + title + ↩ Undo button
+├── Live prompt preview box + Error/SSH/Long cmd toggles
+├── Tab bar: Appearance, Context, Segments, Shell, Advanced
+├── 5× Component tabs (Loader-switched)
+├── Error toast (red, 5s) + config diff toast (accent, 2s fade)
 ├── Inline components: ControlRow, StatusRow, ActionButton
-├── 6× Process (configReader, configWriter, socketFinder, toolDetector, editorLauncher, doctorRunner, resetProc)
+├── 11× Process (config, socket, tools, doctor, benchmark, install, clipboard, …)
 ├── 1× Socket (daemonSocket + SplitParser)
-└── 2× Timer (saveTimer 300ms, reconnectTimer 5000ms)
+└── 4× Timer (save 300ms, reconnect 5s, error 5s, toast 2s)
 ```
+
+## BarWidget (`BarWidget.qml`)
+
+The bar widget maintains its own daemon connection independent of the panel, so connection status is visible even when the Control Center is closed.
+
+### Properties
+
+| Property | Purpose |
+|----------|---------|
+| `barDaemonStatus` | `"running"`, `"stopped"`, `"error"`, `"not running"`, or `"unknown"` |
+| `barSocketPath` | Path to the first discovered `omarchy10k-*.sock` |
+
+### Daemon Status Polling
+
+When the panel is **closed**, `barPollTimer` fires every 5 seconds:
+
+1. `discoverBarSocket()` — lists sockets, takes the first match
+2. Connects `barStatusSocket` to that path
+3. Sends `hello` handshake, then `status` command
+4. Updates `barDaemonStatus` from the response
+
+When the panel is **open**, polling stops (`running: !root.opened`) to avoid duplicate IPC with the panel's `daemonSocket`.
+
+### Tooltip
+
+The bar glyph tooltip reflects live daemon status:
+
+- `"Omarchy10k ✓"` when `barDaemonStatus === "running"`
+- `"Omarchy10k ✗"` otherwise
 
 ## Quickshell Imports
 
@@ -57,17 +94,76 @@ Panel (qs.Ui.Panel, manageIpc: false)
 | `Quickshell.Io` | `Process`, `Socket`, `StdioCollector`, `SplitParser` |
 | `qs.Commons` | `Color` (accent, background, muted, green, red) |
 | `qs.Ui` | `BarWidget`, `Panel`, `WidgetButton`, `KeyboardPanel`, `PanelKeyCatcher`, `Style` |
-| `Model.js` | `parseTOML`, `buildTOML`, `buildCommand`, `configPath`, `runtimeDir`, etc. |
+| `Model.js` | `parseTOML`, `buildTOML`, `buildCommand`, `buildPreview`, `protocolAtLeast`, etc. |
 
 ## Panel Lifecycle
 
 | Event | Actions |
 |-------|---------|
 | User clicks bar glyph | `toggle()` → `controller.show()` |
-| Panel opens | Load config, discover socket, detect tools |
-| Config change | Update property → debounce 300ms → write TOML → `reload_config` |
-| Panel closes | `controller.hide()`, disconnect socket |
-| Tab switch | `Loader` swaps `appearanceTab` / `contextTab` / `shellTab` / `advancedTab` |
+| Panel opens | Load config, discover all sockets, detect tools, request preview + palette |
+| Config change | Snapshot undo stack → update property → debounce 300ms → `config_set` → request preview |
+| Panel closes | `controller.hide()`, disconnect `daemonSocket` |
+| Tab switch | `Loader` swaps among 5 tab components |
+| Undo click | Pop last config snapshot from circular buffer, re-apply, save |
+
+## UX Features (v0.3)
+
+### P0 — Core QoL
+
+| Feature | Implementation |
+|---------|----------------|
+| Connection status indicator | Green/yellow/red dot in panel header; green = running, yellow = reconnecting, red = not running |
+| Error feedback on save | Red toast with daemon error message; auto-dismiss after 5s (`errorTimer`) |
+| Doctor output in panel | Scrollable monospace `TextEdit` in Advanced tab after "Run Doctor" |
+| Live prompt preview | Preview box above tabs; `preview` IPC with simulated context; auto-updates on config save |
+| Preview toggles | Error / SSH / Long cmd pill buttons modify preview context and re-request |
+| Config diff toast | `"Changed key → value"` accent toast with 2s fade on every config change |
+
+### P1 — Enhanced UX
+
+| Feature | Implementation |
+|---------|----------------|
+| Dynamic bar glyph | `BarWidget` polls daemon via independent socket; tooltip shows ✓/✗ |
+| Floating terminal button | Terminal icon (`\uf120`) on session rows opens shell in that CWD via `floatingTermLauncher` |
+| Config diff toast | Same toast as P0; surfaced on every `setConfigValue` call |
+
+### P2 — Polish
+
+| Feature | Implementation |
+|---------|----------------|
+| Theme color preview | `palette` command on connect/theme change; swatch row for 8 colors |
+| Segment toggle grid | New Segments tab with 2-column grid for 8 segment flags |
+| One-click tool setup | "Install Atuin" / "Install Mise" buttons in Shell tab when tools missing |
+| Config undo | Circular buffer of last 10 config states; "↩ Undo" button in header |
+| Config import/export | "Copy Config" / "Paste Config" in Advanced tab via xclip/wl-copy |
+| Degradation labels | `protocolAtLeast()` helper; "full (v0.3+)" or "degraded (upgrade daemon)" in daemon info |
+| Benchmark display | "Run Benchmark" button with scrollable results (`omarchy10k benchmark --iterations 50`) |
+
+## Live Prompt Preview
+
+Above the tab bar, a preview box shows the rendered left prompt with simulated context. On socket connect and after each debounced save, the panel sends a `preview` message:
+
+```javascript
+{
+  type: "preview",
+  cwd: "~/projects/my-app",
+  exit_code: previewError ? 1 : 0,
+  cmd_duration_ms: previewLongCmd ? 5000 : 0,
+  cols: 120,
+  jobs: previewJobs,
+  in_ssh: previewSsh,
+  git_branch: "main",
+  git_staged: 2,
+  git_unstaged: 1
+}
+```
+
+The daemon response `left` field is stripped of ANSI via `Model.stripAnsi()` before display. Pill toggles (Error, SSH, Long cmd) flip boolean preview properties and call `requestPreview()`.
+
+## Config Undo
+
+`setConfigValue()` pushes a JSON snapshot of `_configFlat` onto `_undoStack` before each change. The stack holds at most 10 entries (FIFO eviction). The "↩ Undo" button in the header is visible when the stack is non-empty; clicking pops the last snapshot, re-applies properties, and triggers a debounced save.
 
 ## Socket Discovery and Daemon IPC
 
@@ -75,19 +171,28 @@ Panel (qs.Ui.Panel, manageIpc: false)
 
 ```javascript
 socketFinder.exec(["sh", "-c",
-    "ls " + Model.runtimeDir() + "/omarchy10k-*.sock 2>/dev/null | head -1"])
+    "ls " + Model.runtimeDir() + "/omarchy10k-*.sock 2>/dev/null"])
 ```
 
-Globs all `omarchy10k-*.sock` files in `$XDG_RUNTIME_DIR` (or `/tmp`). Takes the first match. This works for single-session use; with multiple shells, it connects to whichever socket is found first.
+Enumerates **all** `omarchy10k-*.sock` files in `$XDG_RUNTIME_DIR` (or `/tmp`). Each discovered socket is parsed to extract shell PID and added to the `sessionList` model. The user can select between sessions in the Advanced tab.
+
+The bar widget uses a separate finder that takes only the first socket (`head -1`) for lightweight status polling.
 
 ### Connection Flow
 
 ```
-socketFinder returns path
-  → daemonSocket.path = path
+socketFinder returns all socket paths
+  → sessionList populated with path, shellPid, PID, CWD per session
+  → user selects session (or first is auto-selected)
+  → daemonSocket.path = selected path
   → daemonSocket.connected = true
-    → onConnectedChanged → sendDaemonCommand("status")
+    → onConnectedChanged → send hello (version 0.3)
+      → response: protocol_version, server_version
+      → daemonProtocolVersion stored
+    → requestPreview() + requestPalette()
+    → sendDaemonCommand("status")
       → response parsed → daemonStatus = "running", pid, version set
+    → loadConfig() via config_get
 ```
 
 ### Reconnection
@@ -98,43 +203,81 @@ On panel close, socket is explicitly disconnected.
 
 ### Protocol
 
-Outbound: `Model.buildCommand(name)` → `'{"command":"name"}\n'`
-Inbound: `Model.parseDaemonResponse(json)` → parsed JSON object
+Outbound messages built via Model.js helpers. Inbound: `Model.parseDaemonResponse(json)` → parsed JSON object.
 
-Commands used by the panel:
+Commands and message types used by the panel:
 
-| Command | When |
+| Message | When |
 |---------|------|
-| `status` | On socket connect |
-| `reload_config` | After config write, manual reload, after reset |
+| `hello` | On socket connect (handshake, version `"0.3"`) |
+| `config_get` | Panel open, reload |
+| `config_set` | Debounced config save |
+| `status` | After hello handshake |
+| `preview` | On connect, after save, preview toggle change |
+| `palette` | On connect, theme source change |
+| `reload_config` | Manual reload, after reset (fallback) |
 
 Commands available in daemon but not used by panel: `reload_theme`, `invalidate_git`, `shutdown`.
+
+### Protocol Version Gating
+
+`Model.protocolAtLeast(current, min)` compares dotted version strings. The Advanced tab daemon info block shows:
+
+- `"full (v0.3+)"` when connected daemon protocol ≥ 0.3
+- `"degraded (upgrade daemon)"` when protocol < 0.3
+
+Preview and palette features require a v0.3+ daemon.
 
 ## Config Management
 
 ### Read Flow
 
+Primary path uses the daemon config API:
+
 ```
-open() → configReader.exec(["cat", configPath])
-  → StdioCollector captures stdout
-  → onRunningChanged (when stopped): parse TOML
-  → Model.parseTOML(text) → flat {key: value} object
+open() → send config_get message
+  → daemon returns full config as JSON
+  → Model.flattenConfig(nested) → flat {key: value} object
   → _applyParsedConfig(flat) → set QML properties
   → _configFlat = flat (master copy)
 ```
 
+**Fallback:** If the daemon does not support the config API (older version), falls back to direct TOML file I/O:
+
+```
+configReader.exec(["cat", configPath])
+  → StdioCollector captures stdout
+  → Model.parseTOML(text) → flat object
+  → _applyParsedConfig(flat)
+```
+
 ### Write Flow
+
+Primary path uses `config_set` with a JSON patch:
 
 ```
 setConfigValue(key, value)
+  → push undo snapshot (if value changed)
   → _configFlat[key] = value
   → QML property updated
+  → show config diff toast
   → saveTimer.restart() (300ms debounce)
     → _flushSave()
-      → Model.buildTOML(_configFlat) → TOML string
-      → configWriter.exec(["sh", "-c", "mkdir -p dir && cat > file"])
-      → configWriter.write(toml)
-      → onRunningChanged (when stopped): sendDaemonCommand("reload_config")
+      → patch = Model.unflattenPatch(Model.collectConfig(root))
+      → send {type:"config", command:"set", config: patch}
+      → daemon applies patch to config.toml
+      → daemon reloads config in-memory
+      → requestPreview()
+```
+
+On daemon error, `lastError` is set and the red error toast appears for 5 seconds.
+
+**Fallback:** If the daemon does not support the config API, falls back to direct TOML file I/O:
+
+```
+Model.buildTOML(_configFlat) → TOML string
+  → configWriter.exec(["sh", "-c", "mkdir -p dir && cat > file"])
+  → sendDaemonCommand("reload_config")
 ```
 
 ### CONFIG_MAP
@@ -154,8 +297,26 @@ Maps TOML keys to QML property names:
 | `segments.exit_status.show_signal_name` | `cfgExitSignalNames` |
 | `segments.command_duration.show_above_ms` | `cfgCmdDurationMs` |
 | `segments.ssh.show` | `cfgSshShow` |
+| `segments.container.enabled` | `cfgContainerEnabled` |
+| `segments.python.enabled` | `cfgPythonEnabled` |
+| `segments.toolchain.enabled` | `cfgToolchainEnabled` |
+| `segments.nix.enabled` | `cfgNixEnabled` |
+| `segments.k8s.enabled` | `cfgK8sEnabled` |
+| `segments.time.enabled` | `cfgTimeEnabled` |
+| `segments.time.format` | `cfgTimeFormat` |
+| `segments.battery.enabled` | `cfgBatteryEnabled` |
+| `segments.notification.threshold_ms` | `cfgNotifyThresholdMs` |
+| `terminal.title.enabled` | `cfgTitleEnabled` |
+
+### Import / Export
+
+**Copy Config** serializes current QML properties via `Model.collectConfig()` → `Model.buildTOML()` and pipes to clipboard (`xclip` or `wl-copy`).
+
+**Paste Config** reads clipboard (`xclip -o` or `wl-paste`), parses TOML, applies properties, and triggers a debounced save.
 
 ## UI Tabs
+
+Five tabs: `["Appearance", "Context", "Segments", "Shell", "Advanced"]`
 
 ### Appearance Tab
 
@@ -163,9 +324,12 @@ Maps TOML keys to QML property names:
 |---------|----------|---------|
 | Preset | `prompt.layout` | omarchy, minimal, powerline, classic, pure, dense |
 | Theme | `theme.source` | omarchy, custom, hybrid, terminal |
+| Theme swatches | (from `palette` IPC) | accent, foreground, muted, background, red, green, yellow, blue |
 | Lines | `prompt.newline` | Two-line / One-line |
 | Transient | `prompt.transient` | On / Off |
 | OS Icon | `segments.os.icon` | arch, linux, omarchy, none |
+
+Changing theme source triggers `requestPalette()` to refresh the color swatch row. Swatches appear when `paletteColors` is populated from the daemon response.
 
 ### Context Tab
 
@@ -176,40 +340,77 @@ Maps TOML keys to QML property names:
 | SSH | `segments.ssh.show` | auto, always, never |
 | Exit Status | `segments.exit_status.show_signal_name` | Signal names / Codes only |
 
-### Shell Tab (read-only)
+### Segments Tab
 
-Displays detection results for five tools:
+Two-column toggle grid for eight segment/feature flags. Clicking a pill toggles the boolean config value via `setConfigValue()`:
 
-| Tool | Detection |
-|------|-----------|
-| ble.sh | `command -v ble.sh` or check `~/.local/share/blesh/ble.sh` |
-| Atuin | `command -v atuin` |
-| Mise | `command -v mise` |
-| Zoxide | `command -v zoxide` |
-| fzf | `command -v fzf` |
+| Label | TOML Key | QML Property |
+|-------|----------|-------------|
+| Container | `segments.container.enabled` | `cfgContainerEnabled` |
+| Python | `segments.python.enabled` | `cfgPythonEnabled` |
+| Toolchain | `segments.toolchain.enabled` | `cfgToolchainEnabled` |
+| Nix | `segments.nix.enabled` | `cfgNixEnabled` |
+| Kubernetes | `segments.k8s.enabled` | `cfgK8sEnabled` |
+| Time | `segments.time.enabled` | `cfgTimeEnabled` |
+| Battery | `segments.battery.enabled` | `cfgBatteryEnabled` |
+| Terminal Title | `terminal.title.enabled` | `cfgTitleEnabled` |
 
-Shows path if installed, "not found" otherwise.
+Enabled segments render with accent background; disabled segments use muted styling.
+
+### Shell Tab
+
+Displays detection results for five tools with conditional install actions:
+
+| Tool | Detection | Install Action |
+|------|-----------|----------------|
+| ble.sh | `command -v blesh` | — |
+| Atuin | `command -v atuin` | "Install Atuin" → `curl setup.atuin.sh` |
+| Mise | `command -v mise` | "Install Mise" → `curl mise.run` |
+| Zoxide | `command -v zoxide` | — |
+| fzf | `command -v fzf` | — |
+
+Install buttons appear only when the tool status contains `✗ not found`.
 
 ### Advanced Tab
 
 | Action | Behavior |
 |--------|----------|
 | Open Config File | `$EDITOR` or `nano` via `Process.startDetached()` |
-| Run Doctor | `omarchy10k doctor`, output logged |
-| Reload Config | Re-read TOML + `reload_config` to daemon |
+| Run Doctor | `omarchy10k doctor`; output shown in scrollable monospace area below |
+| Copy Config | Serialize config to clipboard |
+| Paste Config | Parse clipboard TOML, apply, save |
+| Reload Config | Re-fetch config via `config_get` + `reload_config` |
+| Run Benchmark | `omarchy10k benchmark --iterations 50`; results in scrollable area |
 | Reset to Defaults | Backup to `.bak`, delete config, reload |
-| Daemon info | Status, PID, version from `status` command |
+| Daemon info | Status, PID, version, protocol version, protocol status label |
+| Session list | All discovered sockets with shell PID, CWD, floating-terminal button |
+
+### Multi-Session
+
+When multiple shells are running, each has its own daemon socket. The Advanced tab provides a session selector:
+
+- Lists all discovered `omarchy10k-*.sock` files
+- Each entry shows shell PID, working directory, and a floating-terminal icon
+- Clicking a row switches the active session (disconnect + reconnect)
+- Clicking the terminal icon opens a new shell in that session's CWD (`cd '$cwd' && exec $SHELL`)
+- Config changes apply to the selected session's daemon
 
 ## Process Components
 
 | ID | Command | Trigger |
 |----|---------|---------|
 | `configReader` | `cat config.toml` | Panel open, reload, reset |
-| `configWriter` | `sh -c "mkdir -p && cat > file"` | Debounced save |
-| `socketFinder` | `ls $XDG_RUNTIME_DIR/omarchy10k-*.sock \| head -1` | Panel open, reconnect |
+| `configWriter` | `sh -c "mkdir -p && cat > file"` | Debounced save (fallback) |
+| `socketFinder` | `ls $XDG_RUNTIME_DIR/omarchy10k-*.sock` | Panel open, reconnect |
+| `barSocketFinder` | `ls … \| head -1` | BarWidget init, bar poll |
 | `toolDetector` | 5× `command -v` | Panel open |
 | `editorLauncher` | `$EDITOR config.toml` | Advanced tab button |
 | `doctorRunner` | `omarchy10k doctor` | Advanced tab button |
+| `benchRunner` | `omarchy10k benchmark --iterations 50` | Advanced tab button |
+| `installRunner` | curl install scripts | Shell tab install buttons |
+| `floatingTermLauncher` | `cd '$cwd' && exec $SHELL` | Session row terminal icon |
+| `clipboardCopy` | xclip / wl-copy | Copy Config |
+| `clipboardPaste` | xclip -o / wl-paste | Paste Config |
 | `resetProc` | Backup + rm config.toml | Advanced tab button |
 
 ## Model.js
@@ -221,12 +422,20 @@ Stateless helper library (`.pragma library`):
 | `configDir()` | `$HOME/.config/omarchy10k` |
 | `configPath()` | `configDir()/config.toml` |
 | `runtimeDir()` | `$XDG_RUNTIME_DIR` or `/tmp` |
-| `buildCommand(name)` | JSON command string with newline |
+| `buildCommand(name, id)` | JSON control command string with newline |
+| `buildHello(id)` | Hello handshake message (version `"0.3"`) |
+| `buildConfigGet(id)` | Builds config_get request |
+| `buildConfigSet(patch, id)` | Builds config_set request with JSON patch |
+| `buildPreview(context, id)` | Builds preview request with simulated context |
+| `stripAnsi(str)` | Removes ANSI/OSC escape sequences from preview text |
+| `protocolAtLeast(current, min)` | Dotted version comparison (e.g. `"0.3" >= "0.2"`) |
+| `flattenConfig(nested)` | Flattens nested config object to dotted keys |
+| `unflattenPatch(flat)` | Unflattens dotted keys to nested object |
 | `parseDaemonResponse(json)` | Safe JSON parse with error wrapping |
 | `parseTOML(text)` | Subset TOML parser → flat key-value object |
 | `buildTOML(flat)` | Flat object → sectioned TOML string |
-| `CONFIG_MAP` | TOML key ↔ QML property mapping |
-| `applyConfig(flat, target)` | Load parsed TOML into QML properties |
+| `CONFIG_MAP` | TOML key ↔ QML property mapping (21 keys) |
+| `applyConfig(flat, target)` | Load parsed config into QML properties |
 | `collectConfig(source)` | Export QML properties to flat object |
 | `parseToolOutput(text)` | Parse `name=path\|missing` format |
 
@@ -238,6 +447,22 @@ The `parseTOML()` implementation supports:
 - `#` comments
 
 It does not support: nested tables, arrays, inline tables, multi-line strings, dotted keys.
+
+## Reactive State Properties
+
+Key QML properties on `Panel.qml` beyond config fields:
+
+| Property | Purpose |
+|----------|---------|
+| `lastError` / `_showError` | Daemon error message + red toast visibility |
+| `toastMessage` / `_showToast` | Config diff / undo / paste toast |
+| `doctorOutput` | Scrollable doctor command output |
+| `benchmarkOutput` | Scrollable benchmark results |
+| `previewText` | Stripped ANSI left prompt for preview box |
+| `previewError` / `previewSsh` / `previewLongCmd` | Preview context toggles |
+| `paletteColors` | Theme color map from `palette` IPC response |
+| `_undoStack` / `_undoMaxSize` | Config undo circular buffer (max 10) |
+| `sessionList` / `activeSessionIndex` | Multi-session socket list |
 
 ## Styling
 

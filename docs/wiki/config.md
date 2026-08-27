@@ -23,7 +23,7 @@ Controls prompt structure and behavior.
 | `layout` | string | `"omarchy"` | `omarchy`, `minimal`, `powerline`, `classic`, `pure`, `dense` | No | Prompt layout preset. Currently ignored — always uses omarchy layout. |
 | `transient` | bool | `true` | — | Yes | Replace previous prompts with a minimal `❯` after command execution. Requires ble.sh for full effect. |
 | `newline` | bool | `true` | — | Yes | Two-line prompt (segments on line 1, character on line 2) vs one-line. |
-| `right_prompt` | bool | `true` | — | No | Enable right-aligned prompt. Currently `right` is always `None` in responses. |
+| `right_prompt` | bool | `true` | — | Yes | Enable right-aligned prompt. Right prompt populated with git branch and command duration. |
 
 ## `[theme]`
 
@@ -70,9 +70,9 @@ Controls working directory segment display.
 
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
-| `strategy` | string | `"smart"` | `smart`, `full`, `truncate` | No | Path display strategy. Always uses smart truncation. |
+| `strategy` | string | `"smart"` | `smart`, `full`, `truncate` | Yes | Path display strategy. |
 | `max_length` | int | `40` | — | Yes | Maximum path display length in characters. |
-| `repo_root_style` | string | `"bold"` | — | No | Style for git repo root directory. Always bold. |
+| `repo_root_style` | string | `"bold"` | — | Yes | Style for git repo root directory. |
 
 ## `[git]`
 
@@ -82,15 +82,16 @@ Controls git integration.
 |-----|------|---------|--------|-------------|-------------|
 | `enabled` | bool | `true` | — | Yes | Toggle git segment entirely. |
 | `mode` | string | `"adaptive"` | `hidden`, `compact`, `expanded`, `adaptive` | Yes | Git segment detail level. `adaptive` shows expanded when dirty, compact when clean. |
-| `stale_display` | bool | `true` | — | No | Show grayed-out stale state while git refreshes. `stale` field is never set true. |
+| `stale_display` | bool | `true` | — | Partial | Show grayed-out stale state while git refreshes. `stale` field is set; muted color applied in right prompt only. |
 | `max_threads` | int | `4` | — | No | Parallelism for git queries. Single-threaded in practice. |
+| `cache_ttl_ms` | int | `5000` | — | Yes | Cache TTL in milliseconds for git status entries. Lower values give fresher data at the cost of more git subprocess calls. |
 
 ## `[segments.os]`
 
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
-| `enabled` | bool | `true` | — | No | No OS segment exists yet. |
-| `icon` | string | `"arch"` | `arch`, `linux`, `omarchy`, `custom`, `none` | No | OS icon glyph. |
+| `enabled` | bool | `true` | — | Yes | OS segment in prompt. |
+| `icon` | string | `"arch"` | `arch`, `linux`, `omarchy`, `custom`, `none` | Yes | OS icon glyph. All icon values work. |
 
 ## `[segments.exit_status]`
 
@@ -110,14 +111,99 @@ Controls git integration.
 
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
-| `enabled` | bool | `true` | — | No | Background jobs count. `jobs` field is in the protocol but no segment renders it. |
+| `enabled` | bool | `true` | — | Yes | Background jobs count segment. |
 
 ## `[segments.ssh]`
 
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
-| `enabled` | bool | `true` | — | No | SSH indicator. `in_ssh` is detected in render.rs but no segment uses it. |
-| `show` | string | `"auto"` | `auto`, `always`, `never` | No | When to show SSH indicator. |
+| `enabled` | bool | `true` | — | Yes | SSH indicator segment. |
+| `show` | string | `"auto"` | `auto`, `always`, `never` | Yes | When to show SSH indicator. All modes work. |
+
+## `[segments.container]`
+
+Detects container runtime environment (Docker, Podman, Distrobox, Toolbox). Added in v0.3.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `true` | — | Yes | Container indicator segment. |
+| `icon` | string | `"auto"` | `auto` or any string | Yes | Prefix glyph. `auto` uses `⬡`; any other string is used verbatim (emoji or custom glyph). |
+
+Detection order: `$DISTROBOX_ENTER_PATH` → `/.dockerenv` → `/run/.containerenv` → `$container` env var.
+
+## `[segments.python]`
+
+Shows active Python virtual environment. Added in v0.3.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `true` | — | Yes | Python environment segment. |
+
+Reads `$VIRTUAL_ENV` (basename) or `$CONDA_DEFAULT_ENV`. Displays as `🐍 env-name`.
+
+## `[segments.toolchain]`
+
+Shows mise-managed language versions from environment variables. Added in v0.3.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `true` | — | Yes | Toolchain version segment. |
+
+Checks `MISE_*_VERSION` env vars for Node, Python, Ruby, Go, and Rust. Displays icon + version per active tool (e.g. `⬢ 20`, `🦀 1.80`).
+
+## `[segments.nix]`
+
+Shows Nix shell/devenv state. Added in v0.3.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `true` | — | Yes | Nix environment segment. |
+
+Detects `$IN_NIX_SHELL` (`pure` or `impure`). Displays `❄ pure` or `❄ impure`.
+
+## `[segments.k8s]`
+
+Shows current Kubernetes context from kubeconfig. Added in v0.3.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `false` | — | Yes | Kubernetes context segment. |
+| `show_namespace` | bool | `true` | — | Yes | Append namespace to context name (`cluster/namespace` vs `cluster` only). |
+
+Reads `$KUBECONFIG` or `~/.kube/config`. Parses `current-context` and namespace via lightweight line scanning (no full YAML parse).
+
+## `[segments.time]`
+
+Shows current local time in the prompt. Added in v0.3.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `false` | — | Yes | Clock segment. |
+| `format` | string | `"%H:%M"` | `%H:%M`, `%H:%M:%S`, `%I:%M %p` | Yes | strftime-style time format. Unknown formats pass through as literal strings. |
+
+## `[segments.battery]`
+
+Shows battery level from Linux sysfs. Added in v0.3.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `false` | — | Yes | Battery level segment (Linux only). |
+| `show_above` | int | `100` | `0`–`100` | Yes | Hide segment when capacity is at or above this percentage. Default `100` shows whenever a battery is detected. |
+| `threshold_warning` | int | `30` | — | Yes | Capacity at or below which the segment uses warning (yellow) color. |
+| `threshold_critical` | int | `10` | — | Yes | Capacity at or below which the segment uses critical (red) color. |
+
+Reads `/sys/class/power_supply/BAT0` (or `BAT1`). Icon: `🔋` discharging, `🔌` charging.
+
+## `[segments.notification]`
+
+Long-running command desktop notifications. Added in v0.3.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `true` | — | Partial | Toggle notifications. Config key exists; bash adapter does not yet read it — notifications always emit when duration exceeds threshold. |
+| `threshold_ms` | int | `10000` | — | Partial | Minimum command duration (ms) before emitting OSC 777 notification. Config is persisted and editable in Quattro; bash adapter currently uses `$O10K_NOTIFY_THRESHOLD` env var (default `10000`) instead of this key. |
+
+Notifications are emitted from the bash adapter via OSC 777 (`\033]777;notify;...\007`), compatible with Ghostty and Foot.
 
 ## `[segments.character]`
 
@@ -125,6 +211,37 @@ Controls git integration.
 |-----|------|---------|--------|-------------|-------------|
 | `success` | string | `"❯"` | Any string | Yes | Prompt character for successful commands. |
 | `error` | string | `"❯"` | Any string | Partial | Prompt character for failed commands. Transient prompt ignores this and hardcodes `❯`. |
+
+## `[terminal]`
+
+Terminal integration features. Added in v0.3. These affect OSC sequences emitted alongside the prompt, not prompt segment layout.
+
+### `[terminal.title]`
+
+Dynamic terminal window title via OSC 2.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `true` | — | Yes | Emit `\x1b]2;title\x07` with each prompt render. |
+| `format` | string | `"{dir}"` | — | Partial | Title format string. Config key exists; renderer currently emits shortened cwd only (home → `~` prefix), ignoring format placeholders. |
+
+### `[terminal.progress]`
+
+Indeterminate progress indicator in the terminal tab/window during command execution.
+
+| Key | Type | Default | Values | Implemented | Description |
+|-----|------|---------|--------|-------------|-------------|
+| `enabled` | bool | `true` | — | Partial | Toggle progress OSC sequences. Config key exists; bash adapter always emits `\033]9;4;3\007` on preexec and `\033]9;4;0\007` on precmd regardless of this setting. |
+
+Example:
+```toml
+[terminal.title]
+enabled = true
+format = "{dir}"
+
+[terminal.progress]
+enabled = true
+```
 
 ## `[daemon]`
 
@@ -166,5 +283,21 @@ Reload can also be triggered via:
 | `segments.exit_status.show_signal_name` | Yes | Context |
 | `segments.command_duration.show_above_ms` | Yes | Context |
 | `segments.ssh.show` | Yes | Context |
+| `segments.container.enabled` | Yes | Segments |
+| `segments.python.enabled` | Yes | Segments |
+| `segments.toolchain.enabled` | Yes | Segments |
+| `segments.nix.enabled` | Yes | Segments |
+| `segments.k8s.enabled` | Yes | Segments |
+| `segments.time.enabled` | Yes | Segments |
+| `segments.battery.enabled` | Yes | Segments |
+| `segments.time.format` | No (loaded but no UI) | — |
+| `segments.k8s.show_namespace` | No | — |
+| `segments.battery.show_above` | No | — |
+| `segments.battery.threshold_*` | No | — |
+| `segments.notification.enabled` | No | — |
+| `segments.notification.threshold_ms` | No (loaded but no UI) | — |
+| `terminal.title.enabled` | Yes | Segments |
+| `terminal.title.format` | No | — |
+| `terminal.progress.enabled` | No | — |
 | `segments.character.*` | No | — |
 | `daemon.*` | No | — |

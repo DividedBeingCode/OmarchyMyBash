@@ -35,6 +35,31 @@ Sends a JSON prompt request to the daemon socket, extracts the `left` field from
 \[\e[1;34m\]\w\[\e[0m\] \[\e[1;32m\]❯\[\e[0m\]
 ```
 
+### `omarchy10k bridge`
+
+Runs as a persistent bridge coprocess between Bash and the daemon. Long-running process that amortizes socket connection overhead across prompt renders.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--socket` | auto-detected | Unix socket path (same resolution as other subcommands) |
+
+**Behavior:**
+
+1. Reads JSON requests from stdin line-by-line
+2. Forwards each request to the daemon via Unix socket
+3. Extracts the `left` field from the JSON response
+4. Writes the prompt string to stdout terminated by a NUL byte (`0x00`)
+
+Supports both JSON input and tab-separated `key=value` format (converted to JSON internally).
+
+**Reconnection:** Retries up to 3 times on socket errors. Falls back to the hardcoded PS1 if reconnection fails.
+
+The Bash adapter starts this as a coprocess:
+
+```bash
+coproc __O10K_BRIDGE { "$__O10K_BIN" bridge --socket "$__O10K_SOCKET"; }
+```
+
 ### `omarchy10k doctor`
 
 System diagnostics — checks compatibility, optional tools, daemon health, hooks, and config. Read-only, no modifications.
@@ -72,6 +97,15 @@ Performance test. Sends repeated prompt requests and reports latency statistics.
 Uses current directory (or `/tmp`) as cwd. Fixed params: `exit_code=0`, `cmd_duration_ms=0`, `cols=120`, `jobs=0`.
 
 Output: average, p50, p95, p99 in milliseconds. Pass/fail against 5ms p50 target.
+
+### `omarchy10k benchmark-shell` (hidden)
+
+Hidden subcommand for end-to-end shell-level latency benchmarking. Measures real wall time for prompt render including socket I/O — closer to what the user experiences than `benchmark`, which only times the CLI→daemon round trip.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--iterations` | `100` | Number of prompt render cycles |
+| `--adapter` | — | Optional path to Bash adapter script |
 
 ### `omarchy10k debug`
 

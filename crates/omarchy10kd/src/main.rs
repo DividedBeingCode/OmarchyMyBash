@@ -5,6 +5,7 @@ mod render;
 mod segments;
 mod server;
 mod theme;
+mod terminal;
 
 use std::path::PathBuf;
 use std::sync::Arc;
