@@ -1,9 +1,9 @@
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
 Panel {
     id: root
@@ -13,14 +13,49 @@ Panel {
     property var anchorItem: null
     property var hostWidget: null
 
+    // ── Reactive Config State ──────────────────────────────────────────────
+    property string cfgLayout: "omarchy"
+    property string cfgThemeSource: "omarchy"
+    property bool cfgNewline: true
+    property bool cfgTransient: true
+    property bool cfgRightPrompt: true
+    property string cfgGitMode: "adaptive"
+    property bool cfgGitEnabled: true
+    property string cfgOsIcon: "arch"
+    property bool cfgExitSignalNames: true
+    property int cfgCmdDurationMs: 1500
+    property string cfgSshShow: "auto"
+
+    // ── Reactive Daemon State ──────────────────────────────────────────────
+    property string daemonStatus: "unknown"
+    property string daemonPid: ""
+    property string daemonVersion: ""
+    property string discoveredSocketPath: ""
+
+    // ── Reactive Tool State ────────────────────────────────────────────────
+    property string bleshStatus: "checking..."
+    property string atuinStatus: "checking..."
+    property string miseStatus: "checking..."
+    property string zoxideStatus: "checking..."
+    property string fzfStatus: "checking..."
+
+    // ── Internal ───────────────────────────────────────────────────────────
+    property bool _configDirty: false
+    property var _configFlat: ({})
+
+    readonly property string _configPath: Model.configPath()
+
+    // ── Panel Lifecycle ────────────────────────────────────────────────────
     function open() {
         root.controller.show()
-        Model.loadConfig()
-        Model.queryDaemon()
+        loadConfig()
+        discoverSocket()
+        detectTools()
     }
 
     function close() {
         root.controller.hide()
+        daemonSocket.connected = false
     }
 
     function switchPanel(direction) {
@@ -28,6 +63,185 @@ Panel {
             return root.bar.switchPanelFrom(root.hostWidget || root, direction)
         return false
     }
+
+    // ── Config Read ────────────────────────────────────────────────────────
+    function loadConfig() {
+        configReader.exec(["cat", _configPath])
+    }
+
+    function _applyParsedConfig(text) {
+        root._configFlat = Model.parseTOML(text)
+        Model.applyConfig(root._configFlat, root)
+    }
+
+    // ── Config Write ───────────────────────────────────────────────────────
+    function setConfigValue(tomlKey, value) {
+        var prop = Model.CONFIG_MAP[tomlKey]
+        if (prop) root[prop] = value
+
+        root._configFlat[tomlKey] = value
+        _scheduleSave()
+    }
+
+    function _scheduleSave() {
+        if (!root._configDirty) {
+            root._configDirty = true
+            saveTimer.restart()
+        }
+    }
+
+    function _flushSave() {
+        root._configDirty = false
+        var toml = Model.buildTOML(root._configFlat)
+        configWriter.exec({
+            command: ["sh", "-c",
+                "mkdir -p '" + Model.configDir() + "' && cat > '" + _configPath + "'"]
+        })
+        configWriter.write(toml)
+        configWriter.write("")
+        configWriter.running = false
+    }
+
+    // ── Daemon IPC ─────────────────────────────────────────────────────────
+    function discoverSocket() {
+        socketFinder.exec(["sh", "-c",
+            "ls " + Model.runtimeDir() + "/omarchy10k-*.sock 2>/dev/null | head -1"])
+    }
+
+    function sendDaemonCommand(name) {
+        if (!daemonSocket.connected) return
+        daemonSocket.write(Model.buildCommand(name))
+        daemonSocket.flush()
+    }
+
+    function _handleDaemonMessage(raw) {
+        var resp = Model.parseDaemonResponse(raw)
+        if (resp.status === "ok" && resp.pid !== undefined) {
+            root.daemonStatus = "running"
+            root.daemonPid = String(resp.pid)
+            root.daemonVersion = resp.version || ""
+        } else if (resp.status === "ok") {
+            root.daemonStatus = "running"
+        } else if (resp.status === "bye") {
+            root.daemonStatus = "stopped"
+        } else if (resp.error) {
+            root.daemonStatus = "error"
+        }
+    }
+
+    function _onSocketConnected() {
+        sendDaemonCommand("status")
+    }
+
+    function _onSocketDisconnected() {
+        if (root.opened)
+            root.daemonStatus = "not running"
+    }
+
+    // ── Tool Detection ─────────────────────────────────────────────────────
+    function detectTools() {
+        root.bleshStatus = "checking..."
+        root.atuinStatus = "checking..."
+        root.miseStatus = "checking..."
+        root.zoxideStatus = "checking..."
+        root.fzfStatus = "checking..."
+        toolDetector.exec(["sh", "-c",
+            "echo blesh=$(command -v blesh 2>/dev/null || echo missing);" +
+            "echo atuin=$(command -v atuin 2>/dev/null || echo missing);" +
+            "echo mise=$(command -v mise 2>/dev/null || echo missing);" +
+            "echo zoxide=$(command -v zoxide 2>/dev/null || echo missing);" +
+            "echo fzf=$(command -v fzf 2>/dev/null || echo missing)"
+        ])
+    }
+
+    function _applyToolDetection(text) {
+        var tools = Model.parseToolOutput(text)
+        root.bleshStatus  = tools.blesh  ? ("\u2713 " + tools.blesh)  : "\u2717 not found"
+        root.atuinStatus  = tools.atuin  ? ("\u2713 " + tools.atuin)  : "\u2717 not found"
+        root.miseStatus   = tools.mise   ? ("\u2713 " + tools.mise)   : "\u2717 not found"
+        root.zoxideStatus = tools.zoxide ? ("\u2713 " + tools.zoxide) : "\u2717 not found"
+        root.fzfStatus    = tools.fzf    ? ("\u2713 " + tools.fzf)    : "\u2717 not found"
+    }
+
+    // ── I/O Components ─────────────────────────────────────────────────────
+
+    Process {
+        id: configReader
+        command: ["cat", root._configPath]
+        stdout: StdioCollector {
+            onStreamFinished: root._applyParsedConfig(this.text)
+        }
+    }
+
+    Process {
+        id: configWriter
+        onRunningChanged: {
+            if (!running && root._configDirty === false)
+                root.sendDaemonCommand("reload_config")
+        }
+    }
+
+    Process {
+        id: socketFinder
+        stdout: StdioCollector {
+            onStreamFinished: {
+                var path = this.text.trim()
+                if (path.length > 0) {
+                    root.discoveredSocketPath = path
+                    daemonSocket.path = path
+                    daemonSocket.connected = true
+                } else {
+                    root.daemonStatus = "not running"
+                }
+            }
+        }
+    }
+
+    Process {
+        id: toolDetector
+        stdout: StdioCollector {
+            onStreamFinished: root._applyToolDetection(this.text)
+        }
+    }
+
+    Process {
+        id: editorLauncher
+    }
+
+    Process {
+        id: doctorRunner
+        stdout: StdioCollector {
+            onStreamFinished: console.log("omarchy10k doctor:", this.text)
+        }
+    }
+
+    Socket {
+        id: daemonSocket
+        parser: SplitParser {
+            onRead: message => root._handleDaemonMessage(message)
+        }
+        onConnectedChanged: {
+            if (connected) root._onSocketConnected()
+            else root._onSocketDisconnected()
+        }
+    }
+
+    Timer {
+        id: saveTimer
+        interval: 300
+        repeat: false
+        onTriggered: root._flushSave()
+    }
+
+    Timer {
+        id: reconnectTimer
+        interval: 5000
+        repeat: true
+        running: root.opened && root.daemonStatus !== "running"
+        onTriggered: root.discoverSocket()
+    }
+
+    // ── Panel UI ───────────────────────────────────────────────────────────
 
     KeyboardPanel {
         id: panel
@@ -51,7 +265,6 @@ Panel {
                 spacing: Style.space(12)
                 padding: Style.space(16)
 
-                // Header
                 Text {
                     text: "Omarchy10k Control Center"
                     color: root.barForeground
@@ -60,11 +273,9 @@ Panel {
                     font.bold: true
                 }
 
-                // Tab bar
                 Row {
                     id: tabBar
                     spacing: Style.space(4)
-
                     property int currentTab: 0
 
                     Repeater {
@@ -98,7 +309,6 @@ Panel {
                     }
                 }
 
-                // Separator
                 Rectangle {
                     width: parent.width - Style.space(32)
                     height: 1
@@ -106,7 +316,6 @@ Panel {
                     x: Style.space(16)
                 }
 
-                // Tab content
                 Loader {
                     id: tabContent
                     width: parent.width - Style.space(32)
@@ -124,7 +333,7 @@ Panel {
         }
     }
 
-    // ── Tab Components ────────────────────────────────────────────────────
+    // ── Tab: Appearance ────────────────────────────────────────────────────
 
     Component {
         id: appearanceTab
@@ -133,40 +342,42 @@ Panel {
 
             ControlRow {
                 label: "Preset"
-                value: Model.config.prompt_layout || "omarchy"
+                value: root.cfgLayout
                 options: ["omarchy", "minimal", "powerline", "classic", "pure", "dense"]
-                onChanged: function(val) { Model.setConfig("prompt.layout", val) }
+                onChanged: function(val) { root.setConfigValue("prompt.layout", val) }
             }
 
             ControlRow {
                 label: "Theme"
-                value: Model.config.theme_source || "omarchy"
+                value: root.cfgThemeSource
                 options: ["omarchy", "custom", "hybrid", "terminal"]
-                onChanged: function(val) { Model.setConfig("theme.source", val) }
+                onChanged: function(val) { root.setConfigValue("theme.source", val) }
             }
 
             ControlRow {
                 label: "Lines"
-                value: Model.config.prompt_newline ? "Two-line" : "One-line"
+                value: root.cfgNewline ? "Two-line" : "One-line"
                 options: ["Two-line", "One-line"]
-                onChanged: function(val) { Model.setConfig("prompt.newline", val === "Two-line") }
+                onChanged: function(val) { root.setConfigValue("prompt.newline", val === "Two-line") }
             }
 
             ControlRow {
                 label: "Transient"
-                value: Model.config.prompt_transient ? "On" : "Off"
+                value: root.cfgTransient ? "On" : "Off"
                 options: ["On", "Off"]
-                onChanged: function(val) { Model.setConfig("prompt.transient", val === "On") }
+                onChanged: function(val) { root.setConfigValue("prompt.transient", val === "On") }
             }
 
             ControlRow {
                 label: "OS Icon"
-                value: Model.config.os_icon || "arch"
+                value: root.cfgOsIcon
                 options: ["arch", "linux", "omarchy", "none"]
-                onChanged: function(val) { Model.setConfig("segments.os.icon", val) }
+                onChanged: function(val) { root.setConfigValue("segments.os.icon", val) }
             }
         }
     }
+
+    // ── Tab: Context ───────────────────────────────────────────────────────
 
     Component {
         id: contextTab
@@ -175,38 +386,40 @@ Panel {
 
             ControlRow {
                 label: "Git"
-                value: Model.config.git_mode || "adaptive"
+                value: root.cfgGitMode
                 options: ["adaptive", "compact", "expanded", "hidden"]
-                onChanged: function(val) { Model.setConfig("git.mode", val) }
+                onChanged: function(val) { root.setConfigValue("git.mode", val) }
             }
 
             ControlRow {
                 label: "Duration"
-                value: (Model.config.cmd_duration_ms || 1500) + "ms"
+                value: root.cfgCmdDurationMs + "ms"
                 options: ["500ms", "1000ms", "1500ms", "3000ms", "5000ms"]
                 onChanged: function(val) {
                     var ms = parseInt(val)
-                    Model.setConfig("segments.command_duration.show_above_ms", ms)
+                    root.setConfigValue("segments.command_duration.show_above_ms", ms)
                 }
             }
 
             ControlRow {
                 label: "SSH"
-                value: Model.config.ssh_show || "auto"
+                value: root.cfgSshShow
                 options: ["auto", "always", "never"]
-                onChanged: function(val) { Model.setConfig("segments.ssh.show", val) }
+                onChanged: function(val) { root.setConfigValue("segments.ssh.show", val) }
             }
 
             ControlRow {
                 label: "Exit Status"
-                value: Model.config.exit_signal_names ? "Signal names" : "Codes only"
+                value: root.cfgExitSignalNames ? "Signal names" : "Codes only"
                 options: ["Signal names", "Codes only"]
                 onChanged: function(val) {
-                    Model.setConfig("segments.exit_status.show_signal_name", val === "Signal names")
+                    root.setConfigValue("segments.exit_status.show_signal_name", val === "Signal names")
                 }
             }
         }
     }
+
+    // ── Tab: Shell ─────────────────────────────────────────────────────────
 
     Component {
         id: shellTab
@@ -222,13 +435,15 @@ Panel {
                 width: parent.width
             }
 
-            StatusRow { label: "ble.sh"; status: Model.daemon.blesh_status || "checking..." }
-            StatusRow { label: "Atuin"; status: Model.daemon.atuin_status || "checking..." }
-            StatusRow { label: "Mise"; status: Model.daemon.mise_status || "checking..." }
-            StatusRow { label: "Zoxide"; status: Model.daemon.zoxide_status || "checking..." }
-            StatusRow { label: "fzf"; status: Model.daemon.fzf_status || "checking..." }
+            StatusRow { label: "ble.sh"; status: root.bleshStatus }
+            StatusRow { label: "Atuin"; status: root.atuinStatus }
+            StatusRow { label: "Mise"; status: root.miseStatus }
+            StatusRow { label: "Zoxide"; status: root.zoxideStatus }
+            StatusRow { label: "fzf"; status: root.fzfStatus }
         }
     }
+
+    // ── Tab: Advanced ──────────────────────────────────────────────────────
 
     Component {
         id: advancedTab
@@ -238,33 +453,40 @@ Panel {
             ActionButton {
                 label: "Open Config File"
                 onClicked: {
-                    var configPath = Model.configPath()
-                    root.bar.run("${EDITOR:-nano} " + configPath)
+                    editorLauncher.command = ["sh", "-c",
+                        "${EDITOR:-nano} '" + root._configPath + "'"]
+                    editorLauncher.startDetached()
                 }
             }
 
             ActionButton {
                 label: "Run Doctor"
-                onClicked: root.bar.run("omarchy10k doctor")
+                onClicked: doctorRunner.exec(["omarchy10k", "doctor"])
             }
 
             ActionButton {
                 label: "Reload Config"
-                onClicked: Model.reloadDaemon()
+                onClicked: {
+                    root.loadConfig()
+                    root.sendDaemonCommand("reload_config")
+                }
             }
 
             ActionButton {
                 label: "Reset to Defaults"
                 dangerous: true
-                onClicked: Model.resetConfig()
+                onClicked: {
+                    resetProc.exec(["sh", "-c",
+                        "cp '" + root._configPath + "' '" + root._configPath + ".bak' 2>/dev/null; " +
+                        "rm -f '" + root._configPath + "'"])
+                }
             }
 
-            // Daemon status
             Rectangle {
                 width: parent.width
                 height: daemonInfo.implicitHeight + Style.space(12)
                 radius: Style.space(4)
-                color: Color.darker_background || "#0e0e14"
+                color: Qt.darker(Color.background || "#1a1b26", 1.3)
 
                 Column {
                     id: daemonInfo
@@ -273,19 +495,21 @@ Panel {
                     spacing: Style.space(4)
 
                     Text {
-                        text: "Daemon: " + (Model.daemon.status || "unknown")
-                        color: Color.green || "#9ece6a"
+                        text: "Daemon: " + root.daemonStatus
+                        color: root.daemonStatus === "running"
+                            ? (Color.green || "#9ece6a")
+                            : (Color.red || "#f7768e")
                         font.family: root.bar ? root.bar.fontFamily : Style.font.family
                         font.pixelSize: Style.font.caption
                     }
                     Text {
-                        text: "PID: " + (Model.daemon.pid || "—")
+                        text: "PID: " + (root.daemonPid || "\u2014")
                         color: Color.muted || "#414868"
                         font.family: root.bar ? root.bar.fontFamily : Style.font.family
                         font.pixelSize: Style.font.caption
                     }
                     Text {
-                        text: "Version: " + (Model.daemon.version || "—")
+                        text: "Version: " + (root.daemonVersion || "\u2014")
                         color: Color.muted || "#414868"
                         font.family: root.bar ? root.bar.fontFamily : Style.font.family
                         font.pixelSize: Style.font.caption
@@ -295,7 +519,19 @@ Panel {
         }
     }
 
-    // ── Reusable Components ──────────────────────────────────────────────
+    // ── Reset Process ──────────────────────────────────────────────────────
+
+    Process {
+        id: resetProc
+        onRunningChanged: {
+            if (!running) {
+                root.loadConfig()
+                root.sendDaemonCommand("reload_config")
+            }
+        }
+    }
+
+    // ── Reusable Components ────────────────────────────────────────────────
 
     component ControlRow: Row {
         property string label
@@ -365,7 +601,7 @@ Panel {
         }
         Text {
             text: status
-            color: status.startsWith("✓")
+            color: status.indexOf("\u2713") >= 0
                 ? (Color.green || "#9ece6a")
                 : (Color.muted || "#414868")
             font.family: root.bar ? root.bar.fontFamily : Style.font.family

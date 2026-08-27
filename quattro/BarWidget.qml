@@ -56,7 +56,7 @@ BarWidget {
         id: button
         anchors.fill: parent
         bar: root.bar
-        text: ""
+        text: "\u276f"
         tooltipText: "Omarchy10k Control Center"
         onPressed: function(buttonCode) {
             if (buttonCode === Qt.LeftButton) root.toggle()

@@ -1,0 +1,39 @@
+---
+description: Update the project wiki after making code changes to Omarchy10k
+globs: "**/*.rs,**/*.bash,**/*.qml,**/*.js,**/*.toml,**/*.sh"
+alwaysApply: false
+---
+
+# Wiki Maintenance Protocol
+
+After implementing or modifying Omarchy10k code, update the relevant wiki pages in `docs/wiki/` to keep documentation in sync.
+
+## Change-to-Page Mapping
+
+| What changed | Update these wiki pages |
+|--------------|------------------------|
+| Daemon module (any `.rs` in `crates/omarchy10kd/`) | `daemon.md`, possibly `architecture.md` |
+| New or changed segment | `daemon.md` (segments section), `architecture.md` (segment table) |
+| Config key added/changed/removed | `config.md` (add row), `daemon.md` (implementation status) |
+| Protocol command added/changed | `protocol.md`, `daemon.md` (server section) |
+| CLI subcommand added/changed | `cli.md` |
+| Bash adapter logic | `bash-adapter.md` |
+| Quattro plugin QML/JS | `quattro.md` |
+| Theme system changes | `theme.md` |
+| New environment variable | `glossary.md` (env vars table), relevant component page |
+| New file path dependency | `glossary.md` (file paths table) |
+| Dependency added/removed | `architecture.md` (dependency tables) |
+| Repository structure change | `INDEX.md` (repo layout) |
+
+## What to Update
+
+1. **Add new items** — New config keys, commands, segments, environment variables, etc.
+2. **Mark implementation status** — Update "Implemented" columns in `config.md` and `daemon.md` when stubbed features get implemented.
+3. **Fix known issues** — If you fix a documented known issue (e.g., the `reload_theme` override bug), remove it from the wiki.
+4. **Update diagrams** — If data flows change, update the ASCII diagrams in `architecture.md` and `protocol.md`.
+
+## What NOT to Update
+
+- Don't rewrite sections you didn't change
+- Don't add speculative/planned features — only document what exists in code
+- Don't duplicate content across pages — link to the canonical page instead

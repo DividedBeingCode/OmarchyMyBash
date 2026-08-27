@@ -1,66 +1,161 @@
-// Omarchy10k Control Center — State Model
-// Manages config reads/writes and daemon communication
-
+// Omarchy10k Control Center — Pure Helper Library
+// Stateless utilities for TOML parsing, serialization, and daemon protocol.
+// All mutable state lives in Panel.qml as reactive QML properties.
 .pragma library
 
-var config = {
-    prompt_layout: "omarchy",
-    prompt_transient: true,
-    prompt_newline: true,
-    prompt_right: true,
-    theme_source: "omarchy",
-    git_mode: "adaptive",
-    os_icon: "arch",
-    cmd_duration_ms: 1500,
-    ssh_show: "auto",
-    exit_signal_names: true,
-};
-
-var daemon = {
-    status: "unknown",
-    pid: "",
-    version: "",
-    blesh_status: "checking...",
-    atuin_status: "checking...",
-    mise_status: "checking...",
-    zoxide_status: "checking...",
-    fzf_status: "checking...",
-};
-
-function configPath() {
-    var home = Qt.getenv("HOME") || "/tmp";
-    return home + "/.config/omarchy10k/config.toml";
+function configDir() {
+    return (Qt.getenv("HOME") || "/tmp") + "/.config/omarchy10k";
 }
 
-function loadConfig() {
-    // Read TOML config and populate the config object
-    // In production this would use a Process component to read the file
-    // For now, use defaults
-    try {
-        var path = configPath();
-        // QML doesn't have native file I/O — Panel.qml uses Process to read
-    } catch (e) {
-        console.warn("omarchy10k: failed to load config:", e);
+function configPath() {
+    return configDir() + "/config.toml";
+}
+
+function runtimeDir() {
+    return Qt.getenv("XDG_RUNTIME_DIR") || "/tmp";
+}
+
+function buildCommand(name) {
+    return JSON.stringify({ command: name }) + "\n";
+}
+
+// ── TOML Parser ─────────────────────────────────────────────────────────────
+// Handles the subset used by omarchy10k: sections, key = value with
+// string, bool, and integer types. Ignores comments and blank lines.
+
+function parseTOML(text) {
+    var result = {};
+    var section = "";
+    var lines = text.split("\n");
+
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].replace(/#.*$/, "").trim();
+        if (line.length === 0) continue;
+
+        var secMatch = line.match(/^\[([^\]]+)\]$/);
+        if (secMatch) {
+            section = secMatch[1];
+            continue;
+        }
+
+        var eqIdx = line.indexOf("=");
+        if (eqIdx < 0) continue;
+
+        var key = line.substring(0, eqIdx).trim();
+        var raw = line.substring(eqIdx + 1).trim();
+        var fullKey = section ? section + "." + key : key;
+
+        result[fullKey] = parseValue(raw);
+    }
+    return result;
+}
+
+function parseValue(raw) {
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+    if (/^-?\d+$/.test(raw)) return parseInt(raw, 10);
+    var strMatch = raw.match(/^"(.*)"$/);
+    if (strMatch) return strMatch[1];
+    return raw;
+}
+
+// ── TOML Builder ────────────────────────────────────────────────────────────
+// Serializes a flat dot-keyed object back into sectioned TOML.
+
+function buildTOML(flat) {
+    var sections = {};
+    var keys = Object.keys(flat);
+
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var lastDot = k.lastIndexOf(".");
+        var sec = lastDot > 0 ? k.substring(0, lastDot) : "";
+        var name = lastDot > 0 ? k.substring(lastDot + 1) : k;
+
+        if (!sections[sec]) sections[sec] = [];
+        sections[sec].push({ key: name, value: flat[k] });
+    }
+
+    var out = "";
+    var sectionNames = Object.keys(sections).sort();
+    for (var s = 0; s < sectionNames.length; s++) {
+        var sec = sectionNames[s];
+        if (sec.length > 0) {
+            if (out.length > 0) out += "\n";
+            out += "[" + sec + "]\n";
+        }
+        var entries = sections[sec];
+        for (var e = 0; e < entries.length; e++) {
+            out += entries[e].key + " = " + formatValue(entries[e].value) + "\n";
+        }
+    }
+    return out;
+}
+
+function formatValue(v) {
+    if (typeof v === "boolean") return v ? "true" : "false";
+    if (typeof v === "number") return v.toString();
+    return '"' + String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+}
+
+// ── Config ↔ QML Property Mapping ──────────────────────────────────────────
+// Maps between flat TOML keys and the QML property names on Panel.qml.
+
+var CONFIG_MAP = {
+    "prompt.layout":                      "cfgLayout",
+    "prompt.transient":                   "cfgTransient",
+    "prompt.newline":                     "cfgNewline",
+    "prompt.right_prompt":                "cfgRightPrompt",
+    "theme.source":                       "cfgThemeSource",
+    "git.mode":                           "cfgGitMode",
+    "git.enabled":                        "cfgGitEnabled",
+    "segments.os.icon":                   "cfgOsIcon",
+    "segments.exit_status.show_signal_name": "cfgExitSignalNames",
+    "segments.command_duration.show_above_ms": "cfgCmdDurationMs",
+    "segments.ssh.show":                  "cfgSshShow",
+};
+
+function applyConfig(flat, target) {
+    var keys = Object.keys(CONFIG_MAP);
+    for (var i = 0; i < keys.length; i++) {
+        var tomlKey = keys[i];
+        var prop = CONFIG_MAP[tomlKey];
+        if (flat.hasOwnProperty(tomlKey))
+            target[prop] = flat[tomlKey];
     }
 }
 
-function setConfig(key, value) {
-    // Write a single config value
-    // In production, this modifies the TOML file via a helper script
-    var cmd = "omarchy10k-config-set '" + key + "' '" + value + "'";
-    console.log("omarchy10k: setting", key, "=", value);
+function collectConfig(source) {
+    var flat = {};
+    var keys = Object.keys(CONFIG_MAP);
+    for (var i = 0; i < keys.length; i++) {
+        var tomlKey = keys[i];
+        var prop = CONFIG_MAP[tomlKey];
+        flat[tomlKey] = source[prop];
+    }
+    return flat;
 }
 
-function queryDaemon() {
-    // Query daemon status via socket
-    daemon.status = "checking...";
+// ── Daemon Response Parsing ────────────────────────────────────────────────
+
+function parseDaemonResponse(json) {
+    try { return JSON.parse(json); }
+    catch (e) { return { error: "invalid JSON: " + e }; }
 }
 
-function reloadDaemon() {
-    // Send reload command to daemon
-    console.log("omarchy10k: reloading daemon config");
-}
+// ── Tool Detection Parsing ─────────────────────────────────────────────────
 
-function resetConfig() {
-    console.log("omarchy10k: resetting to defaults");
+function parseToolOutput(text) {
+    var result = {};
+    var lines = text.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (line.length === 0) continue;
+        var eqIdx = line.indexOf("=");
+        if (eqIdx < 0) continue;
+        var name = line.substring(0, eqIdx);
+        var val = line.substring(eqIdx + 1);
+        result[name] = (val === "missing") ? null : val;
+    }
+    return result;
 }
