@@ -1,0 +1,56 @@
+[prompt]
+layout = "omarchy"         # omarchy | minimal | powerline | classic | pure | dense
+transient = true
+newline = true             # two-line prompt
+right_prompt = true
+
+[theme]
+source = "omarchy"         # omarchy | custom | hybrid | terminal
+# Custom palette overrides (only used when source = "custom" or "hybrid")
+# [theme.custom]
+# accent = "#bb9af7"
+# foreground = "#c0caf5"
+# muted = "#565f89"
+# background = "#1a1b26"
+# red = "#f7768e"
+# green = "#9ece6a"
+# yellow = "#e0af68"
+# blue = "#7aa2f7"
+
+[directory]
+strategy = "smart"          # smart | full | truncate
+max_length = 40
+repo_root_style = "bold"
+
+[git]
+enabled = true
+mode = "adaptive"           # hidden | compact | expanded | adaptive
+stale_display = true        # show stale (grey) state while refreshing
+max_threads = 4
+
+[segments.os]
+enabled = true
+icon = "arch"               # arch | linux | omarchy | custom | none
+
+[segments.exit_status]
+enabled = true
+show_signal_name = true     # show SIGKILL instead of 137
+
+[segments.command_duration]
+enabled = true
+show_above_ms = 1500
+
+[segments.jobs]
+enabled = true
+
+[segments.ssh]
+enabled = true
+show = "auto"               # auto | always | never
+
+[segments.character]
+success = "❯"
+error = "❯"
+
+[daemon]
+socket = "auto"
+log_level = "warn"          # trace | debug | info | warn | error

@@ -1,0 +1,128 @@
+mod prompt;
+mod doctor;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "omarchy10k", version, about = "Omarchy10k — reactive shell UI for Bash")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Render the prompt by querying the daemon
+    Prompt {
+        /// Current working directory
+        #[arg(long, default_value = ".")]
+        cwd: String,
+        /// Exit code of the last command
+        #[arg(long, default_value_t = 0)]
+        exit_code: i32,
+        /// Duration of the last command in milliseconds
+        #[arg(long, default_value_t = 0)]
+        cmd_duration_ms: u64,
+        /// Terminal width in columns
+        #[arg(long, default_value_t = 80)]
+        cols: u16,
+        /// Number of background jobs
+        #[arg(long, default_value_t = 0)]
+        jobs: u32,
+    },
+
+    /// Emit the Bash adapter script for sourcing in .bashrc
+    Init {
+        /// Shell to generate init script for
+        shell: String,
+    },
+
+    /// Run diagnostics and report system compatibility
+    Doctor,
+
+    /// Signal the daemon to reload its configuration
+    Reload,
+
+    /// Run a prompt render benchmark
+    Benchmark {
+        /// Number of iterations
+        #[arg(long, default_value_t = 100)]
+        iterations: u32,
+    },
+
+    /// Dump daemon state for debugging
+    Debug,
+
+    /// Extract the left prompt from a JSON daemon response (used internally)
+    #[command(name = "parse-prompt", hide = true)]
+    ParsePrompt,
+}
+
+fn socket_path() -> std::path::PathBuf {
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    let ppid = std::env::var("O10K_PARENT_PID")
+        .or_else(|_| std::env::var("PPID"))
+        .unwrap_or_else(|_| "0".into());
+    std::path::PathBuf::from(runtime_dir).join(format!("omarchy10k-{ppid}.sock"))
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Prompt {
+            cwd,
+            exit_code,
+            cmd_duration_ms,
+            cols,
+            jobs,
+        } => {
+            let cwd = if cwd == "." {
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| ".".into())
+            } else {
+                cwd
+            };
+            prompt::render(&socket_path(), &cwd, exit_code, cmd_duration_ms, cols, jobs).await?;
+        }
+
+        Commands::Init { shell } => {
+            if shell != "bash" {
+                eprintln!("omarchy10k: only 'bash' is supported (got '{shell}')");
+                std::process::exit(1);
+            }
+            print!("{}", include_str!("../../../shell/omarchy10k.bash"));
+        }
+
+        Commands::Doctor => {
+            doctor::run(&socket_path()).await?;
+        }
+
+        Commands::Reload => {
+            prompt::send_command(&socket_path(), "reload_config").await?;
+            println!("config reloaded");
+        }
+
+        Commands::Benchmark { iterations } => {
+            prompt::benchmark(&socket_path(), iterations).await?;
+        }
+
+        Commands::Debug => {
+            prompt::send_command(&socket_path(), "status").await?;
+        }
+
+        Commands::ParsePrompt => {
+            let mut input = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) {
+                if let Some(left) = v.get("left").and_then(|l| l.as_str()) {
+                    print!("{left}");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}

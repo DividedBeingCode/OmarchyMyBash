@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Omarchy theme-set hook for Omarchy10k
+# Installed to: ~/.config/omarchy/hooks/theme-set.d/omarchy10k
+# Called by Omarchy after a theme switch with theme name as $1
+
+SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+MSG='{"command":"reload_theme"}'
+
+for sock in "$SOCKET_DIR"/omarchy10k-*.sock; do
+    [ -S "$sock" ] || continue
+    if command -v socat &>/dev/null; then
+        echo "$MSG" | socat - UNIX-CONNECT:"$sock" 2>/dev/null || true
+    elif command -v python3 &>/dev/null; then
+        python3 -c "
+import socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(2)
+s.connect('$sock')
+s.sendall(b'$MSG\n')
+s.close()
+" 2>/dev/null || true
+    fi
+done

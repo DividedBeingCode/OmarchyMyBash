@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "community.omarchy10k",
+  "name": "Omarchy10k",
+  "version": "0.1.0",
+  "author": "Ian Johnston",
+  "license": "MIT",
+  "description": "Control Center for the Omarchy10k shell experience. Configure prompt style, theme, segments, and shell integrations from the Quattro bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omarchy10k",
+    "category": "Shell",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
