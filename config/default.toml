@@ -11,7 +11,8 @@ right_prompt = true
 [style]
 preset = "omarchy"         # omarchy | powerline | rainbow | framed | classic | lean | dense | slanted | minimal | pure
 
-# [style.separators]      # override preset separator (powerline|slanted|round|vertical|dot|diamond|none)
+# [style.separators]      # override preset separator (powerline|powerline_thin|slanted|round|vertical|dot|diamond|fade|fade_rev|trapezoid|trapezoid_rev|flame|dither|none)
+# shape = "auto"            # geometry family for BOTH sides at once (auto = preset default)
 # left = ""
 # right = ""
 
@@ -20,6 +21,7 @@ preset = "omarchy"         # omarchy | powerline | rainbow | framed | classic | 
 # left = true
 # right = true
 # gap_char = ""            # ─ | · | none
+# gap_gradient = "off"     # off | subtle | full — interpolate the gap fill (accent → complement)
 
 # [style.caps]            # edge decorations at prompt boundaries
 # left_start = ""
@@ -96,6 +98,17 @@ show_namespace = true
 [segments.time]
 enabled = false             # shows current time in prompt
 format = "%H:%M"            # %H:%M | %H:%M:%S | %I:%M %p
+
+[directory]                 # TOP-LEVEL table (not [segments.directory])
+strategy = "smart"          # smart | flat | compact
+max_length = 40
+repo_root_style = "bold"
+unique = false              # truncate_to_unique: shortest unambiguous path components
+anchors = [".git", "Cargo.toml", "package.json", "pyproject.toml", "go.mod", "Gemfile", "flake.nix", "README.md"]
+
+[segments.load]
+enabled = false             # braille load-average sparkline (▁▂▃▄▅▆▇█)
+width = 16
 
 [segments.battery]
 enabled = false             # shows battery level (laptop only)

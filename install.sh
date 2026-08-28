@@ -50,6 +50,13 @@ case "${1:-}" in
             warn "Init line not found in .bashrc"
         fi
 
+        rm -f "${HOME}/.config/omarchy/themed/"o10k-*.tpl && ok "Removed theme rice templates" || true
+        rm -f "${CONFIG_DIR}/tools.sh" && ok "Removed modern CLI layer" || true
+        for link in "${HOME}/.config/yazi/theme.toml" "${HOME}/.config/cava/config"; do
+            if [[ -L "$link" ]] && [[ "$(readlink "$link")" == *"/current/theme/o10k-"* ]]; then
+                rm -f "$link" && ok "Removed rice link: ${link}"
+            fi
+        done
         info "Done. Open a new terminal to complete removal."
         exit 0
         ;;
@@ -79,6 +86,29 @@ if ! command -v git &>/dev/null; then
         fail "git missing. Install it with:  omarchy-pkg-add git  then re-run this installer."
     else
         fail "git not found. Install git and re-run this installer."
+    fi
+fi
+
+# Step 1b: Modern CLI tools (interactive replacements for Unix defaults).
+# All live in the official repos. Skippable with O10K_SKIP_TOOLS=1.
+if [[ "${O10K_SKIP_TOOLS:-0}" == "1" ]]; then
+    warn "Skipping modern CLI tools (O10K_SKIP_TOOLS=1)"
+else
+    info "Ensuring modern CLI tools are installed..."
+    TOOL_PKGS=(eza bat zoxide fzf btop fd ripgrep tldr dust duf procs yazi atuin)
+    missing=()
+    for pkg in "${TOOL_PKGS[@]}"; do
+        pacman -Q "$pkg" &>/dev/null || missing+=("$pkg")
+    done
+    if (( ${#missing[@]} == 0 )); then
+        ok "All modern CLI tools present"
+    else
+        if command -v omarchy-pkg-add &>/dev/null; then
+            omarchy-pkg-add "${missing[@]}" && ok "Installed: ${missing[*]}" \
+                || warn "Could not install some tools: ${missing[*]} (aliases for them are skipped at runtime)"
+        else
+            warn "omarchy-pkg-add not available; install manually: pacman -S --needed ${missing[*]}"
+        fi
     fi
 fi
 
@@ -222,6 +252,68 @@ if [[ -f "${SCRIPT_DIR}/templates/omarchy10k.toml.tpl" ]]; then
     ok "Template installed to ${TEMPLATE_DIR}"
 else
     warn "Theme template not found; skipping"
+fi
+
+# Step 7: Rice layer — theme-reacted configs for tools Omarchy does not
+# cover (fzf, eza, bat, less, lazygit, yazi, cava). Templates render on
+# every theme switch into ~/.local/state/omarchy/current/theme/.
+
+RICE_TEMPLATE_DIR="${HOME}/.config/omarchy/themed"
+RICE_STATE_DIR="${HOME}/.local/state/omarchy/current/theme"
+
+if ls "${SCRIPT_DIR}/templates/themed/"o10k-*.tpl &>/dev/null; then
+    info "Installing rice templates (theme-reacted tool configs)..."
+    mkdir -p "$RICE_TEMPLATE_DIR"
+    cp "${SCRIPT_DIR}/templates/themed/"o10k-*.tpl "$RICE_TEMPLATE_DIR/"
+    ok "Templates installed to ${RICE_TEMPLATE_DIR}"
+
+    # Render immediately so the symlinks below are never dangling.
+    if command -v omarchy-theme-refresh &>/dev/null; then
+        omarchy-theme-refresh >/dev/null 2>&1 \
+            && ok "Rendered rice configs for the active theme" \
+            || warn "omarchy-theme-refresh failed — rice configs will appear on the next theme switch"
+    else
+        warn "omarchy-theme-refresh not found — rice configs will appear on the next theme switch"
+    fi
+
+    # Symlink tool config paths at the rendered files. Never clobber a
+    # user file or a foreign symlink.
+    o10k_link_rice() {
+        local link="$1" target="$2"
+        if [[ ! -f "$target" ]]; then
+            warn "Rendered file missing, skipping link: ${target}"
+            return
+        fi
+        mkdir -p "$(dirname "$link")"
+        if [[ -L "$link" ]]; then
+            local cur
+            cur="$(readlink "$link")"
+            if [[ "$cur" == "$target" ]]; then
+                return
+            elif [[ "$cur" == *"/current/theme/"* ]]; then
+                ln -sfn "$target" "$link" || warn "Could not relink ${link}"
+            else
+                warn "Not linking ${link} — foreign symlink"
+            fi
+        elif [[ -e "$link" ]]; then
+            warn "Not linking ${link} — regular file exists"
+        else
+            ln -s "$target" "$link" && ok "Linked ${link}"
+        fi
+    }
+
+    o10k_link_rice "${HOME}/.config/yazi/theme.toml" "${RICE_STATE_DIR}/o10k-yazi-theme.toml"
+    o10k_link_rice "${HOME}/.config/cava/config"     "${RICE_STATE_DIR}/o10k-cava.config"
+else
+    warn "No rice templates found; skipping"
+fi
+
+# Modern CLI layer: aliases + tool inits, sourced by the Bash adapter.
+if [[ -f "${SCRIPT_DIR}/config/tools.sh" ]]; then
+    mkdir -p "$CONFIG_DIR"
+    cp "${SCRIPT_DIR}/config/tools.sh" "${CONFIG_DIR}/tools.sh"
+    chmod +x "${CONFIG_DIR}/tools.sh"
+    ok "Modern CLI layer installed to ${CONFIG_DIR}/tools.sh"
 fi
 
 # Summary

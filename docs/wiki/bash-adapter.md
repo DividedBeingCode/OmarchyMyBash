@@ -554,3 +554,15 @@ The following issues identified by the [Bug Audit](bug-audit.md) have been fixed
 | [#18 OSC 777 injection](bug-audit.md#18-osc-777-notification-text-is-injected-unescaped) | Command text is sanitized (all C0 control characters and `;` stripped) before OSC 777 interpolation | Low |
 | [#20a kill -0 PID 0](bug-audit.md#20-smaller-confirmed-defects) | Restart logic guards PID > 0 before `kill -0` | Low |
 | [#20f Fork-free jobs](bug-audit.md#20-smaller-confirmed-defects) | `jobs -p` output collected via `mapfile` + array length instead of `$(wc -l)` | Low |
+
+## CSI-u Shift+Enter shim
+
+Ghostty users may set `keybind = shift+enter=csi:13;2u` (lets TUIs distinguish Shift+Enter). At a bash readline prompt that sequence is unparseable and leaks as literal `;2u`. The adapter binds it to `accept-line` (interactive shells only, harmless no-op if the terminal never sends it). Remember the adapter is embedded in the `omarchy10k` binary via `include_str!` — rebuild the CLI after editing `shell/omarchy10k.bash`.
+
+## Theme Env Re-Source
+
+The adapter keeps running shells synchronized with theme switches. `__o10k_source_theme_env` is registered as a precmd hook and re-sources `~/.local/state/omarchy/current/theme/o10k-env.sh` (fzf/eza/less/bat/lazygit colors, rendered by the Omarchy theme engine — see [Theme Integration](theme.md)) whenever its mtime exceeds the stamp at `~/.cache/omarchy10k/env.stamp`. Cost when unchanged: one `stat` per prompt. A truncated source (racing the theme directory swap) skips the stamp so the next prompt retries. See the [Theme Integration rice layer](theme.md#rice-layer-theme-reactive-tool-configs) for the template pipeline.
+
+## Modern CLI Layer
+
+After hook installation the adapter sources `~/.config/omarchy10k/tools.sh` (installed by `install.sh` from `config/tools.sh` in the repo). It upgrades interactive Unix defaults with modern replacements that take on the standard command names — `ls`→eza, `cat`→bat (plus themed `MANPAGER`), `grep`→rg, `top`→btop, `du`→dust, `df`→duf, `ps`→procs, `cd`→zoxide (`--cmd cd`), plus atuin (Ctrl-R history, up-arrow untouched), fzf key bindings (`fzf --bash`), and the `y` yazi wrapper. Guards: every block checks `command -v` first, so missing tools degrade silently; the whole layer is skipped with `O10K_NO_TOOLS=1`; aliases never affect scripts (interactive shells only). Underlying packages are ensured by `install.sh` (skippable with `O10K_SKIP_TOOLS=1`).

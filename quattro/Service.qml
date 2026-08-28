@@ -50,6 +50,11 @@ Item {
         return JSON.stringify({ ok: false, error: msg })
     }
 
+    function openGallery() {
+        if (service.shell && typeof service.shell.summon === "function")
+            service.shell.summon("community.omarchy10k", JSON.stringify({ page: "gallery" }))
+    }
+
     function _nextId(prefix) {
         service._reqSeq++
         return prefix + "-" + service._reqSeq
@@ -62,7 +67,8 @@ Item {
         serviceSocketFinder.exec(["sh", "-c",
             "for f in '" + service.runtimeDir + "'/omarchy10k-*.sock; do " +
             "[[ -e \"$f\" ]] || continue; p=${f##*-}; p=${p%.sock}; " +
-            "kill -0 \"$p\" 2>/dev/null && timeout 1 socat -u OPEN:/dev/null UNIX-CONNECT:\"$f\" 2>/dev/null && echo \"$f\"; done"])
+            "case \"$p\" in *[!0-9]*) ;; *) kill -0 \"$p\" 2>/dev/null || continue ;; esac; " +
+            "timeout 1 socat -u OPEN:/dev/null UNIX-CONNECT:\"$f\" 2>/dev/null && echo \"$f\"; done"])
     }
 
     // ── Session bookkeeping ────────────────────────────────────────────────
@@ -246,6 +252,16 @@ Item {
                     return service._err("config not loaded yet; try again in a moment")
                 return service._configSet({ "prompt": { "transient": !cur } })
             } catch (e) { return service._err("toggleTransient failed: " + e) }
+        }
+
+        function gallery(): string {
+            try {
+                if (service.shell && typeof service.shell.summon === "function")
+                    return service.shell.summon("community.omarchy10k", JSON.stringify({ page: "gallery" }))
+                        ? "ok"
+                        : service._err("host refused summon (plugin enabled?)")
+                return service._err("shell host unavailable")
+            } catch (e) { return service._err("gallery failed: " + e) }
         }
 
         function picker(): string {

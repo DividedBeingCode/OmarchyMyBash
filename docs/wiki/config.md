@@ -23,6 +23,7 @@ Controls prompt structure and behavior.
 | `layout` | string | `"omarchy"` | `omarchy`, `minimal`, `powerline`, `classic`, `pure`, `dense` | Yes (legacy) | Legacy preset key. Mapped to `style.preset` when `style.preset` is at its default. Prefer `[style] preset` for new configs. |
 | `transient` | bool | `true` | — | Yes | Replace previous prompts with a minimal character after command execution. Glyph configurable via `segments.character.transient`. Requires ble.sh for full effect. |
 | `newline` | bool | `true` | — | Yes | Two-line prompt (segments on line 1, character on line 2) vs one-line. |
+| `blank_line` | bool | `true` | — | Yes | One blank line before each prompt (p10k PROMPT_ADD_NEWLINE). Panel: Frame & Layout → Spacer. |
 | `right_prompt` | bool | `true` | — | Yes | Enable right-aligned prompt. Right prompt populated with git branch and command duration. Disabled when frame mode is active (right content moves inline). |
 
 ## `[style]`
@@ -31,7 +32,7 @@ Curated visual preset system. Controls separators, frames/ornaments, caps, and s
 
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
-| `preset` | string | `"omarchy"` | `omarchy`, `powerline`, `rainbow`, `framed`, `classic`, `lean`, `dense`, `slanted`, `minimal`, `pure` | Yes | Visual style preset. Each preset defines separator glyphs, frame mode, gap fill, and segment ordering. |
+| `preset` | string | `"rainbow"` | `omarchy`, `powerline`, `rainbow`, `framed`, `classic`, `lean`, `dense`, `slanted`, `minimal`, `pure` | Yes | Visual style preset. Each preset defines separator glyphs, frame mode, gap fill, and segment ordering. |
 
 ### Style Presets
 
@@ -449,3 +450,14 @@ Reload can also be triggered via:
 | `terminal.title.format` | No | — |
 | `terminal.progress.enabled` | No | — |
 | `daemon.*` | No | — |
+
+## Wave 1 — Prompt Visual Depth Keys (v0.4+)
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `[directory] unique` | bool | `false` | truncate_to_unique: each component shortens to the fewest characters unambiguous among its siblings; anchor-file dirs and the last component stay full; 30s sibling cache per cwd |
+| `[directory] anchors` | string[] | `[".git", "Cargo.toml", "package.json", "pyproject.toml", "go.mod", "Gemfile", "flake.nix", "README.md"]` | a directory containing any anchor file is never shortened |
+| `[style.separators] shape` | string | `"auto"` | geometry family for both sides at once: `powerline`, `powerline_thin`, `slanted`, `round`, `trapezoid`, `trapezoid_rev`, `flame`, `dither`, `vertical`, `fade`, `fade_rev`, `dot`, `diamond`, `none`. Precedence: explicit left/right > shape > preset |
+| `[style.frame] gap_gradient` | string | `"off"` | `subtle` = accent fading into background; `full` = accent → complement (blue≥red accents → magenta, else cyan). Per-8-cell truecolor blocks; needs `gap_char` + frame |
+| `[segments.load] enabled` | bool | `false` | braille load-average sparkline ▁▂▃▄▅▆▇█ from a 16-slot per-render ring |
+| `[segments.load] width` | int | `16` | sparkline sample width |

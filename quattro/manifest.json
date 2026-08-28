@@ -6,7 +6,11 @@
   "author": "Ian Johnston",
   "license": "MIT",
   "description": "Control Center for the Omarchy10k shell experience. Configure prompt style, theme, segments, and shell integrations from the Quattro bar.",
-  "kinds": ["bar-widget", "service", "overlay"],
+  "kinds": [
+    "bar-widget",
+    "service",
+    "overlay"
+  ],
   "entryPoints": {
     "barWidget": "BarWidget.qml",
     "service": "Service.qml",

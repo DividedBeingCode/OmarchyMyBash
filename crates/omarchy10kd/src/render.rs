@@ -2,7 +2,8 @@ use crate::config::Config;
 use crate::git::GitStatus;
 use crate::layout::{LayoutEngine, ResolvedSegment};
 use crate::segments::{self, SegmentContext, character};
-use crate::style::{GlyphCatalog, ResolvedStyle, StyleResolver};
+use crate::style::{GapGradient, GlyphCatalog, ResolvedStyle, StyleResolver};
+use crate::theme::AnsiColor;
 use crate::terminal::TermCaps;
 use crate::theme::ThemePalette;
 use unicode_width::UnicodeWidthStr;
@@ -161,32 +162,62 @@ impl<'a> PromptRenderer<'a> {
         // Filter segments by style preset's allowed list
         let allowed = resolved_style.segment_order;
         segments.retain(|s| allowed.contains(&s.name));
+        let use_newline = self.config.prompt.newline && !resolved_style.force_single_line;
 
         // True powerline (v0.4 1.1): fill each segment with a background
         // color. Powerline uses the segment's own fg color as bg (fg flips to
-        // the theme background for contrast); rainbow rotates through the
-        // accent/red/green/yellow/blue palette. Layout width math is
-        // unchanged — separators are already counted by LayoutEngine.
+        // the theme background for contrast); rainbow uses p10k's semantic
+        // fills — dir blue, git green (yellow when dirty), duration dark with
+        // yellow text, jobs cyan, time white — with per-fill contrast text
+        // instead of one global dark fg. Layout width math is unchanged —
+        // separators are already counted by LayoutEngine.
         if resolved_style.filled {
-            let rainbow_colors = [
-                &self.palette.accent,
-                &self.palette.red,
-                &self.palette.green,
-                &self.palette.yellow,
-                &self.palette.blue,
-            ];
+            let ramp_len = segments.len();
             for (i, seg) in segments.iter_mut().enumerate() {
-                seg.bg = Some(if resolved_style.rainbow {
-                    rainbow_colors[i % rainbow_colors.len()].bg_escape()
+                // p10k pads every segment one space per side inside its
+                // colored fill (LEFT/RIGHT_{LEFT,RIGHT}_WHITESPACE) — without
+                // it text sits on the block edges. Applied before the layout
+                // pass so width math sees the padded content.
+                seg.content = format!(" {} ", seg.content);
+                if let Some(cc) = &seg.compact_content {
+                    seg.compact_content = Some(format!(" {} ", cc));
+                }
+                if resolved_style.gradient_ramp {
+                    // Wave 1 gradient preset: stepped accent→magenta→cyan
+                    // ramp across the segment run, dark text for contrast.
+                    let t = if ramp_len <= 1 {
+                        0.0
+                    } else {
+                        i as f32 / (ramp_len - 1) as f32
+                    };
+                    seg.bg = Some(self.palette.ramp_color(t).bg_escape());
+                    seg.fg = self.palette.background.fg_escape();
+                } else if resolved_style.rainbow {
+                    let (bg, fg) = semantic_fill(&self.palette, seg.name, &ctx);
+                    seg.bg = Some(bg.bg_escape());
+                    seg.fg = fg.fg_escape();
                 } else {
-                    seg.fg.replace("[38;2;", "[48;2;")
-                });
-                seg.fg = self.palette.background.fg_escape();
+                    seg.bg = Some(seg.fg.replace("[38;2;", "[48;2;"));
+                    seg.fg = self.palette.background.fg_escape();
+                }
             }
         }
 
         let sep_display_width = UnicodeWidthStr::width(resolved_style.left_separator.as_str()) as u16;
-        let layout = LayoutEngine::new_with_separator_width(cols, sep_display_width);
+        // Frame-aware layout budget: the frame glyphs, boundary spaces and a
+        // minimum gap live OUTSIDE the segments — reserve them, or the right
+        // cap wraps past the terminal edge (p10k budgets the frame first).
+        let frame_reserve: u16 = if resolved_style.frame.enabled && use_newline {
+            (resolved_style.frame.left as u16) * 2
+                + (resolved_style.frame.right as u16) * 2
+                + 2
+        } else {
+            0
+        };
+        let layout = LayoutEngine::new_with_separator_width(
+            cols.saturating_sub(frame_reserve),
+            sep_display_width,
+        );
         let resolved = layout.resolve(&segments);
 
         let line1 = self.format_line1(&resolved, &resolved_style);
@@ -212,7 +243,6 @@ impl<'a> PromptRenderer<'a> {
             String::new()
         };
 
-        let use_newline = self.config.prompt.newline && !resolved_style.force_single_line;
 
         let left_segment_names: std::collections::HashSet<&str> = resolved
             .iter()
@@ -236,9 +266,18 @@ impl<'a> PromptRenderer<'a> {
                 cols, &resolved_style, prompt_start, prompt_end,
             )
         } else if use_newline {
-            format!("{title_escape}{prompt_start}{line1}\n{line2} {prompt_end}")
+            // Cursor sits directly after the prompt char, p10k-style.
+            format!("{title_escape}{prompt_start}{line1}\n{line2}{prompt_end}")
         } else {
-            format!("{title_escape}{prompt_start}{line1} {line2} {prompt_end}")
+            format!("{title_escape}{prompt_start}{line1} {line2}{prompt_end}")
+        };
+
+        // p10k PROMPT_ADD_NEWLINE: one blank line before each prompt so
+        // consecutive commands breathe.
+        let left = if self.config.prompt.blank_line {
+            format!("\n{left}")
+        } else {
+            left
         };
 
         let transient = if self.config.prompt.transient {
@@ -288,16 +327,17 @@ impl<'a> PromptRenderer<'a> {
         let top_left = style.frame.top_left;
         let bottom_left = style.frame.bottom_left;
         let top_right = style.frame.top_right;
-        let bottom_right = style.frame.bottom_right;
 
+        // p10k renders the frame glyphs with no padding — ╰─❯ sits tight, and
+        // the vertical bars align on every line.
         let frame_prefix = if style.frame.left {
-            format!("{frame_fg}{top_left}{reset} ")
+            format!("{frame_fg}{top_left}{reset}")
         } else {
             String::new()
         };
 
         let bottom_prefix = if style.frame.left {
-            format!("{frame_fg}{bottom_left}{reset} ")
+            format!("{frame_fg}{bottom_left}{reset}")
         } else {
             String::new()
         };
@@ -307,22 +347,23 @@ impl<'a> PromptRenderer<'a> {
             let right_text = right_content.unwrap_or("");
             let right_visible = strip_ansi_width(right_text);
 
-            let frame_overhead = if style.frame.left { 3 } else { 0 }
-                + if style.frame.right { 3 } else { 0 };
-            let content_width = left_visible + right_visible;
-            let gap_width = (cols as usize).saturating_sub(content_width + frame_overhead + 1);
+            // Fixed composition: prefix(2) + boundary space(1) + suffix(2)
+            // + one trailing indent column. The right prompt adds its width
+            // plus a separating space only when it exists — reserving width
+            // for an absent right prompt shifted the top cap one column
+            // left of the bottom cap.
+            let right_width = if right_text.is_empty() { 0 } else { right_visible + 1 };
+            let gap_width = (cols as usize)
+                .saturating_sub(6 + left_visible + right_width);
 
             let gap_str: String = std::iter::repeat(gap_char).take(gap_width).collect();
-            let gap_styled = format!("{frame_fg}{gap_str}{reset}");
-
-            let right_frame = if style.frame.right {
-                format!(" {frame_fg}{top_right}{reset}")
-            } else {
-                String::new()
+            let gap_styled = match style.gap_gradient {
+                GapGradient::Off => format!("{frame_fg}{gap_str}{reset}"),
+                mode => self.gradient_gap(&gap_str, mode),
             };
 
-            let bottom_frame = if style.frame.right {
-                format!("{frame_fg}{bottom_right}{reset}")
+            let right_frame = if style.frame.right {
+                format!("{frame_fg}{top_right}{reset}")
             } else {
                 String::new()
             };
@@ -333,8 +374,12 @@ impl<'a> PromptRenderer<'a> {
                 String::new()
             };
 
+            // The typing line carries only the ╰─ prefix and the prompt
+            // char — no bottom border, no gap fill. A full-width bottom
+            // border puts the cursor past the terminal edge after PS1,
+            // wrapping typed input onto the next line.
             format!(
-                "{title_escape}{prompt_start}{frame_prefix}{line1} {gap_styled}{right_part}{right_frame}\n{bottom_prefix}{line2} {bottom_frame}{prompt_end}"
+                "{title_escape}{prompt_start}{frame_prefix}{line1} {gap_styled}{right_part}{right_frame}\n{bottom_prefix}{line2}{prompt_end}"
             )
         } else {
             let right_part = match right_content {
@@ -342,16 +387,33 @@ impl<'a> PromptRenderer<'a> {
                 _ => String::new(),
             };
 
-            let bottom_frame = if style.frame.right {
-                format!("{frame_fg}{bottom_right}{reset}")
-            } else {
-                String::new()
-            };
-
             format!(
-                "{title_escape}{prompt_start}{frame_prefix}{line1}{right_part}\n{bottom_prefix}{line2} {bottom_frame}{prompt_end}"
+                "{title_escape}{prompt_start}{frame_prefix}{line1}{right_part}\n{bottom_prefix}{line2}{prompt_end}"
             )
         }
+    }
+
+    /// Wave 1: interpolate the gap fill between palette-derived endpoints,
+    /// one truecolor SGR per 8-cell block. Gaps under 8 cells render solid
+    /// accent. Foreground-only — frame budget math is untouched.
+    fn gradient_gap(&self, gap_str: &str, mode: GapGradient) -> String {
+        let width = gap_str.chars().count();
+        let accent = self.palette.accent.fg_escape();
+        if width < 8 {
+            return format!("{accent}{gap_str}{}", RESET);
+        }
+        let (a, b) = self.palette.gap_gradient_endpoints(mode);
+        let blocks = (width + 7) / 8;
+        let mut out = String::new();
+        for bi in 0..blocks {
+            let start = bi * 8;
+            let end = ((bi + 1) * 8).min(width);
+            let t = ((start + end) as f32 / 2.0) / width as f32;
+            out.push_str(&AnsiColor::lerp(&a, &b, t).fg_escape());
+            out.push_str(&gap_str.chars().skip(start).take(end - start).collect::<String>());
+        }
+        out.push_str(&RESET.to_string());
+        out
     }
 
     fn render_right(
@@ -633,6 +695,40 @@ fn gethostname_string() -> String {
 mod libc {
     unsafe extern "C" {
         pub fn gethostname(name: *mut std::ffi::c_char, len: usize) -> std::ffi::c_int;
+    }
+}
+
+/// p10k-rainbow semantic fills: (background, contrasting text color) per
+/// segment, mirroring p10k's config/p10k-rainbow.zsh — dir blue with
+/// near-white text, git green (yellow when dirty) with dark text, duration
+/// dark with yellow text, jobs cyan, time white with dark text.
+fn semantic_fill<'a>(
+    p: &'a ThemePalette,
+    name: &str,
+    ctx: &crate::segments::SegmentContext,
+) -> (&'a crate::theme::AnsiColor, &'a crate::theme::AnsiColor) {
+    match name {
+        "os" => (&p.muted, &p.bright_foreground),
+        "ssh" => (&p.yellow, &p.background),
+        "container" => (&p.cyan, &p.background),
+        "directory" => (&p.blue, &p.bright_foreground),
+        "git" => {
+            if ctx.git_status.is_dirty() {
+                (&p.yellow, &p.background)
+            } else {
+                (&p.green, &p.background)
+            }
+        }
+        "python_env" | "toolchain" | "nix" => (&p.orange, &p.background),
+        "ai" | "k8s" => (&p.magenta, &p.background),
+        "exit_status" => (&p.red, &p.background),
+        // Duration floats yellow text on the terminal background — p10k's
+        // quiet treatment (bg 0 / fg 3).
+        "command_duration" => (&p.background, &p.yellow),
+        "jobs" => (&p.cyan, &p.background),
+        "time" => (&p.bright_foreground, &p.background),
+        "battery" => (&p.orange, &p.background),
+        _ => (&p.accent, &p.background),
     }
 }
 

@@ -34,6 +34,30 @@ pub struct Config {
     pub terminal: TerminalConfig,
     #[serde(default)]
     pub daemon: DaemonConfig,
+    #[serde(default)]
+    pub looks: std::collections::BTreeMap<String, LookEntry>,
+}
+
+/// A user-defined Look: a named patch bundle plus a palette directive
+/// ("theme" | "keep" | curated palette key). See `crate::looks`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LookEntry {
+    pub label: String,
+    pub palette: Option<String>,
+    /// Raw patch tables (style / glyphs / frame / prompt) — expanded and
+    /// merged onto the config tree at apply time.
+    pub patch: toml::Table,
+}
+
+impl Default for LookEntry {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            palette: Some("keep".into()),
+            patch: toml::Table::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -51,7 +75,10 @@ pub struct StyleConfig {
 impl Default for StyleConfig {
     fn default() -> Self {
         Self {
-            preset: "omarchy".into(),
+            // p10k-style rainbow powerline is the signature look — colored
+            // segment fills, arrows, two-line prompt. Plain "omarchy" stays
+            // available as a gallery choice.
+            preset: "rainbow".into(),
             separators: SeparatorConfig::default(),
             frame: FrameConfig::default(),
             caps: CapsConfig::default(),
@@ -64,6 +91,9 @@ impl Default for StyleConfig {
 pub struct SeparatorConfig {
     pub left: Option<String>,
     pub right: Option<String>,
+    /// Geometry family override: "auto" (preset default) or a GlyphCatalog
+    /// separator key. A set shape drives both directions together.
+    pub shape: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -73,6 +103,8 @@ pub struct FrameConfig {
     pub left: Option<bool>,
     pub right: Option<bool>,
     pub gap_char: Option<String>,
+    /// Gap fill interpolation: off | subtle | full.
+    pub gap_gradient: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -90,6 +122,8 @@ pub struct PromptConfig {
     pub layout: String,
     pub transient: bool,
     pub newline: bool,
+    /// p10k PROMPT_ADD_NEWLINE — one blank line before each prompt.
+    pub blank_line: bool,
     pub right_prompt: bool,
 }
 
@@ -99,6 +133,7 @@ impl Default for PromptConfig {
             layout: "omarchy".into(),
             transient: true,
             newline: true,
+            blank_line: true,
             right_prompt: true,
         }
     }
@@ -130,6 +165,9 @@ pub struct CustomPalette {
     pub green: Option<String>,
     pub yellow: Option<String>,
     pub blue: Option<String>,
+    pub magenta: Option<String>,
+    pub cyan: Option<String>,
+    pub orange: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -138,6 +176,11 @@ pub struct DirectoryConfig {
     pub strategy: String,
     pub max_length: usize,
     pub repo_root_style: String,
+    /// truncate_to_unique: shorten each component to the fewest characters
+    /// that stay unambiguous among its siblings. Anchor-file directories
+    /// are never shortened.
+    pub unique: bool,
+    pub anchors: Vec<String>,
 }
 
 impl Default for DirectoryConfig {
@@ -146,6 +189,14 @@ impl Default for DirectoryConfig {
             strategy: "smart".into(),
             max_length: 40,
             repo_root_style: "bold".into(),
+            unique: false,
+            anchors: [
+                ".git", "Cargo.toml", "package.json", "pyproject.toml",
+                "go.mod", "Gemfile", "flake.nix", "README.md",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         }
     }
 }
@@ -194,6 +245,7 @@ pub struct SegmentsConfig {
     pub battery: BatteryConfig,
     pub ai: AiSegmentConfig,
     pub notification: NotificationConfig,
+    pub load: LoadConfig,
 }
 
 impl Default for SegmentsConfig {
@@ -214,6 +266,24 @@ impl Default for SegmentsConfig {
             battery: BatteryConfig::default(),
             ai: AiSegmentConfig::default(),
             notification: NotificationConfig::default(),
+            load: LoadConfig::default(),
+        }
+    }
+}
+
+/// Load-average sparkline segment (Wave 1).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LoadConfig {
+    pub enabled: bool,
+    pub width: usize,
+}
+
+impl Default for LoadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            width: 16,
         }
     }
 }
@@ -624,6 +694,7 @@ impl Default for Config {
             statusline: StatuslineConfig::default(),
             terminal: TerminalConfig::default(),
             daemon: DaemonConfig::default(),
+            looks: Default::default(),
         }
     }
 }

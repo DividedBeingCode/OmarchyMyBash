@@ -28,6 +28,20 @@ function buildConfigGet(id) {
     return JSON.stringify(msg) + "\n";
 }
 
+// Curated prompt palettes (terminal ricing classics). Each entry maps the
+// palette roles the daemon uses for semantic segment fills. Written to
+// [theme.custom] with source=hybrid so it layers over the Omarchy theme.
+var CURATED_PALETTES = {
+    "tokyo-night": { label: "Tokyo Night", accent: "#7aa2f7", red: "#f7768e", green: "#9ece6a", yellow: "#e0af68", blue: "#7aa2f7", magenta: "#bb9af7", cyan: "#7dcfff", orange: "#ff9e64", muted: "#414868", background: "#1a1b26", foreground: "#c0caf5" },
+    "catppuccin":  { label: "Catppuccin",  accent: "#89b4fa", red: "#f38ba8", green: "#a6e3a1", yellow: "#f9e2af", blue: "#89b4fa", magenta: "#cba6f7", cyan: "#94e2d5", orange: "#fab387", muted: "#6c7086", background: "#1e1e2e", foreground: "#cdd6f4" },
+    "gruvbox":     { label: "Gruvbox",     accent: "#83a598", red: "#fb4934", green: "#b8bb26", yellow: "#fabd2f", blue: "#83a598", magenta: "#d3869b", cyan: "#8ec07c", orange: "#fe8019", muted: "#928374", background: "#282828", foreground: "#ebdbb2" },
+    "nord":        { label: "Nord",        accent: "#88c0d0", red: "#bf616a", green: "#a3be8c", yellow: "#ebcb8b", blue: "#81a1c1", magenta: "#b48ead", cyan: "#8fbcbb", orange: "#d08770", muted: "#4c566a", background: "#2e3440", foreground: "#eceff4" },
+    "dracula":     { label: "Dracula",     accent: "#bd93f9", red: "#ff5555", green: "#50fa7b", yellow: "#f1fa8c", blue: "#8be9fd", magenta: "#ff79c6", cyan: "#8be9fd", orange: "#ffb86c", muted: "#6272a4", background: "#282a36", foreground: "#f8f8f2" },
+    "rose-pine":   { label: "Rosé Pine",   accent: "#c4a7e7", red: "#eb6f92", green: "#31748f", yellow: "#f6c177", blue: "#9ccfd8", magenta: "#ebbcba", cyan: "#9ccfd8", orange: "#f6c177", muted: "#6e6a86", background: "#191724", foreground: "#e0def4" },
+    "everforest":  { label: "Everforest",  accent: "#a7c080", red: "#e67e80", green: "#a7c080", yellow: "#dbbc7f", blue: "#7fbbb3", magenta: "#d699b6", cyan: "#83c092", orange: "#e69875", muted: "#859289", background: "#2d353b", foreground: "#d3c6aa" },
+    "kanagawa":    { label: "Kanagawa",    accent: "#7e9cd8", red: "#ff5d62", green: "#98bb6c", yellow: "#ffa066", blue: "#7e9cd8", magenta: "#957fb8", cyan: "#6a9589", orange: "#ffa066", muted: "#727169", background: "#1f1f28", foreground: "#dcd7ba" }
+};
+
 function buildConfigSet(patch, id) {
     var msg = { type: "config", command: "set", config: patch };
     if (id) msg.id = id;
@@ -284,6 +298,8 @@ var CONFIG_MAP = {
     "style.preset":                       "cfgStylePreset",
     "style.separators.left":              "cfgSepLeft",
     "style.separators.right":             "cfgSepRight",
+    "prompt.newline":                     "cfgNewline",
+    "prompt.blank_line":                  "cfgBlankLine",
     "style.frame.enabled":                "cfgFrameEnabled",
     "style.frame.gap_char":               "cfgFrameGapChar",
     "theme.source":                       "cfgThemeSource",
@@ -303,6 +319,7 @@ var CONFIG_MAP = {
     "segments.nix.enabled":                "cfgNixEnabled",
     "segments.k8s.enabled":                "cfgK8sEnabled",
     "segments.time.enabled":               "cfgTimeEnabled",
+    "segments.load.enabled":               "cfgLoadEnabled",
     "segments.time.format":                "cfgTimeFormat",
     "segments.battery.enabled":            "cfgBatteryEnabled",
     "segments.notification.threshold_ms":  "cfgNotifyThresholdMs",

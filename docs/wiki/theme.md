@@ -190,6 +190,41 @@ Bold:       \x1b[1m
 
 No 256-color or 16-color fallback exists. The `doctor` command checks for `COLORTERM=truecolor|24bit` to warn users.
 
+## Rice Layer (Theme-Reactive Tool Configs)
+
+Beyond the prompt, Omarchy10k extends the Omarchy theme system to tools the
+desktop does not theme itself: fzf, eza, bat, less, lazygit, yazi, and cava.
+Templates live in `templates/themed/` (source) and are deployed to
+`~/.config/omarchy/themed/` — the user template directory the Omarchy theme
+engine renders on every theme switch.
+
+| Template | Renders to | Consumed by |
+|----------|-----------|-------------|
+| `o10k-env.sh.tpl` | `~/.local/state/omarchy/current/theme/o10k-env.sh` | Bash adapter (live re-source) |
+| `o10k-lazygit.yml.tpl` | `~/.local/state/omarchy/current/theme/o10k-lazygit.yml` | `LG_CONFIG_FILE` (first entry; user config overrides) |
+| `o10k-yazi-theme.toml.tpl` | `~/.local/state/omarchy/current/theme/o10k-yazi-theme.toml` | Symlink at `~/.config/yazi/theme.toml` |
+| `o10k-cava.config.tpl` | `~/.local/state/omarchy/current/theme/o10k-cava.config` | Symlink at `~/.config/cava/config` |
+
+Templates use the full engine variable set: every `colors.toml` key plus
+`{{ key_strip }}` (no `#`) and `{{ key_rgb }}` (`R,G,B` decimals for truecolor
+ANSI). Ghostty, btop, kitty, alacritty, and foot are intentionally NOT covered —
+Omarchy ships its own templates for those.
+
+### Live re-source (running shells)
+
+The Bash adapter registers `__o10k_source_theme_env` as a precmd hook. It
+compares the rendered env file's mtime against a stamp
+(`~/.cache/omarchy10k/env.stamp`) and re-sources on change — one `stat` per
+prompt when unchanged, no subprocesses. A failed or truncated source (racing
+the engine's next-theme → theme directory swap) leaves the stamp untouched, so
+the next prompt retries: one-render self-heal instead of a stuck-empty env.
+
+### Symlink safety
+
+`install.sh` creates the yazi/cava symlinks only when the target path is
+absent or already points into `current/theme/o10k-*`. A regular user file or a
+foreign symlink is never clobbered. Rendering runs once at install time
+(`omarchy-theme-refresh`) so symlinks are never dangling.
 ## Filesystem Paths
 
 | Path | Purpose | Owner |
@@ -200,3 +235,7 @@ No 256-color or 16-color fallback exists. The `doctor` command checks for `COLOR
 | `templates/omarchy10k.toml.tpl` | Template (in source tree) | Developer |
 | `~/.local/share/omarchy/templates/omarchy10k.toml.tpl` | Deployed template | `install.sh` / `omarchy10k update` |
 | `~/.config/omarchy10k/config.toml` `[theme.custom]` | User color overrides | User |
+| `templates/themed/o10k-*.tpl` | Rice templates (in source tree) | Developer |
+| `~/.config/omarchy/themed/o10k-*.tpl` | Deployed rice templates | `install.sh` |
+| `~/.local/state/omarchy/current/theme/o10k-*` | Rendered rice configs | Omarchy theme engine |
+| `~/.cache/omarchy10k/env.stamp` | Live re-source mtime stamp | Bash adapter |

@@ -721,3 +721,30 @@ shell started. This is tracked as a [v0.4 design item](bug-audit.md#5-every-envi
 
 The Time segment ABI bug ([#2](bug-audit.md#2-struct-tm-abi-mismatch-corrupts-the-stack-when-the-time-segment-is-enabled))
 has been fixed — `struct Tm` now includes all required fields.
+
+## Headless Daemon (Settings With No Terminal Open)
+
+The daemon is per-shell, so with every terminal closed there is nothing for the Control Center to talk to. The panel covers this by spawning a **headless daemon** when its discovery sweep finds no live sessions:
+
+```sh
+O10K_SOCK_NAME=headless O10K_PARENT_PID=$(pgrep -x quickshell | head -1) exec omarchy10kd
+```
+
+- `O10K_SOCK_NAME` (daemon): binds a fixed socket `omarchy10k-<name>.sock` instead of the parent-pid name. Idempotent — a second spawn refuses to hijack a live daemon (exits) and stale sockets are cleared on bind.
+- `O10K_PARENT_PID` = quickshell's pid: the daemon exits cleanly when the desktop shell exits.
+- Config writes through the headless daemon land in the same `config.toml`; running shell daemons hot-reload it via their filesystem watcher.
+- Discovery (Panel `discoverAllSockets` and `Service.qml` sweep) treats a non-numeric socket pid (e.g. `headless`) as always alive; numeric pids still get the `kill -0` liveness check.
+
+## Panel Self-Recovery
+
+The panel's 5s `reconnectTimer` runs whenever the panel is open and no daemon is connected — including when the service hub is active. The hub sweep can lag a daemon that appeared after the panel opened; the panel's own finder then reconnects without clobbering hub-owned session state. `Panel.qml`'s finder also calls `ensureHeadlessDaemon()` when zero sessions are found.
+
+## Looks + Rail Navigation (v0.5)
+
+The Control Center panel uses a 4-bucket rail (LOOKS · STYLE · BEHAVIOR · SYSTEM) instead of tabs. The daemon's `looks` registry provides named, atomic appearance bundles:
+
+- `[looks.<name>]` tables in `config.toml`: `label`, `palette` ("theme" | "keep" | curated key), `patch` (nested style/glyphs/frame/prompt tables; `glyphs` shortcuts expand to segments keys at apply).
+- Control verbs (protocol 0.5): `looks` (list), `looks_apply {name, transient?}` (atomic config merge; `transient` = in-memory only, revert via `reload_config`), `looks_save {name, label}` (snapshot current mapped keys), `palettes` (curated palette table, moved daemon-side from Model.js).
+- `preview` requests accept `look: "<name>"` for dry-run renders (gallery cards).
+- CLI: `omarchy10k look list|apply <name> [--transient]|save <name>`.
+- 8 curated Looks ship compiled-in; user entries shadow curated names.

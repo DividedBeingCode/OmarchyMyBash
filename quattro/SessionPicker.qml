@@ -33,6 +33,7 @@ Item {
     readonly property bool hyprland: Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE") !== ""
 
     property bool opened: false
+    property string page: "sessions"   // "sessions" | "gallery"
     property var rows: []
     property int selectedIndex: 0
 
@@ -59,8 +60,17 @@ Item {
     // ── Lifecycle (overlay entry point contract: open/close) ──────────────
     function open(payloadJson) {
         root.opened = true
-        root.selectedIndex = 0
-        root.refreshRows()
+        var payload = null
+        try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = null }
+        root.page = (payload && payload.page === "gallery") ? "gallery" : "sessions"
+        if (root.page === "gallery") {
+            galleryLoader.active = true
+            if (galleryLoader.item && galleryLoader.item.open)
+                galleryLoader.item.open("{}")
+        } else {
+            root.selectedIndex = 0
+            root.refreshRows()
+        }
         Qt.callLater(function () { keyCatcher.forceActiveFocus() })
     }
 
@@ -168,11 +178,25 @@ Item {
 
         MouseArea {
             anchors.fill: parent
+            enabled: root.page === "sessions"
             onClicked: root.dismiss()
+        }
+
+        // ── Looks Gallery (payload page:"gallery") ─────────────────────────
+        Loader {
+            id: galleryLoader
+            anchors.fill: parent
+            active: false
+            visible: root.opened && root.page === "gallery"
+            source: Qt.resolvedUrl("Gallery.qml")
+            onLoaded: {
+                if (item && item.open) item.open("{}")
+            }
         }
 
         Rectangle {
             id: card
+            visible: root.page === "sessions"
             width: Math.min(520, parent.width - 32)
             height: Math.min(420, parent.height - 32)
             radius: root.surfaceRadius

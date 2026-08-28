@@ -14,10 +14,15 @@ pub struct ThemePalette {
     pub green: AnsiColor,
     pub yellow: AnsiColor,
     pub blue: AnsiColor,
+    /// Extended roles for semantic segment fills. Derived from the primaries
+    /// unless overridden via [theme.custom].
+    pub magenta: AnsiColor,
+    pub cyan: AnsiColor,
+    pub orange: AnsiColor,
     pub is_dark: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct AnsiColor {
     pub r: u8,
     pub g: u8,
@@ -54,6 +59,25 @@ impl AnsiColor {
         format!("\x1b[38;2;{};{};{}m", self.r, self.g, self.b)
     }
 
+    /// Linear interpolation a→b at t (clamped 0..=1). Wave 1 gradients.
+    pub fn lerp(a: &Self, b: &Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        Self {
+            r: (a.r as f32 + (b.r as f32 - a.r as f32) * t).round() as u8,
+            g: (a.g as f32 + (b.g as f32 - a.g as f32) * t).round() as u8,
+            b: (a.b as f32 + (b.b as f32 - a.b as f32) * t).round() as u8,
+        }
+    }
+
+    /// Per-channel average — used to derive harmonized extended roles.
+    pub fn blend(a: &Self, b: &Self) -> Self {
+        Self {
+            r: ((a.r as u16 + b.r as u16) / 2) as u8,
+            g: ((a.g as u16 + b.g as u16) / 2) as u8,
+            b: ((a.b as u16 + b.b as u16) / 2) as u8,
+        }
+    }
+
     pub fn bg_escape(&self) -> String {
         format!("\x1b[48;2;{};{};{}m", self.r, self.g, self.b)
     }
@@ -72,6 +96,9 @@ impl Default for ThemePalette {
             green: AnsiColor { r: 158, g: 206, b: 106 },
             yellow: AnsiColor { r: 224, g: 175, b: 104 },
             blue: AnsiColor { r: 122, g: 162, b: 247 },
+            magenta: AnsiColor { r: 187, g: 154, b: 247 },
+            cyan: AnsiColor { r: 125, g: 207, b: 255 },
+            orange: AnsiColor { r: 255, g: 158, b: 100 },
             is_dark: true,
         }
     }
@@ -98,6 +125,42 @@ fn default_mode() -> String {
 }
 
 impl ThemePalette {
+    /// Complement rule (Wave 1): blue ≥ red accents get magenta, warm
+    /// accents get cyan. Deterministic from any palette.
+    pub fn complement(&self) -> AnsiColor {
+        if self.accent.b >= self.accent.r {
+            self.magenta
+        } else {
+            self.cyan
+        }
+    }
+
+    /// Wave 1 gap-gradient endpoints by mode.
+    pub fn gap_gradient_endpoints(
+        &self,
+        mode: crate::style::GapGradient,
+    ) -> (AnsiColor, AnsiColor) {
+        use crate::style::GapGradient;
+        match mode {
+            GapGradient::Off => (self.accent, self.accent),
+            GapGradient::Subtle => {
+                (self.accent, AnsiColor::lerp(&self.accent, &self.background, 0.6))
+            }
+            GapGradient::Full => (self.accent, self.complement()),
+        }
+    }
+
+    /// Two-stage stepped ramp accent → magenta → cyan, sampled at t ∈ [0,1].
+    /// Wave 1 gradient preset.
+    pub fn ramp_color(&self, t: f32) -> AnsiColor {
+        let t = t.clamp(0.0, 1.0);
+        if t <= 0.5 {
+            AnsiColor::lerp(&self.accent, &self.magenta, t * 2.0)
+        } else {
+            AnsiColor::lerp(&self.magenta, &self.cyan, (t - 0.5) * 2.0)
+        }
+    }
+
     pub fn omarchy_theme_dir() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
         PathBuf::from(home).join(".local/state/omarchy/current/theme")
@@ -137,7 +200,7 @@ impl ThemePalette {
             opt.and_then(|h| AnsiColor::from_hex(&h)).unwrap_or_else(|| fallback.clone())
         };
 
-        Ok(Self {
+        let mut palette = Self {
             accent: parse_or(colors.accent, &defaults.accent),
             foreground: parse_or(colors.foreground, &defaults.foreground),
             dark_foreground: parse_or(colors.dark_foreground, &defaults.dark_foreground),
@@ -148,56 +211,89 @@ impl ThemePalette {
             green: parse_or(colors.green, &defaults.green),
             yellow: parse_or(colors.yellow, &defaults.yellow),
             blue: parse_or(colors.blue, &defaults.blue),
+            magenta: defaults.magenta.clone(),
+            cyan: defaults.cyan.clone(),
+            orange: defaults.orange.clone(),
             is_dark: colors.mode != "light",
-        })
+        };
+        palette.derive_extended();
+        Ok(palette)
     }
 
     pub fn resolve_palette(config: &crate::config::Config) -> Self {
-        match config.theme.source.as_str() {
+        let source = config.theme.source.as_str();
+        let mut palette = match source {
             "omarchy" => Self::load_omarchy(),
-            "custom" => {
-                let mut p = Self::default();
-                if let Some(ref custom) = config.theme.custom {
-                    p.apply_custom_overrides(custom);
-                }
-                p
-            }
-            "hybrid" => {
-                let mut p = Self::load_omarchy();
-                if let Some(ref custom) = config.theme.custom {
-                    p.apply_custom_overrides(custom);
-                }
-                p
-            }
+            "custom" => Self::default(),
+            "hybrid" => Self::load_omarchy(),
             _ => Self::default(),
+        };
+        let mut explicit = [false; 3];
+        if source != "omarchy" {
+            if let Some(custom) = &config.theme.custom {
+                explicit = palette.apply_custom_overrides(custom);
+            }
+        }
+        palette.derive_extended_except(explicit);
+        palette
+    }
+
+    /// Blends the primaries into the extended roles so magenta/cyan/orange
+    /// always harmonize with the active theme.
+    fn derive_extended(&mut self) {
+        self.derive_extended_except([false; 3]);
+    }
+
+    fn derive_extended_except(&mut self, keep: [bool; 3]) {
+        if !keep[0] {
+            self.magenta = AnsiColor::blend(&self.red, &self.blue);
+        }
+        if !keep[1] {
+            self.cyan = AnsiColor::blend(&self.blue, &self.green);
+        }
+        if !keep[2] {
+            self.orange = AnsiColor::blend(&self.red, &self.yellow);
         }
     }
 
-    pub fn apply_custom_overrides(&mut self, custom: &crate::config::CustomPalette) {
-        if let Some(ref h) = custom.accent {
+    /// Applies hex overrides; returns which extended roles were explicitly
+    /// set ([magenta, cyan, orange]) so derivation can skip them.
+    pub fn apply_custom_overrides(&mut self, custom: &crate::config::CustomPalette) -> [bool; 3] {
+        let mut explicit = [false; 3];
+        if let Some(h) = &custom.accent {
             if let Some(c) = AnsiColor::from_hex(h) { self.accent = c; }
         }
-        if let Some(ref h) = custom.foreground {
+        if let Some(h) = &custom.foreground {
             if let Some(c) = AnsiColor::from_hex(h) { self.foreground = c; }
         }
-        if let Some(ref h) = custom.muted {
+        if let Some(h) = &custom.muted {
             if let Some(c) = AnsiColor::from_hex(h) { self.muted = c; }
         }
-        if let Some(ref h) = custom.background {
+        if let Some(h) = &custom.background {
             if let Some(c) = AnsiColor::from_hex(h) { self.background = c; }
         }
-        if let Some(ref h) = custom.red {
+        if let Some(h) = &custom.red {
             if let Some(c) = AnsiColor::from_hex(h) { self.red = c; }
         }
-        if let Some(ref h) = custom.green {
+        if let Some(h) = &custom.green {
             if let Some(c) = AnsiColor::from_hex(h) { self.green = c; }
         }
-        if let Some(ref h) = custom.yellow {
+        if let Some(h) = &custom.yellow {
             if let Some(c) = AnsiColor::from_hex(h) { self.yellow = c; }
         }
-        if let Some(ref h) = custom.blue {
+        if let Some(h) = &custom.blue {
             if let Some(c) = AnsiColor::from_hex(h) { self.blue = c; }
         }
+        if let Some(h) = &custom.magenta {
+            if let Some(c) = AnsiColor::from_hex(h) { self.magenta = c; explicit[0] = true; }
+        }
+        if let Some(h) = &custom.cyan {
+            if let Some(c) = AnsiColor::from_hex(h) { self.cyan = c; explicit[1] = true; }
+        }
+        if let Some(h) = &custom.orange {
+            if let Some(c) = AnsiColor::from_hex(h) { self.orange = c; explicit[2] = true; }
+        }
+        explicit
     }
 }
 
@@ -226,6 +322,7 @@ mod tests {
                     accent: Some("#ff0000".into()),
                     foreground: None, muted: None, background: None,
                     red: None, green: None, yellow: None, blue: None,
+                    magenta: None, cyan: None, orange: None,
                 }),
             },
             ..Config::default()
@@ -245,6 +342,7 @@ mod tests {
                     accent: Some("#00ff00".into()),
                     foreground: None, muted: None, background: None,
                     red: None, green: None, yellow: None, blue: None,
+                    magenta: None, cyan: None, orange: None,
                 }),
             },
             ..Config::default()

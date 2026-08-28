@@ -17,6 +17,30 @@ pub struct ResolvedStyle {
     /// Rainbow flavor of `filled`: bg colors rotate accent/red/green/yellow/blue
     /// instead of using each segment's own color.
     pub rainbow: bool,
+    /// Smooth-ramp flavor of `filled`: bg colors sample a two-stage
+    /// accent → magenta → cyan lerp across the segment run.
+    pub gradient_ramp: bool,
+    /// Gap fill interpolation for framed prompts.
+    pub gap_gradient: GapGradient,
+}
+
+/// Gap fill interpolation mode (Wave 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GapGradient {
+    #[default]
+    Off,
+    Subtle,
+    Full,
+}
+
+impl GapGradient {
+    fn parse(v: Option<&str>) -> Self {
+        match v {
+            Some("subtle") => GapGradient::Subtle,
+            Some("full") => GapGradient::Full,
+            _ => GapGradient::Off,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +80,7 @@ const FRAME_ENABLED: FrameStyle = FrameStyle {
 
 const ALL_SEGMENTS: &[&str] = &[
     "os", "ssh", "container", "directory", "git", "python_env", "toolchain", "nix",
-    "ai", "k8s", "exit_status", "command_duration", "jobs", "time", "battery",
+    "ai", "k8s", "exit_status", "command_duration", "jobs", "time", "battery", "load",
 ];
 
 const CLASSIC_SEGMENTS: &[&str] = &["ssh", "directory", "git", "exit_status"];
@@ -75,6 +99,7 @@ struct PresetDefaults {
     force_single_line: bool,
     filled: bool,
     rainbow: bool,
+    gradient_ramp: bool,
 }
 
 const PLAIN: (bool, bool) = (false, false);
@@ -90,6 +115,7 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: false,
             filled: true,
             rainbow: false,
+            gradient_ramp: false,
         },
         "rainbow" => PresetDefaults {
             left_separator: " \u{e0b0} ",
@@ -100,6 +126,18 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: false,
             filled: true,
             rainbow: true,
+            gradient_ramp: false,
+        },
+        "gradient" => PresetDefaults {
+            left_separator: " \u{e0b1} ",
+            right_separator: " \u{e0b3} ",
+            frame: FrameStyle::default(),
+            gap_char: None,
+            segment_order: ALL_SEGMENTS,
+            force_single_line: false,
+            filled: true,
+            rainbow: false,
+            gradient_ramp: true,
         },
         "framed" => PresetDefaults {
             left_separator: " ",
@@ -110,6 +148,7 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: false,
             filled: PLAIN.0,
             rainbow: PLAIN.1,
+            gradient_ramp: PLAIN.1,
         },
         "classic" => PresetDefaults {
             left_separator: " \u{2502} ",
@@ -120,6 +159,7 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: false,
             filled: PLAIN.0,
             rainbow: PLAIN.1,
+            gradient_ramp: PLAIN.1,
         },
         "lean" => PresetDefaults {
             left_separator: " ",
@@ -130,6 +170,7 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: false,
             filled: PLAIN.0,
             rainbow: PLAIN.1,
+            gradient_ramp: PLAIN.1,
         },
         "dense" => PresetDefaults {
             left_separator: " ",
@@ -140,6 +181,7 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: true,
             filled: PLAIN.0,
             rainbow: PLAIN.1,
+            gradient_ramp: PLAIN.1,
         },
         "minimal" => PresetDefaults {
             left_separator: " ",
@@ -150,6 +192,7 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: true,
             filled: PLAIN.0,
             rainbow: PLAIN.1,
+            gradient_ramp: PLAIN.1,
         },
         "pure" => PresetDefaults {
             left_separator: " ",
@@ -160,6 +203,7 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: false,
             filled: PLAIN.0,
             rainbow: PLAIN.1,
+            gradient_ramp: PLAIN.1,
         },
         "slanted" => PresetDefaults {
             left_separator: " \u{e0bc} ",
@@ -170,6 +214,7 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: false,
             filled: PLAIN.0,
             rainbow: PLAIN.1,
+            gradient_ramp: PLAIN.1,
         },
         _ => PresetDefaults {
             left_separator: " ",
@@ -180,6 +225,7 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             force_single_line: false,
             filled: PLAIN.0,
             rainbow: PLAIN.1,
+            gradient_ramp: PLAIN.1,
         },
     }
 }
@@ -191,14 +237,32 @@ impl StyleResolver {
         let preset_name = Self::effective_preset(config);
         let defaults = preset_defaults(&preset_name);
 
-        let left_sep = config.style.separators.left.as_deref()
+        // Separator geometry family: a set `shape` drives both directions
+        // together; explicit left/right keys still win for custom mixes.
+        let shape = config
+            .style
+            .separators
+            .shape
+            .as_deref()
+            .filter(|s| !s.is_empty() && *s != "auto");
+        let left_sep = config
+            .style
+            .separators
+            .left
+            .as_deref()
             .and_then(|s| if s.is_empty() { None } else { Some(s) })
             .map(|s| GlyphCatalog::separator(s).to_string())
+            .or_else(|| shape.map(|k| GlyphCatalog::separator(k).to_string()))
             .unwrap_or_else(|| defaults.left_separator.to_string());
 
-        let right_sep = config.style.separators.right.as_deref()
+        let right_sep = config
+            .style
+            .separators
+            .right
+            .as_deref()
             .and_then(|s| if s.is_empty() { None } else { Some(s) })
             .map(|s| GlyphCatalog::separator(s).to_string())
+            .or_else(|| shape.map(|k| GlyphCatalog::separator(k).to_string()))
             .unwrap_or_else(|| defaults.right_separator.to_string());
 
         let frame = if let Some(enabled) = config.style.frame.enabled {
@@ -240,6 +304,8 @@ impl StyleResolver {
             force_single_line: force_single,
             filled: defaults.filled,
             rainbow: defaults.rainbow,
+            gradient_ramp: defaults.gradient_ramp,
+            gap_gradient: GapGradient::parse(config.style.frame.gap_gradient.as_deref()),
         }
     }
 
@@ -295,6 +361,14 @@ impl GlyphCatalog {
             "vertical" => " \u{2502} ",
             "dot" => " \u{b7} ",
             "diamond" => " \u{25c6} ",
+            // p10k's "blurred" look: brightness-stepped block shades drawn in
+            // the previous segment's bg — an ink-coverage fade, no truecolor.
+            "fade" => " \u{2593}\u{2592}\u{2591} ",
+            "fade_rev" => " \u{2591}\u{2592}\u{2593} ",
+            "trapezoid" => " \u{e0d2} ",
+            "trapezoid_rev" => " \u{e0d5} ",
+            "flame" => " \u{e0c0} ",
+            "dither" => " \u{e0c4} ",
             "none" | "" => " ",
             _ => " ",
         }
@@ -310,6 +384,38 @@ impl GlyphCatalog {
             "percent" => "%",
             "triangle" => "\u{25b6}",
             "hash" => "#",
+            // Animals (Nerd Font MDI/fa; verified against the NF v3 cmap).
+            "cat" => "\u{f0b58}",
+            "penguin" => "\u{f0752}",
+            "fox" => "\u{f0f86}",
+            "owl" => "\u{f1041}",
+            "duck" => "\u{f095f}",
+            "butterfly" => "\u{f10a9}",
+            "ladybug" => "\u{f0828}",
+            "bee" => "\u{f0fa1}",
+            "cow" => "\u{f01e4}",
+            "horse" => "\u{f0f12}",
+            "pig" => "\u{f1045}",
+            "sheep" => "\u{f1077}",
+            "dog" => "\u{f094c}",
+            "rabbit" => "\u{f0810}",
+            "turtle" => "\u{f0be0}",
+            "paw" => "\u{f02f2}",
+            "fish" => "\u{f0143}",
+            "frog" => "\u{ed01}",
+            "dragon" => "\u{ee01}",
+            "panda" => "\u{f02e3}",
+            "koala" => "\u{f1648}",
+            "unicorn" => "\u{f14cb}",
+            "teddy" => "\u{f1804}",
+            // Kaomoji (plain Unicode; width-ambiguous in some terminals —
+            // the panel marks these experimental).
+            "kaomoji_bear" => "\u{295}\u{2022}\u{1f425}\u{2022}\u{295}",
+            "kaomoji_smile" => "(\u{25d5}\u{203f}\u{25d5})",
+            "kaomoji_rage" => "(\u{256f}\u{00b0}\u{25a1}\u{00b0})\u{256f}",
+            "kaomoji_relaxed" => "\u{30fd}(\u{00b4}\u{30fc}`)\u{30ce}",
+            "kaomoji_smirk" => "(\u{00ac}\u{203f}\u{00ac})",
+            "kaomoji_disapprove" => "\u{ca0}_\u{ca0}",
             _ => key,
         }
     }
@@ -319,6 +425,7 @@ impl GlyphCatalog {
             "powerline" => "\u{e0a0}",
             "octicon" => "\u{f418}",
             "nerd" => "\u{f126}",
+            "paw" => "\u{f02f2}",
             "text" => "git:",
             "none" | "" => "",
             _ => key,
@@ -327,7 +434,7 @@ impl GlyphCatalog {
 }
 
 pub fn available_presets() -> &'static [&'static str] {
-    &["omarchy", "powerline", "rainbow", "framed", "classic", "lean", "dense", "slanted", "minimal", "pure"]
+    &["omarchy", "powerline", "rainbow", "gradient", "framed", "classic", "lean", "dense", "slanted", "minimal", "pure"]
 }
 
 pub fn available_os_icons() -> &'static [(&'static str, &'static str)] {
@@ -350,8 +457,8 @@ pub fn available_os_icons() -> &'static [(&'static str, &'static str)] {
         ("raspberry_pi", "\u{f315}"),
     ]
 }
-
 pub fn available_separators() -> &'static [(&'static str, &'static str)] {
+
     &[
         ("none", " "),
         ("powerline", " \u{e0b0} "),
@@ -361,10 +468,58 @@ pub fn available_separators() -> &'static [(&'static str, &'static str)] {
         ("vertical", " \u{2502} "),
         ("dot", " \u{b7} "),
         ("diamond", " \u{25c6} "),
+        ("fade", " \u{2593}\u{2592}\u{2591} "),
+        ("fade_rev", " \u{2591}\u{2592}\u{2593} "),
+        ("trapezoid", " \u{e0d2} "),
+        ("trapezoid_rev", " \u{e0d5} "),
+        ("flame", " \u{e0c0} "),
+        ("dither", " \u{e0c4} "),
     ]
 }
 
-pub fn available_prompt_chars() -> &'static [(&'static str, &'static str)] {
+    /// Animals (Nerd Font, verified against the NF v3 cmap).
+    pub fn available_animal_chars() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("cat", "\u{f0b58}"),
+            ("penguin", "\u{f0752}"),
+            ("fox", "\u{f0f86}"),
+            ("owl", "\u{f1041}"),
+            ("duck", "\u{f095f}"),
+            ("butterfly", "\u{f10a9}"),
+            ("ladybug", "\u{f0828}"),
+            ("bee", "\u{f0fa1}"),
+            ("dog", "\u{f094c}"),
+            ("rabbit", "\u{f0810}"),
+            ("turtle", "\u{f0be0}"),
+            ("paw", "\u{f02f2}"),
+            ("fish", "\u{f0143}"),
+            ("frog", "\u{ed01}"),
+            ("dragon", "\u{ee01}"),
+            ("panda", "\u{f02e3}"),
+            ("koala", "\u{f1648}"),
+            ("unicorn", "\u{f14cb}"),
+            ("teddy", "\u{f1804}"),
+            ("cow", "\u{f01e4}"),
+            ("horse", "\u{f0f12}"),
+            ("pig", "\u{f1045}"),
+            ("sheep", "\u{f1077}"),
+        ]
+    }
+
+    /// Kaomoji: plain-Unicode multi-char strings, width-ambiguous in some
+    /// terminals — the panel labels these experimental.
+    pub fn available_kaomoji_chars() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("kaomoji_bear", "\u{295}\u{2022}\u{1f425}\u{2022}\u{295}"),
+            ("kaomoji_smile", "(\u{25d5}\u{203f}\u{25d5})"),
+            ("kaomoji_rage", "(\u{256f}\u{00b0}\u{25a1}\u{00b0})\u{256f}"),
+            ("kaomoji_relaxed", "\u{30fd}(\u{00b4}\u{30fc}`)\u{30ce}"),
+            ("kaomoji_smirk", "(\u{00ac}\u{203f}\u{00ac})"),
+            ("kaomoji_disapprove", "\u{ca0}_\u{ca0}"),
+        ]
+    }
+
+    pub fn available_prompt_chars() -> &'static [(&'static str, &'static str)] {
     &[
         ("chevron", "\u{276f}"),
         ("arrow", "\u{279c}"),
@@ -395,7 +550,10 @@ mod tests {
     fn test_default_preset_resolves() {
         let config = Config::default();
         let style = StyleResolver::resolve(&config);
-        assert_eq!(style.left_separator, " ");
+        // Built-in default is the p10k-style rainbow powerline.
+        assert_eq!(style.left_separator, " \u{e0b0} ");
+        assert!(style.filled);
+        assert!(style.rainbow);
         assert!(!style.frame.enabled);
         assert!(!style.force_single_line);
     }
@@ -473,7 +631,10 @@ mod tests {
     fn test_legacy_layout_migration() {
         let mut config = Config::default();
         config.prompt.layout = "powerline".into();
-        // style.preset is still default "omarchy", so layout should take precedence
+        // Layout takes precedence only when preset is explicitly "omarchy"
+        // (configs written before style.preset existed). The built-in default
+        // is now "rainbow", which resolves verbatim.
+        config.style.preset = "omarchy".into();
         let style = StyleResolver::resolve(&config);
         assert!(style.left_separator.contains('\u{e0b0}'));
     }

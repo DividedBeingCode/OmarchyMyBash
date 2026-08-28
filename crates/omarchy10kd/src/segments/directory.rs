@@ -2,7 +2,11 @@ use crate::layout::Segment;
 use crate::render::wrap_np;
 use crate::segments::SegmentContext;
 use unicode_width::UnicodeWidthStr;
-use std::path::Path;
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let path = ctx.cwd;
@@ -14,6 +18,12 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         format!("~{}", &path[home.len()..])
     } else {
         path.to_string()
+    };
+
+    let display_path = if ctx.config.directory.unique {
+        shorten_unique(path, home, &ctx.config.directory.anchors)
+    } else {
+        display_path
     };
 
     let strategy = ctx.config.directory.strategy.as_str();
@@ -67,6 +77,162 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         bold,
         separator: None,
     })
+}
+
+// ---------------------------------------------------------------------------
+// truncate_to_unique shortening
+// ---------------------------------------------------------------------------
+
+/// Process-local cache of sibling tables, keyed by cwd. Each entry holds, per
+/// component of the cwd, that component's sibling directory names and whether
+/// the component is an anchor (its directory contains an anchor file). Entries
+/// older than 30 s are recomputed on the next render, so warm renders do zero
+/// filesystem reads.
+#[derive(Clone)]
+struct SiblingTables {
+    /// `tables[i]` describes component `i` of the cwd (root excluded): the
+    /// directory names of the component's siblings, and whether the component
+    /// itself is an anchor. `None` = a read error occurred; the component
+    /// falls back to its full name.
+    tables: Vec<Option<(Vec<String>, bool)>>,
+    stamp: Instant,
+}
+
+static SIBLING_CACHE: LazyLock<Mutex<HashMap<PathBuf, SiblingTables>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const SIBLING_TTL: Duration = Duration::from_secs(30);
+
+/// Shorten `cwd` to unique prefixes: anchor directories and the last
+/// component keep their full names, everything else shrinks to the fewest
+/// leading characters that stay unambiguous among its sibling directories.
+/// The home prefix renders as `~`, exactly as the non-unique path does.
+fn shorten_unique(cwd: &str, home: &str, anchors: &[String]) -> String {
+    let comps: Vec<String> = Path::new(cwd)
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_)))
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if comps.is_empty() {
+        return cwd.to_string();
+    }
+    let home_comps = if !home.is_empty() && Path::new(cwd).starts_with(Path::new(home)) {
+        Path::new(home)
+            .components()
+            .filter(|c| matches!(c, Component::Normal(_)))
+            .count()
+    } else {
+        0
+    };
+    let absolute = Path::new(cwd).is_absolute();
+    let tables = sibling_tables(Path::new(cwd), anchors);
+    shorten_components(&comps, home_comps, absolute, &tables.tables)
+}
+
+fn shorten_components(
+    comps: &[String],
+    home_comps: usize,
+    absolute: bool,
+    tables: &[Option<(Vec<String>, bool)>],
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if home_comps > 0 {
+        parts.push("~".to_string());
+    } else if absolute {
+        // Empty head element makes `join` emit the leading slash.
+        parts.push(String::new());
+    }
+    let last = comps.len().saturating_sub(1);
+    for (i, comp) in comps.iter().enumerate() {
+        if i < home_comps {
+            continue; // covered by the `~` prefix
+        }
+        if i == last {
+            parts.push(comp.clone());
+            break;
+        }
+        let shortened = match tables.get(i).and_then(|t| t.as_ref()) {
+            Some((siblings, false)) => {
+                if siblings.len() <= 1 {
+                    // Only child: one character is already unambiguous.
+                    comp.chars().next().map(String::from).unwrap_or_else(|| comp.clone())
+                } else {
+                    unique_prefix_among(comp, siblings)
+                }
+            }
+            // Anchor directory, unknown component, or read error: full name.
+            _ => comp.clone(),
+        };
+        parts.push(shortened);
+    }
+    parts.join("/")
+}
+
+fn sibling_tables(cwd: &Path, anchors: &[String]) -> SiblingTables {
+    let mut cache = SIBLING_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(entry) = cache.get(cwd) {
+        if entry.stamp.elapsed() < SIBLING_TTL {
+            return entry.clone();
+        }
+    }
+    let tables = compute_tables(cwd, anchors);
+    cache.insert(cwd.to_path_buf(), tables.clone());
+    tables
+}
+
+fn compute_tables(cwd: &Path, anchors: &[String]) -> SiblingTables {
+    let comps: Vec<&OsStr> = cwd
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_)))
+        .map(|c| c.as_os_str())
+        .collect();
+    let mut dir = PathBuf::new();
+    if cwd.is_absolute() {
+        dir.push("/");
+    }
+    let mut tables = Vec::with_capacity(comps.len());
+    for (i, comp) in comps.iter().enumerate() {
+        if i + 1 == comps.len() {
+            break; // the last component is never shortened
+        }
+        dir.push(comp);
+        // Sibling directories of the component, in its parent.
+        let siblings = dir.parent().and_then(list_dirs);
+        // Anchor check: does the component directory contain an anchor file?
+        let is_anchor = read_dir_contains_anchor(&dir, anchors);
+        tables.push(match (siblings, is_anchor) {
+            (Some(siblings), Some(is_anchor)) => Some((siblings, is_anchor)),
+            _ => None,
+        });
+    }
+    SiblingTables { tables, stamp: Instant::now() }
+}
+
+/// Directory entries of `dir` that are themselves directories. Entries whose
+/// type cannot be checked count as directories, so ambiguity is never
+/// silently hidden. `None` when the directory cannot be read.
+fn list_dirs(dir: &Path) -> Option<Vec<String>> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(true);
+        if is_dir {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    Some(names)
+}
+
+fn read_dir_contains_anchor(dir: &Path, anchors: &[String]) -> Option<bool> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if anchors.iter().any(|a| name.as_os_str() == OsStr::new(a.as_str())) {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 fn truncate_path(path: &str, max_len: usize) -> String {
@@ -134,11 +300,18 @@ fn smart_truncate(path: &str, max_len: usize, _repo_root_style: &str) -> String 
 
 fn unique_prefix(target: &str, before: &[&str], after: &[&str]) -> String {
     let siblings: Vec<&&str> = before.iter().chain(after.iter()).collect();
+    unique_prefix_among(target, &siblings)
+}
+
+/// Fewest leading characters of `target` that no sibling shares as a prefix.
+fn unique_prefix_among<S: AsRef<str>>(target: &str, siblings: &[S]) -> String {
     let chars: Vec<char> = target.chars().collect();
 
     for len in 1..=chars.len() {
         let prefix: String = chars[..len].iter().collect();
-        let is_unique = siblings.iter().all(|s| !s.starts_with(&prefix) || **s == target);
+        let is_unique = siblings
+            .iter()
+            .all(|s| s.as_ref() == target || !s.as_ref().starts_with(&prefix));
         if is_unique {
             return prefix;
         }
@@ -217,5 +390,237 @@ mod tests {
         let result = unique_prefix("données", &["docs"], &[]);
         assert!(result.is_char_boundary(result.len()), "prefix must be valid UTF-8");
         assert!(!result.is_empty());
+    }
+
+    fn tbl(siblings: &[&str], anchor: bool) -> Option<(Vec<String>, bool)> {
+        Some((siblings.iter().map(|s| s.to_string()).collect(), anchor))
+    }
+
+    fn temp_root(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("o10k-unique-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_unique_collision_extends_prefix() {
+        // "Code" collides with "Cool"; "project" collides with "project2".
+        let comps = vec![
+            "ian".to_string(),
+            "Code".to_string(),
+            "project".to_string(),
+            "src".to_string(),
+        ];
+        let tables = vec![
+            None,
+            tbl(&["Code", "Cool"], false),        // C → Co → Cod
+            tbl(&["project", "project2"], false), // extends to the full name
+            tbl(&["src", "other"], false),        // last component is ignored
+        ];
+        assert_eq!(shorten_components(&comps, 1, false, &tables), "~/Cod/project/src");
+    }
+
+    #[test]
+    fn test_unique_anchor_never_shortened() {
+        let comps = vec![
+            "ian".to_string(),
+            "work".to_string(),
+            "src".to_string(),
+        ];
+        let tables = vec![None, tbl(&["work", "workflow"], true), None];
+        assert_eq!(shorten_components(&comps, 1, false, &tables), "~/work/src");
+    }
+
+    #[test]
+    fn test_unique_single_child_one_char() {
+        let comps = vec![
+            "ian".to_string(),
+            "Work".to_string(),
+            "src".to_string(),
+        ];
+        let tables = vec![None, tbl(&["Work"], false), None];
+        assert_eq!(shorten_components(&comps, 1, false, &tables), "~/W/src");
+    }
+
+    #[test]
+    fn test_unique_unicode_components() {
+        let comps = vec![
+            "ian".to_string(),
+            "données".to_string(),
+            "日本語".to_string(),
+            "src".to_string(),
+        ];
+        let tables = vec![
+            None,
+            tbl(&["données", "docs"], false), // d → do → don
+            tbl(&["日本語"], false),          // only child → first char
+            None,
+        ];
+        let out = shorten_components(&comps, 1, false, &tables);
+        assert_eq!(out, "~/don/日/src");
+        assert!(out.is_char_boundary(out.len()));
+    }
+
+    #[test]
+    fn test_unique_deep_path_without_home() {
+        let comps = vec![
+            "usr".to_string(),
+            "local".to_string(),
+            "share".to_string(),
+            "doc".to_string(),
+        ];
+        let tables = vec![
+            tbl(&["usr", "var"], false),   // u
+            tbl(&["local", "lib"], false), // l → lo
+            tbl(&["share", "man"], false), // s
+            None,
+        ];
+        assert_eq!(shorten_components(&comps, 0, true, &tables), "/u/lo/s/doc");
+    }
+
+    #[test]
+    fn test_unique_read_error_falls_back_full() {
+        let comps = vec![
+            "ian".to_string(),
+            "Code".to_string(),
+            "src".to_string(),
+        ];
+        let tables = vec![None, None, None];
+        assert_eq!(shorten_components(&comps, 1, false, &tables), "~/Code/src");
+    }
+
+    #[test]
+    fn test_unique_home_root_renders_tilde() {
+        let home = temp_root("eq");
+        let out = shorten_unique(home.to_str().unwrap(), home.to_str().unwrap(), &[]);
+        assert_eq!(out, "~");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn test_shorten_unique_with_home() {
+        let home = temp_root("home");
+        std::fs::create_dir_all(home.join("Work/project/src")).unwrap();
+        std::fs::create_dir_all(home.join("Work/prelude")).unwrap();
+        // project is an anchor directory.
+        std::fs::write(home.join("Work/project/Cargo.toml"), "").unwrap();
+        let cwd = home.join("Work/project/src");
+        let anchors = vec![".git".to_string(), "Cargo.toml".to_string()];
+        let out = shorten_unique(cwd.to_str().unwrap(), home.to_str().unwrap(), &anchors);
+        assert_eq!(out, "~/W/project/src");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn test_shorten_unique_outside_home() {
+        let root = temp_root("nohome");
+        std::fs::create_dir_all(root.join("Work/project/src")).unwrap();
+        std::fs::create_dir_all(root.join("Workflow/other")).unwrap();
+        let cwd = root.join("Work/project/src");
+        let out = shorten_unique(cwd.to_str().unwrap(), "", &[".git".to_string()]);
+        // "Work" collides with "Workflow" down to the full name; "project" is
+        // an only child; "src" is the last component and stays full.
+        assert!(out.starts_with('/'), "absolute display expected: {out}");
+        assert!(out.ends_with("/Work/p/src"), "unexpected shortening: {out}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_sibling_cache_reuse_and_expiry() {
+        let root = temp_root("cache");
+        let cwd = root.join("a/b");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let anchors = vec![".git".to_string()];
+
+        let first = sibling_tables(&cwd, &anchors);
+        // Warm render: a new sibling appears in the temp root but must not be
+        // seen yet.
+        std::fs::create_dir_all(root.join("a2")).unwrap();
+        let second = sibling_tables(&cwd, &anchors);
+        assert_eq!(second.tables, first.tables, "warm render must hit the cache");
+
+        // Expire the entry: the next render must recompute.
+        let mut cache = SIBLING_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.get_mut(&cwd).unwrap().stamp = Instant::now() - SIBLING_TTL - Duration::from_secs(1);
+        drop(cache);
+        let third = sibling_tables(&cwd, &anchors);
+        let entry = third.tables[2].as_ref().unwrap();
+        assert!(
+            entry.0.iter().any(|s| s == "a2"),
+            "expired entry must recompute: {:?}",
+            entry.0
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    static TEST_THEME: LazyLock<crate::theme::ThemePalette> =
+        LazyLock::new(crate::theme::ThemePalette::default);
+    static TEST_CAPS: LazyLock<crate::terminal::TermCaps> =
+        LazyLock::new(crate::terminal::TermCaps::detect);
+
+    #[test]
+    fn test_render_unique_end_to_end() {
+        let home = temp_root("render");
+        std::fs::create_dir_all(home.join("Work/project/src")).unwrap();
+        std::fs::create_dir_all(home.join("Work/prelude")).unwrap();
+        // project is an anchor directory: never shortened.
+        std::fs::write(home.join("Work/project/Cargo.toml"), "").unwrap();
+        let cwd = home.join("Work/project/src");
+
+        let mut config = crate::config::Config::default();
+        config.directory.unique = true;
+        let git = crate::git::GitStatus::default();
+        let ctx = SegmentContext {
+            cwd: cwd.to_str().unwrap(),
+            home: home.to_str().unwrap(),
+            exit_code: 0,
+            cmd_duration_ms: 0,
+            cols: 120,
+            jobs: 0,
+            in_ssh: false,
+            git_status: &git,
+            config: &config,
+            palette: &TEST_THEME,
+            term_caps: &TEST_CAPS,
+            env: None,
+        };
+        let seg = render(&ctx).unwrap();
+        // Anchor `project` and last component `src` stay full; `Work` collides
+        // with nothing under home here, so it is unique to one character… but
+        // `prelude` does not share a prefix, so `Work` → `W`.
+        assert!(seg.content.contains("~/W/project/src"), "got: {:?}", seg.content);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn test_render_default_path_unchanged() {
+        let home = temp_root("render-default");
+        std::fs::create_dir_all(home.join("Work/project/src")).unwrap();
+        std::fs::create_dir_all(home.join("Work/prelude")).unwrap();
+        let cwd = home.join("Work/project/src");
+
+        let config = crate::config::Config::default();
+        let git = crate::git::GitStatus::default();
+        let ctx = SegmentContext {
+            cwd: cwd.to_str().unwrap(),
+            home: home.to_str().unwrap(),
+            exit_code: 0,
+            cmd_duration_ms: 0,
+            cols: 120,
+            jobs: 0,
+            in_ssh: false,
+            git_status: &git,
+            config: &config,
+            palette: &TEST_THEME,
+            term_caps: &TEST_CAPS,
+            env: None,
+        };
+        let seg = render(&ctx).unwrap();
+        // unique=false (default): the full path, byte-identical to before.
+        assert!(seg.content.contains("~/Work/project/src"), "got: {:?}", seg.content);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

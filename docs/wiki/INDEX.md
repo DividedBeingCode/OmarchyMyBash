@@ -15,9 +15,9 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 | [CLI](cli.md) | `omarchy10k` binary: subcommands, prompt client, doctor diagnostics |
 | [Bash Adapter](bash-adapter.md) | Shell integration: hook broker, daemon lifecycle, instant prompt cache, timing, ble.sh mode |
 | [Quattro Plugin](quattro.md) | Desktop Control Center: manifest, QML components, daemon IPC, live preview, theme swatches, config UI |
-| [Configuration](config.md) | Full config key reference with types, defaults, and valid values |
+| [Configuration](config.md) | Full config key reference with types, defaults, and valid values (incl. Wave 1 visual-depth keys) |
 | [Protocol](protocol.md) | Daemon IPC specification (protocol v0.4): NDJSON over Unix socket, prompt/preview/config/control/statusline messages, env channel, enriched status |
-| [Theme Integration](theme.md) | Omarchy theme bridge: template, hook, palette loading, Palette API for Quattro swatches |
+| [Theme Integration](theme.md) | Omarchy theme bridge: template, hook, palette loading, Palette API for Quattro swatches, rice layer (theme-reactive tool configs) |
 | [Glossary](glossary.md) | Terms, concepts, environment variables, file paths (includes v0.3 terminal and API terms) |
 | [v0.3 Feature Intel](v03-feature-intel.md) | Research-backed feature catalog that informed v0.3: 30 features, compatibility matrix, priority tiers |
 | [Quattro QoL Intel](quattro-qol-intel.md) | Quality-of-life improvements for Quattro integration: live preview, bar intelligence, notifications |

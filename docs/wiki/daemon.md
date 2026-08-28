@@ -860,3 +860,9 @@ The following issues identified by the [Bug Audit](bug-audit.md) have been fixed
 |--------|-------|----------|--------|
 | segment layer | [Environment segments frozen at daemon start](bug-audit.md#5-every-environment-derived-segment-is-frozen-at-daemon-start) — python_env, toolchain, nix, k8s read `std::env` inside the daemon and never reflect post-startup changes. | High | v0.4 design item |
 | `layout.rs` | [`Segment::display_width` measures escape bytes as columns.](bug-audit.md#20-smaller-confirmed-defects) Unreachable today because every segment sets `compact_content`; a trap for the next one that does not. | Low | Open |
+
+## Wave 1 Internals
+
+- **Sibling cache** (`segments/directory.rs`): process-local `LazyLock<Mutex<HashMap<PathBuf, SiblingTables>>>`, keyed by cwd, 30s TTL. Each entry caches per-ancestor sibling directory lists + anchor flags, so warm renders with `unique = true` do zero filesystem reads.
+- **Load ring** (`segments/load.rs`): process-local `LazyLock<Mutex<VecDeque<f32>>>`, 16 slots, pushed once per render. Idle shells freeze history by design.
+- **Gradient math** (`theme.rs`): `AnsiColor::lerp(a, b, t)` + `ThemePalette::ramp_color(t)` (two-stage accent→magenta→cyan) + `gap_gradient_endpoints(mode)` (complement rule: blue ≥ red accent → magenta, else cyan). `AnsiColor` is now `Copy`.

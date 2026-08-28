@@ -1,4 +1,5 @@
 mod bridge;
+mod configure;
 mod doctor;
 mod intro;
 mod prompt;
@@ -12,6 +13,25 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Subcommand)]
+enum LookAction {
+    /// List available Looks (curated + user-saved)
+    List,
+    /// Apply a Look atomically
+    Apply {
+        name: String,
+        /// Try in-memory only (reverted by the next config reload)
+        #[arg(long)]
+        transient: bool,
+    },
+    /// Snapshot the current appearance as a named Look
+    Save {
+        name: String,
+        #[arg(short, long, default_value = "")]
+        label: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -47,6 +67,12 @@ enum Commands {
     /// Signal the daemon to reload its configuration
     Reload,
 
+    /// Browse and apply named appearance bundles (Looks)
+    Look {
+        #[command(subcommand)]
+        action: LookAction,
+    },
+
     /// Run a prompt render benchmark
     Benchmark {
         /// Number of iterations
@@ -73,6 +99,10 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+
+    /// Interactive setup wizard — pick style, separators, frame, and icons
+    /// with a live prompt preview
+    Configure,
 
     /// Extract the left prompt from a JSON daemon response (used internally)
     #[command(name = "parse-prompt", hide = true)]
@@ -147,6 +177,32 @@ async fn main() -> anyhow::Result<()> {
             println!("config reloaded");
         }
 
+        Commands::Look { action } => match action {
+            LookAction::List => {
+                prompt::send_command(&socket_path(), "looks").await?;
+            }
+            LookAction::Apply { name, transient } => {
+                let request = serde_json::json!({
+                    "command": "looks_apply",
+                    "name": name,
+                    "transient": transient,
+                });
+                let response =
+                    prompt::send_request(&socket_path(), &request.to_string()).await?;
+                println!("{response}");
+            }
+            LookAction::Save { name, label } => {
+                let request = serde_json::json!({
+                    "command": "looks_save",
+                    "name": name,
+                    "label": label,
+                });
+                let response =
+                    prompt::send_request(&socket_path(), &request.to_string()).await?;
+                println!("{response}");
+            }
+        },
+
         Commands::Benchmark { iterations } => {
             prompt::benchmark(&socket_path(), iterations).await?;
         }
@@ -167,6 +223,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Statusline => {
             statusline::run(&socket_path()).await?;
+        }
+
+        Commands::Configure => {
+            configure::run().await?;
         }
 
         Commands::Intro { force } => {

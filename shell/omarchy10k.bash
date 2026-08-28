@@ -25,6 +25,12 @@ __O10K_CACHE="${__O10K_CACHE_DIR}/last_prompt"
 # command expansion — keep promptvars off for this shell.
 shopt -u promptvars
 
+# Ghostty's `keybind = shift+enter=csi:13;2u` sends a CSI-u sequence that
+# readline cannot parse — it leaks as literal `;2u` at the prompt. Bind it to
+# accept-line (treat Shift+Enter as Enter) in terminals that send it. Harmless
+# no-op elsewhere. (Interactive shells only reach this point.)
+bind '"\e[13;2u": accept-line' &>/dev/null || true
+
 if [[ -f "$__O10K_CACHE" ]]; then
     PS1=$(<"$__O10K_CACHE")
 fi
@@ -139,7 +145,9 @@ __o10k_start_daemon() {
     fi
 
     O10K_PARENT_PID=$$ "$__O10K_DAEMON_BIN" &>/dev/null &
+    __O10K_DAEMON_PID=$!
     disown
+    printf '%s\n' "$__O10K_DAEMON_PID" > "${__O10K_SOCKET_DIR}/omarchy10k-$$.pid" 2>/dev/null
 
     local i=0
     while [[ ! -S "$__O10K_SOCKET" ]] && (( i < 20 )); do
@@ -161,6 +169,7 @@ __o10k_stop_daemon() {
         __o10k_socket_send '{"command":"shutdown"}' 2>/dev/null || true
         rm -f "$__O10K_SOCKET"
     fi
+    rm -f "${__O10K_SOCKET_DIR}/omarchy10k-$$.pid" 2>/dev/null
 }
 
 # ── Bridge Coprocess ──────────────────────────────────────────────────────
@@ -654,6 +663,66 @@ __o10k_cleanup() {
 }
 
 trap __o10k_cleanup EXIT
+
+# ── Theme Env (rice layer) ─────────────────────────────────────────────────
+# The Omarchy theme engine renders o10k-env.sh (fzf/eza/less/lazygit colors)
+# on every theme switch at a stable path. Re-source it when its mtime moves
+# so running shells adopt the new palette without restart. One stat per
+# prompt when unchanged.
+
+__O10K_THEME_ENV="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/o10k-env.sh"
+__O10K_THEME_ENV_STAMP="${__O10K_CACHE_DIR}/env.stamp"
+
+__o10k_source_theme_env() {
+    [[ -f "$__O10K_THEME_ENV" ]] || return 0
+    if [[ ! -f "$__O10K_THEME_ENV_STAMP" || "$__O10K_THEME_ENV" -nt "$__O10K_THEME_ENV_STAMP" ]]; then
+        # The theme engine rewrites this file during the next-theme → theme
+        # swap; a read racing that rewrite can yield a truncated file. Only
+        # commit the stamp when the result is sane — otherwise the next
+        # prompt retries (one-render self-heal instead of stuck-empty env).
+        if source "$__O10K_THEME_ENV" 2>/dev/null && [[ -n "${FZF_DEFAULT_OPTS:-}" ]]; then
+            touch "$__O10K_THEME_ENV_STAMP" 2>/dev/null
+        fi
+    fi
+}
+o10k_hook_add precmd __o10k_source_theme_env
+__o10k_source_theme_env
+
+# ── Idle-Shell Watchdog ────────────────────────────────────────────────────
+# Precmd recovery only fires when a prompt draws — an idle shell whose
+# daemon was killed (crash, deploy, OOM) stays dark, and the Control Center
+# bar widget reports offline until the user presses a key. This background
+# loop polls the daemon's pid file (one kill -0 builtin per tick, zero
+# forks) and respawns daemon+bridge via the 5s-rate-limited restart when it
+# dies. $$ inside the subshell is the parent shell's PID, so the loop self-
+# terminates when the owning shell exits.
+
+__o10k_watchdog() {
+    local pidfile="${__O10K_SOCKET_DIR}/omarchy10k-$$.pid"
+    local dp
+    while kill -0 "$$" 2>/dev/null; do
+        sleep 10
+        [[ -s "$pidfile" ]] || continue
+        IFS= read -r dp < "$pidfile" 2>/dev/null || continue
+        (( dp > 0 )) || continue
+        # Daemon-only respawn: a bridge started here would live inside this
+        # subshell and orphan. The parent shell's precmd recovery rebuilds
+        # its own bridge on the next prompt.
+        if ! kill -0 "$dp" 2>/dev/null; then
+            rm -f "$__O10K_SOCKET"
+            __o10k_start_daemon
+        fi
+    done
+}
+
+__o10k_watchdog &
+disown
+# ── Modern CLI Layer ────────────────────────────────────────────────────────
+# Aliases and tool inits (eza/bat/zoxide/atuin/fzf/yazi). Installed by
+# install.sh; set O10K_NO_TOOLS=1 to skip.
+
+[[ -z "${O10K_NO_TOOLS:-}" && -f "${HOME}/.config/omarchy10k/tools.sh" ]] \
+    && source "${HOME}/.config/omarchy10k/tools.sh"
 
 # ── Init ───────────────────────────────────────────────────────────────────
 

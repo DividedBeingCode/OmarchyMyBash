@@ -21,3 +21,5 @@ directories.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+crossterm.workspace = true
+unicode-width.workspace = true

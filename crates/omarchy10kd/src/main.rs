@@ -1,5 +1,6 @@
 mod config;
 mod git;
+mod looks;
 mod layout;
 mod render;
 mod segments;
@@ -20,6 +21,18 @@ use theme::ThemePalette;
 fn socket_path() -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_| "/tmp".into());
+    // Headless instances (Control Center with no terminal open) bind a fixed
+    // name: idempotent spawns (a live daemon refuses hijack, a stale socket
+    // is cleared), and discovery treats the non-numeric pid as always alive.
+    if let Ok(name) = std::env::var("O10K_SOCK_NAME") {
+        let safe: String = name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect();
+        if !safe.is_empty() {
+            return PathBuf::from(runtime_dir).join(format!("omarchy10k-{safe}.sock"));
+        }
+    }
     let ppid = std::env::var("O10K_PARENT_PID")
         .unwrap_or_else(|_| std::process::id().to_string());
     PathBuf::from(runtime_dir).join(format!("omarchy10k-{ppid}.sock"))

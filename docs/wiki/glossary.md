@@ -63,6 +63,7 @@
 |----------|--------|---------|---------|
 | `XDG_RUNTIME_DIR` | System | Adapter, CLI, daemon, hook | Base directory for socket files |
 | `O10K_PARENT_PID` | Adapter (exports `$$`) | Daemon, CLI, doctor (hook check) | Socket naming PID; doubles as adapter-installed signal |
+| `O10K_SOCK_NAME` | Quattro panel (headless spawn) | Daemon | Fixed socket name (`omarchy10k-<name>.sock`); enables settings with no terminal open |
 | `O10K_BIN` | User (optional) | Adapter | Override `omarchy10k` binary path |
 | `O10K_DAEMON_BIN` | User (optional) | Adapter | Override `omarchy10kd` binary path |
 | `O10K_SHELL_INTEGRATION` | User (optional) | Adapter | Control OSC 133 emission: `auto`, `force`, `off` |

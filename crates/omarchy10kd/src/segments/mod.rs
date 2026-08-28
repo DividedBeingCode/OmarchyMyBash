@@ -14,6 +14,7 @@ pub mod nix;
 pub mod k8s;
 pub mod time;
 pub mod battery;
+pub mod load;
 pub mod ai;
 
 use crate::config::Config;
@@ -134,6 +135,12 @@ pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {
 
     if ctx.config.segments.battery.enabled {
         if let Some(seg) = battery::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
+    if ctx.config.segments.load.enabled {
+        if let Some(seg) = load::render(ctx) {
             segments.push(seg);
         }
     }

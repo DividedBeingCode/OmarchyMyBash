@@ -11,7 +11,7 @@ use crate::git::GitCache;
 use crate::render::PromptRenderer;
 use crate::theme::ThemePalette;
 
-pub const PROTOCOL_VERSION: &str = "0.4";
+pub const PROTOCOL_VERSION: &str = "0.5";
 
 #[derive(Debug, serde::Deserialize)]
 pub struct PromptRequest {
@@ -49,9 +49,20 @@ pub struct PreviewRequest {
     pub git_staged: u32,
     #[serde(default)]
     pub git_unstaged: u32,
-    /// Per-request preset override (v0.4, used by the Quattro preset gallery).
+    /// Wave 2: dry-run render a Look without persisting anything.
+    #[serde(default)]
+    pub look: Option<String>,
     #[serde(default)]
     pub style_preset: Option<String>,
+    /// Catalog key applied to both separators (configure wizard live preview).
+    #[serde(default)]
+    pub style_separators: Option<String>,
+    /// Frame mode: none | left | right | full (configure wizard live preview).
+    #[serde(default)]
+    pub style_frame: Option<String>,
+    /// Two-line prompt toggle (configure wizard live preview).
+    #[serde(default)]
+    pub prompt_newline: Option<bool>,
 }
 
 fn default_preview_cwd() -> String {
@@ -253,6 +264,7 @@ async fn write_response(
 
 async fn handle_control(
     command: &str,
+    rest: &serde_json::Value,
     state: &Arc<DaemonState>,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
     request_id: Option<&str>,
@@ -282,6 +294,141 @@ async fn handle_control(
             write_response(writer, serde_json::json!({"type":"control","status":"bye"}), request_id).await?;
             remove_socket_file(&state.socket_path);
             std::process::exit(0);
+        }
+        "looks" => {
+            let config_guard = state.config.read().await;
+            let looks = crate::looks::all(&config_guard);
+            let looks_json: Vec<serde_json::Value> = looks
+                .iter()
+                .map(|l| serde_json::json!({ "name": l.name, "label": l.label, "patch": l.patch }))
+                .collect();
+            write_response(writer, serde_json::json!({
+                "type": "control",
+                "status": "ok",
+                "looks": looks_json,
+            }), request_id).await?;
+        }
+        "defaults" => {
+            let config_json = serde_json::to_value(crate::config::Config::default())
+                .unwrap_or_default();
+            write_response(writer, serde_json::json!({
+                "type": "control",
+                "status": "ok",
+                "config": config_json,
+            }), request_id).await?;
+        }
+        "palettes" => {
+            let palettes: Vec<serde_json::Value> = ["tokyo-night", "catppuccin", "gruvbox",
+                "nord", "dracula", "rose-pine", "everforest", "kanagawa"]
+                .iter()
+                .filter_map(|k| crate::looks::curated_palette(k)
+                    .map(|v| serde_json::json!({ "key": k, "theme": v["theme"].clone() })))
+                .collect();
+            write_response(writer, serde_json::json!({
+                "type": "control",
+                "status": "ok",
+                "palettes": palettes,
+            }), request_id).await?;
+        }
+        "looks_apply" => {
+            let name = rest.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let transient = rest.get("transient").and_then(|v| v.as_bool()).unwrap_or(false);
+            if name.is_empty() {
+                write_response(writer, serde_json::json!({
+                    "type": "control", "status": "error", "error": "looks_apply requires 'name'",
+                }), request_id).await?;
+            } else {
+                // Scope the read guard: write_config_patch / the transient
+                // path take the write lock below — holding the read guard
+                // across them deadlocks the daemon.
+                let look = {
+                    let cfg_guard = state.config.read().await;
+                    crate::looks::resolve(&name, &cfg_guard)
+                };
+                match look {
+                    Some(l) => {
+                        if transient {
+                            // Try: in-memory only. Revert = reload_config.
+                            let current = state.config.read().await.clone();
+                            match crate::looks::apply_transient(&current, &l.patch) {
+                                Ok(new_config) => {
+                                    let mut cfg = state.config.write().await;
+                                    *cfg = new_config;
+                                    drop(cfg);
+                                    state.reload_theme().await;
+                                    write_response(writer, serde_json::json!({
+                                        "type": "control", "status": "ok", "transient": true,
+                                    }), request_id).await?;
+                                }
+                                Err(e) => {
+                                    write_response(writer, serde_json::json!({
+                                        "type": "control", "status": "error", "error": e,
+                                    }), request_id).await?;
+                                }
+                            }
+                        } else {
+                            match write_config_patch(state, &l.patch).await {
+                                Ok(()) => {
+                                    write_response(writer, serde_json::json!({
+                                        "type": "control", "status": "ok",
+                                    }), request_id).await?;
+                                }
+                                Err(e) => {
+                                    write_response(writer, serde_json::json!({
+                                        "type": "control", "status": "error", "error": e,
+                                    }), request_id).await?;
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        write_response(writer, serde_json::json!({
+                            "type": "control", "status": "error",
+                            "error": format!("unknown look: {name}"),
+                        }), request_id).await?;
+                    }
+                }
+            }
+        }
+        "looks_save" => {
+            let name = rest.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let label = rest.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if name.is_empty() {
+                write_response(writer, serde_json::json!({
+                    "type": "control", "status": "error", "error": "looks_save requires 'name'",
+                }), request_id).await?;
+            } else {
+                let current = state.config.read().await.clone();
+                let entry_patch = serde_json::json!({
+                    "style": {
+                        "preset": current.style.preset,
+                        "separators": { "shape": current.style.separators.shape, "left": current.style.separators.left, "right": current.style.separators.right },
+                        "frame": { "enabled": current.style.frame.enabled, "gap_char": current.style.frame.gap_char, "gap_gradient": current.style.frame.gap_gradient },
+                    },
+                    "glyphs": {
+                        "os_icon": current.segments.os.icon,
+                        "character": current.segments.character.success,
+                        "git_branch_icon": current.git.branch_icon,
+                    },
+                    "prompt": { "blank_line": current.prompt.blank_line },
+                });
+                let entry = serde_json::json!({ "label": label, "palette": "keep", "patch": entry_patch });
+                let mut looks_tbl = serde_json::Map::new();
+                looks_tbl.insert(name.clone(), entry);
+                let patch = serde_json::json!({ "looks": looks_tbl });
+                match write_config_patch(state, &patch).await {
+                    Ok(()) => {
+                        write_response(writer, serde_json::json!({
+                            "type": "control", "status": "ok",
+                        }), request_id).await?;
+                    }
+                    Err(e) => {
+                        write_response(writer, serde_json::json!({
+                            "type": "control", "status": "error", "error": e,
+                        }), request_id).await?;
+                    }
+                }
+            }
         }
         "status" => {
             let cwd = std::env::current_dir()
@@ -422,19 +569,54 @@ async fn handle_preview(
     request_id: Option<&str>,
 ) -> anyhow::Result<()> {
     let config_guard = state.config.read().await;
-    // Per-request preset override (Quattro preset gallery, v0.4): clone the
-    // config and force the requested preset, clearing the legacy layout
-    // mapping so the override always resolves verbatim.
+    // Per-request overrides (Quattro preset gallery, v0.4; configure wizard):
+    // clone the config and force the requested style knobs so the override
+    // always resolves verbatim.
     let preset_config;
-    let config: &Config = match &req.style_preset {
-        Some(preset) => {
-            let mut c = config_guard.clone();
+    let look_config;
+    let config: &Config = if let Some(look_name) = &req.look {
+        let current = config_guard.clone();
+        let look = crate::looks::resolve(look_name, &current);
+        match look {
+            Some(l) => {
+                look_config = crate::looks::apply_transient(&current, &l.patch)
+                    .unwrap_or(current);
+                &look_config
+            }
+            None => &config_guard,
+        }
+    } else if req.style_preset.is_some()
+        || req.style_separators.is_some()
+        || req.style_frame.is_some()
+        || req.prompt_newline.is_some()
+    {
+        let mut c = config_guard.clone();
+        if let Some(preset) = &req.style_preset {
             c.style.preset = preset.clone();
             c.prompt.layout = String::new();
-            preset_config = c;
-            &preset_config
         }
-        None => &config_guard,
+        if let Some(sep) = &req.style_separators {
+            c.style.separators.left = Some(sep.clone());
+            c.style.separators.right = Some(sep.clone());
+        }
+        if let Some(frame) = &req.style_frame {
+            let (enabled, left, right) = match frame.as_str() {
+                "left" => (true, Some(true), Some(false)),
+                "right" => (true, Some(false), Some(true)),
+                "full" => (true, Some(true), Some(true)),
+                _ => (false, None, None),
+            };
+            c.style.frame.enabled = Some(enabled);
+            c.style.frame.left = left;
+            c.style.frame.right = right;
+        }
+        if let Some(newline) = req.prompt_newline {
+            c.prompt.newline = newline;
+        }
+        preset_config = c;
+        &preset_config
+    } else {
+        &config_guard
     };
     let palette = state.palette.read().await;
 
@@ -608,7 +790,7 @@ async fn handle_connection(
             }
             Some("control") => {
                 if let Some(ref cmd) = msg.command {
-                    handle_control(cmd, &state, &mut writer, request_id).await?;
+                    handle_control(cmd, &msg.rest, &state, &mut writer, request_id).await?;
                 } else {
                     write_response(&mut writer, serde_json::json!({
                         "type": "error",
@@ -691,52 +873,27 @@ async fn handle_connection(
                                 }
                             }
 
-                            if !failed_keys.is_empty() {
-                                // All-or-nothing: never write a partial patch.
-                                warn!("config set: unconvertible values for keys: {}", failed_keys.join(", "));
-                                write_response(&mut writer, serde_json::json!({
-                                    "type": "config",
-                                    "status": "error",
-                                    "error": format!("values for keys {} are not representable in TOML; nothing was written", failed_keys.join(", ")),
-                                    "failed_keys": failed_keys,
-                                }), request_id).await?;
-                                line.clear();
-                                continue;
-                            }
-
-                            if let Some(parent) = config_path.parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-
-                            let new_toml = toml::to_string_pretty(&doc).unwrap_or_default();
-                            let tmp_path = config_path.with_extension("toml.tmp");
-                            match std::fs::write(&tmp_path, &new_toml)
-                                .and_then(|_| std::fs::rename(&tmp_path, &config_path))
-                            {
-                                Ok(()) => {}
+                            match write_config_patch(&state, &patch).await {
+                                Ok(()) => {
+                                    let touches_theme = patch.get("theme").is_some();
+                                    if touches_theme {
+                                        state.reload_theme().await;
+                                    }
+                                    write_response(&mut writer, serde_json::json!({
+                                        "type": "config",
+                                        "status": "ok",
+                                    }), request_id).await?;
+                                }
                                 Err(e) => {
-                                    warn!("config write failed: {e}");
                                     write_response(&mut writer, serde_json::json!({
                                         "type": "config",
                                         "status": "error",
-                                        "error": format!("failed to write config: {e}"),
+                                        "error": e,
                                     }), request_id).await?;
                                     line.clear();
                                     continue;
                                 }
                             }
-
-                            let touches_theme = patch.get("theme").is_some();
-                            if let Err(e) = state.reload_config().await {
-                                warn!("config reload after set failed: {e}");
-                            }
-                            if touches_theme {
-                                state.reload_theme().await;
-                            }
-                            write_response(&mut writer, serde_json::json!({
-                                "type": "config",
-                                "status": "ok",
-                            }), request_id).await?;
                         } else {
                             write_response(&mut writer, serde_json::json!({
                                 "type": "error",
@@ -744,10 +901,10 @@ async fn handle_connection(
                             }), request_id).await?;
                         }
                     } else {
-                        handle_control(cmd, &state, &mut writer, request_id).await?;
+                        handle_control(cmd, &msg.rest, &state, &mut writer, request_id).await?;
                     }
                 } else {
-                    handle_control("config_get", &state, &mut writer, request_id).await?;
+                    handle_control("config_get", &msg.rest, &state, &mut writer, request_id).await?;
                 }
             }
             None => {
@@ -764,7 +921,7 @@ async fn handle_connection(
                         }
                     }
                 } else if let Some(ref cmd) = msg.command {
-                    handle_control(cmd, &state, &mut writer, request_id).await?;
+                    handle_control(cmd, &msg.rest, &state, &mut writer, request_id).await?;
                 } else {
                     match serde_json::from_str::<PromptRequest>(trimmed) {
                         Ok(req) => handle_prompt(&req, &state, &mut writer, request_id).await?,
@@ -792,7 +949,57 @@ async fn handle_connection(
     Ok(())
 }
 
-fn merge_toml_value(target: &mut toml::Value, patch: toml::Value) {
+/// Merge a `config_set`-shaped patch into the config file atomically
+/// (tmp+rename) and reload the in-memory config. Single source of truth for
+/// config_set and looks_apply.
+async fn write_config_patch(
+    state: &Arc<DaemonState>,
+    patch: &serde_json::Value,
+) -> Result<(), String> {
+    let config_path = state.config_path.clone();
+    let mut doc: toml::Table = match std::fs::read_to_string(&config_path) {
+        Ok(existing) => match toml::from_str(&existing) {
+            Ok(t) => t,
+            Err(e) => return Err(format!("config.toml has syntax errors: {e}")),
+        },
+        Err(_) => toml::Table::new(),
+    };
+
+    let mut failed_keys: Vec<String> = Vec::new();
+    if let Some(obj) = patch.as_object() {
+        for (k, v) in obj {
+            match serde_json::from_value::<toml::Value>(v.clone()) {
+                Ok(toml_val) => {
+                    merge_toml_value(
+                        doc.entry(k.clone()).or_insert(toml::Value::Table(toml::Table::new())),
+                        toml_val,
+                    );
+                }
+                Err(_) => failed_keys.push(k.clone()),
+            }
+        }
+    }
+    if !failed_keys.is_empty() {
+        return Err(format!(
+            "values for keys {} are not representable in TOML",
+            failed_keys.join(", ")
+        ));
+    }
+
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let new_toml = toml::to_string_pretty(&doc).unwrap_or_default();
+    let tmp_path = config_path.with_extension("toml.tmp");
+    std::fs::write(&tmp_path, &new_toml)
+        .and_then(|_| std::fs::rename(&tmp_path, &config_path))
+        .map_err(|e| format!("failed to write config: {e}"))?;
+
+    state.reload_config().await.map_err(|e| format!("reload failed: {e}"))?;
+    Ok(())
+}
+
+pub(crate) fn merge_toml_value(target: &mut toml::Value, patch: toml::Value) {
     match (&mut *target, patch) {
         (toml::Value::Table(target_table), toml::Value::Table(patch_table)) => {
             for (k, v) in patch_table {
