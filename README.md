@@ -167,9 +167,48 @@ A native Omarchy Quattro bar widget with a 4-tab configuration panel:
 
 The panel edits `~/.config/omarchy10k/config.toml` directly. Every change made in the UI has a file-level equivalent.
 
+### Desktop Service (v0.4)
+
+Omarchy10k is scriptable from the desktop. The Quattro plugin registers an IPC
+target, so any keybind, script, or tool can drive it:
+
+```bash
+omarchy-shell call community.omarchy10k status
+omarchy-shell call community.omarchy10k setLayout powerline
+omarchy-shell call community.omarchy10k toggleTransient
+omarchy-shell call community.omarchy10k picker      # session picker overlay
+```
+
+A headless **service** component holds persistent connections to every running
+daemon (no polling), a keybind-summoned **session picker overlay** lists all
+live shells with CWD/branch/duration and focuses or reopens them, and the bar
+widget + panel render **live ANSI-colored prompt previews** via the daemon.
+
+### Agent Statusline (v0.4)
+
+`omarchy10k statusline` is a Claude Code statusline renderer: it reads Claude
+Code's documented statusLine JSON on stdin and renders it through the daemon
+with your active Omarchy theme — model, context-window % with green/yellow/red
+thresholds, cost, and worktree — in under 5ms warm, with a pure-Rust fallback
+when the daemon is down. The installer wires it into `~/.claude/settings.json`.
+An `✦ claude` / `✳ codex` prompt segment signals when an agent session is
+active in the shell.
+
+### Live Context Segments (v0.4)
+
+Environment-derived segments now update live. `source .venv/bin/activate`,
+`mise use`, `nix develop`, and `direnv allow` all appear on the next prompt —
+the adapter streams a fixed allowlist of environment variables with every
+prompt request (zero forks), fixing the frozen-env limitation. True powerline
+and rainbow presets render filled background segments with fg-flipped
+separators, and long-command notifications route through Omarchy's
+`omarchy-notification-send`.
+
 ## Installation
 
-### Quick Install (Recommended)
+### Omarchy Quick Install (Recommended)
+
+On an Omarchy Quattro machine:
 
 ```bash
 git clone https://github.com/DividedBeingCode/OmarchyMyBash.git
@@ -177,66 +216,92 @@ cd OmarchyMyBash/omarchy10k
 ./install.sh
 ```
 
-This builds from source, installs binaries to `~/.local/bin/`, configures `.bashrc`, installs the Quattro Control Center plugin, and sets up the theme-set hook. Open a new terminal and you're done.
+The installer is Omarchy-aware. It:
 
-To uninstall: `./install.sh --uninstall`
+1. Checks dependencies — using `omarchy-pkg-add` guidance if Rust or git are missing
+2. Builds from source and installs binaries to `~/.local/bin/` (atomic tmp+mv)
+3. Adds one line to `~/.bashrc`: `eval "$(omarchy10k init bash)"`
+4. Installs the Quattro plugin to `~/.config/omarchy/plugins/community.omarchy10k/`, syncs `manifest.json` version with the crate version, and triggers `omarchy-shell shell rescanPlugins`
+5. Installs the `theme-set` hook to `~/.config/omarchy/hooks/theme-set.d/omarchy10k`
+6. Deploys the theme bridge template to `~/.local/share/omarchy/templates/` so Omarchy's theme engine renders prompt colors on every theme switch
+7. Merges the Claude Code statusline into `~/.claude/settings.json` (merge-only, never overwrites an existing statusLine, backup kept)
+
+The plugin lands **disabled** — Omarchy's plugin security model lets you review code before enabling. Enable it with:
+
+```bash
+omarchy plugin enable community.omarchy10k
+```
+
+Placement follows the manifest's `defaultSection: right`. Then open a new terminal — done.
 
 ### Manual Install
 
 ```bash
-# Clone
+# Clone and build
 git clone https://github.com/DividedBeingCode/OmarchyMyBash.git
-cd OmarchyMyBash
-
-# Build
+cd OmarchyMyBash/omarchy10k
 cargo build --release
 
 # Install binaries
-cp target/release/omarchy10k ~/.local/bin/
-cp target/release/omarchy10kd ~/.local/bin/
+mkdir -p ~/.local/bin
+cp target/release/omarchy10k target/release/omarchy10kd ~/.local/bin/
 
-# Add to ~/.bashrc (one line, that's it)
+# Shell init (the only required step)
 echo 'eval "$(omarchy10k init bash)"' >> ~/.bashrc
 
-# Optional: install the Quattro plugin
-cp -r omarchy10k/quattro/ ~/.config/omarchy/plugins/community.omarchy10k/
+# Optional: Quattro plugin (Omarchy plugin ecosystem)
+mkdir -p ~/.config/omarchy/plugins/community.omarchy10k
+cp quattro/* ~/.config/omarchy/plugins/community.omarchy10k/
+omarchy-shell shell rescanPlugins          # if omarchy-shell is installed
+omarchy plugin enable community.omarchy10k # places the widget (defaultSection: right)
 
-# Optional: install the theme-set hook
+# Optional: theme-set hook
 mkdir -p ~/.config/omarchy/hooks/theme-set.d/
-cp omarchy10k/hooks/theme-set ~/.config/omarchy/hooks/theme-set.d/omarchy10k
+cp hooks/theme-set ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 chmod +x ~/.config/omarchy/hooks/theme-set.d/omarchy10k
+
+# Optional: theme bridge template (auto-rendered on every Omarchy theme switch)
+mkdir -p ~/.local/share/omarchy/templates/
+cp templates/omarchy10k.toml.tpl ~/.local/share/omarchy/templates/
 ```
+
+Note: the plugin lives in the `omarchy10k/` subdirectory of a workspace repo, so
+one-command `omarchy plugin add <git-url>` (which expects `manifest.json` at the
+repo root) is not available yet — see the roadmap.
 
 ### Updating
 
-Once installed, update Omarchy10k with a single command:
-
 ```bash
-omarchy10k update
+omarchy10k update        # pulls, rebuilds, reinstalls binaries + plugin + hook + template, restarts daemons
+./install.sh --update    # same, from the source tree
 ```
-
-This pulls the latest source, rebuilds, replaces binaries, refreshes the Quattro plugin and theme hook, and gracefully restarts any running daemons. New terminals pick up the update automatically; running terminals restart their daemon on the next command.
-
-**Flags:**
 
 | Flag | Effect |
 |------|--------|
 | `--no-pull` | Skip `git pull` (rebuild from current source tree) |
 | `--no-build` | Skip `cargo build` (reinstall existing binaries + plugin only) |
 
-You can also update via the installer script:
+The update path also re-triggers `omarchy-shell shell rescanPlugins`, so new QML
+surfaces (service hub, session picker) are hot-reloaded. New terminals pick up
+the update automatically; running terminals restart their daemon on the next
+command.
+
+### Uninstall
 
 ```bash
-./install.sh --update
+./install.sh --uninstall
 ```
+
+Removes binaries, the plugin directory (with a `rescanPlugins` so the bar updates), the theme hook, the theme template, the source breadcrumb, and the `.bashrc` line. If you enabled the widget, also remove its entry under Omarchy's **Setup > Plugins** (or from `~/.config/omarchy/shell.json`).
 
 ### Verify
 
 ```bash
 omarchy10k doctor
+omarchy10k intro --force   # one-time welcome render: palette, capabilities, latency
 ```
 
-Doctor checks Bash version, TrueColor support, Nerd Font availability, ble.sh, Omarchy, Mise, Atuin, Zoxide, fzf, daemon health, hook conflicts, and config status.
+Doctor checks Bash version, TrueColor, Nerd Font availability, ble.sh, Omarchy, Mise, Atuin, Zoxide, fzf, daemon health, hook conflicts, and config status.
 
 ## Configuration
 
@@ -334,9 +399,12 @@ format = "%H:%M"            # %H:%M | %H:%M:%S | %I:%M %p
 [segments.battery]
 enabled = false             # show battery (laptops)
 
-[segments.notification]
+[notifications]
 enabled = true
 threshold_ms = 10000        # desktop notification for long commands
+unfocused_only = false      # only notify when the terminal is unfocused
+                            # delivered via omarchy-notification-send, OSC 777 fallback
+                            # (the old [segments.notification] table still parses, deprecated)
 
 # ── Terminal Features ────────────────────────────────
 
@@ -344,14 +412,29 @@ threshold_ms = 10000        # desktop notification for long commands
 enabled = true
 format = "{dir}"            # {dir}, {user}, {host}, {branch}
 
+[terminal.semantic_prompts]
+enabled = false             # OSC 133;C/D emission — enable after verifying no
+                            # conflict with Ghostty's own shell integration
+
 [terminal.progress]
 enabled = true              # OSC 9;4 progress bar
 
-# ── Daemon ────────────────────────────────────────────
+# ── v0.4 Env / Agent / Statusline ─────────────────────
 
-[daemon]
-socket = "auto"             # auto | /path/to/socket
-log_level = "warn"          # trace | debug | info | warn | error
+[env.watch]
+keys = ["VIRTUAL_ENV", "CONDA_DEFAULT_ENV", "MISE_NODE_VERSION", "MISE_PYTHON_VERSION", "MISE_RUBY_VERSION", "MISE_GO_VERSION", "MISE_RUST_VERSION", "IN_NIX_SHELL", "DISTROBOX_ENTER_PATH", "container", "KUBECONFIG", "DIRENV_DIR", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_HOME"]
+                            # env vars the adapter streams with every prompt
+                            # request — keep in sync with the adapter's list
+
+[segments.ai]
+enabled = true              # ✦ claude / ✳ codex signal segment (env-gated)
+
+[git]
+stale_icon = "⟳"            # marker shown on stale (large-repo) git data
+
+[statusline]
+context_warn = 70           # Claude Code context % → yellow
+context_crit = 90           # Claude Code context % → red
 ```
 
 ## CLI Reference
@@ -362,6 +445,11 @@ omarchy10k <command>
 COMMANDS:
   init bash       Emit the Bash adapter for sourcing in .bashrc
   prompt          Render the prompt (used internally by the adapter)
+  statusline      Claude Code statusline renderer: reads statusLine JSON on
+                  stdin, renders through the daemon with the active Omarchy
+                  theme (pure-Rust fallback when the daemon is down)
+  intro           One-time welcome render: palette swatches, detected
+                  capabilities, measured latency (--force re-shows)
   doctor          Run diagnostics and check system compatibility
   reload          Signal the daemon to re-read config and theme
   update          Pull, rebuild, and reinstall (--no-pull, --no-build)
@@ -411,8 +499,8 @@ Omarchy10k Benchmark (100 iterations)
 2. Bash evaluates PROMPT_COMMAND
 3. omarchy10k.bash captures $? and stops the duration timer
 4. Hook broker dispatches precmd to Mise, Atuin, Zoxide
-5. Bash adapter sends context to omarchy10kd via Unix socket:
-   {"cwd":"/home/ian/Code","exit_code":0,"cmd_duration_ms":1523,"cols":120,"jobs":0}
+5. Bash adapter sends context — including a live env snapshot — via Unix socket:
+   {"cwd":"/home/ian/Code/omarchy10k","exit_code":0,"cmd_duration_ms":1523,"cols":120,"jobs":0,"env":{"VIRTUAL_ENV":"/home/ian/.venvs/api","MISE_NODE_VERSION":"22"}}
 6. Daemon checks git cache (inotify-invalidated, not polled)
 7. Segment engine builds directory + git + exit + duration segments
 8. Layout engine resolves segment visibility based on terminal width
@@ -448,21 +536,22 @@ Communication uses NDJSON (newline-delimited JSON) over Unix sockets for debugga
 
 **Prompt request:**
 ```json
-{"cwd":"/home/ian/Code/omarchy10k","exit_code":0,"cmd_duration_ms":0,"cols":120,"jobs":0}
+{"cwd":"/home/ian/Code/omarchy10k","exit_code":0,"cmd_duration_ms":0,"cols":120,"jobs":0,"env":{"VIRTUAL_ENV":"/home/ian/.venvs/api"}}
 ```
 
 **Prompt response:**
 ```json
-{"left":"...rendered ANSI...","right":null,"transient":"...muted ❯...","git_stale":false}
+{"left":"...rendered ANSI...","right":null,"transient":"...muted ❯...","git_stale":false,"notify_threshold_ms":10000,"notify_unfocused_only":false}
 ```
 
 **Control commands:**
 ```json
-{"command":"status"}
-{"command":"reload_config"}
-{"command":"reload_theme"}
-{"command":"invalidate_git"}
-{"command":"shutdown"}
+{"type":"control","command":"status"}   # enriched: git, last_cmd_duration_ms, session_age_secs, battery
+{"type":"control","command":"reload_config"}
+{"type":"control","command":"reload_theme"}
+{"type":"control","command":"invalidate_git"}
+{"type":"control","command":"shutdown"}
+{"type":"statusline","payload":{...}}   # Claude Code statusline render
 ```
 
 ## Project Structure
@@ -480,19 +569,23 @@ omarchy10k/
 │   │       ├── layout.rs         # Priority-based responsive layout engine
 │   │       ├── theme.rs          # Omarchy palette reader, hex-to-RGB, hot reload
 │   │       ├── config.rs         # TOML config with layered defaults
-│   │       └── render.rs         # ANSI output with OSC 133 markers
+│   │       └── render.rs         # ANSI output, OSC 133 markers, statusline render
 │   └── omarchy10k/               # CLI client
 │       └── src/
 │           ├── main.rs           # Clap-based CLI with subcommands
 │           ├── prompt.rs         # Socket client, benchmark runner
+│           ├── statusline.rs     # Claude Code statusline client + fallback render
+│           ├── intro.rs          # First-run welcome render
 │           └── doctor.rs         # System diagnostics
 ├── shell/
-│   └── omarchy10k.bash           # Bash adapter + hook broker (~280 lines)
+│   └── omarchy10k.bash           # Bash adapter + hook broker (env channel, bridge, notifications)
 ├── quattro/
-│   ├── manifest.json             # Omarchy Quattro plugin manifest
+│   ├── manifest.json             # Omarchy Quattro plugin manifest (bar-widget, service, overlay)
 │   ├── BarWidget.qml             # Bar glyph + panel toggle
-│   ├── Panel.qml                 # 4-tab Control Center
-│   └── Model.js                  # State management
+│   ├── Panel.qml                 # 4-tab Control Center with live ANSI preview
+│   ├── Service.qml               # Headless connection hub (persistent daemon sockets, IPC target)
+│   ├── SessionPicker.qml         # Keybind-summoned session picker overlay
+│   └── Model.js                  # TOML/protocol helpers, ANSI-to-rich-text
 ├── templates/
 │   └── omarchy10k.toml.tpl       # Theme bridge template
 ├── hooks/
@@ -500,7 +593,7 @@ omarchy10k/
 ├── config/
 │   └── default.toml              # Default configuration
 ├── tests/
-│   └── integration_test.sh       # 39-test integration suite
+│   └── integration_test.sh       # 59-test integration suite
 ├── README.md
 └── LICENSE                       # MIT
 ```
@@ -530,7 +623,7 @@ The foundation: replace Starship with equal or better prompt quality.
 - [x] OSC 133 shell integration markers
 - [x] Instant prompt cache
 
-### v0.3 -- Control Center & Terminal (current)
+### v0.3 -- Control Center & Terminal
 
 - [x] Live prompt preview in Quattro panel
 - [x] Preset/layout system (omarchy, minimal, powerline, classic, pure, dense)
@@ -542,23 +635,32 @@ The foundation: replace Starship with equal or better prompt quality.
 - [x] Git worktree detection and display
 - [x] One-script installer with `--uninstall` support
 - [x] Multi-session discovery and switching in Quattro
-- [x] Config undo/history, import/export, diff toast
-- [x] Segment toggle grid, one-click tool setup, benchmark display
 - [x] Protocol v0.3 with typed messages and version negotiation
 
-### v0.4 -- Plugin Ecosystem
+### v0.4 -- Desktop Service (current)
 
-- [ ] External executable plugins (`~/.config/omarchy10k/plugins/`)
-- [ ] WASM plugin runtime (wasmtime, AOT-precompiled)
-- [ ] Plugin browser in Control Center
-- [ ] Preset import/export
+- [x] Env channel: live env-derived segments (python, nix, mise, k8s respond to `activate`, `mise use`, `nix develop`)
+- [x] True powerline/rainbow rendering: background fills, fg-flipped separators, caps
+- [x] Real notifications: `[notifications]` table, `omarchy-notification-send` routing, unfocused gating
+- [x] Enriched `status` ambient snapshot (git, last command, session age, battery)
+- [x] Transient prompt wired end-to-end (bridge 4-field framing, `bleopt prompt_ps1_final`)
+- [x] Stale-aware git placeholder (`⟳`)
+- [x] `omarchy10k statusline` — daemon-rendered Claude Code statusline with theme palette
+- [x] Agent signal segment (`✦ claude` / `✳ codex` via env channel)
+- [x] Optional OSC 133;C/D semantic prompt emission with Ghostty coexistence gate
+- [x] Quattro plugin IPC: `omarchy-shell call community.omarchy10k <method>`
+- [x] Service-kind connection hub + keybind-summoned session picker overlay
+- [x] ANSI-colored live panel preview + live preset cards
+- [x] `omarchy10k intro` first-run render
 
-### v0.5 -- Agents
+### v0.5 -- Agents & Desktop (planned)
 
-- [ ] Codex / Claude Code / OpenCode / Gemini CLI adapters
-- [ ] Worktree provenance segments
-- [ ] Agent-aware prompt policies
+- [ ] Agent event registry (Claude Code hooks → daemon → prompt/bar/statusline)
+- [ ] Worktree-first agent workflow surface (worktree lanes across prompt + bar)
 - [ ] GitHub PR/CI segments (cached, 30-60s TTL)
+- [ ] Hook-family integration: battery-low, post-update self-sync, font-set fallback
+
+Ratified out (see `docs/wiki/v04-feature-intel.md` Kill List): WASM plugin runtime, prompt-inline images, prompt animations, tmux bridge, own history stats (Atuin does it), OSC 52.
 
 ### 1.0 -- Daily Driver
 
@@ -576,7 +678,8 @@ The foundation: replace Starship with equal or better prompt quality.
 | Architecture | Process per prompt | Daemon (gitstatusd) | Sourced scripts | **Daemon (omarchy10kd)** |
 | Prompt latency | 15-80ms | 1-5ms | 10-50ms | **< 5ms** |
 | Hook management | None | Zsh hooks | Zsh hooks | **Hook broker** |
-| Desktop integration | None | None | None | **Quattro Control Center** |
+| Desktop integration | None | None | None | **Quattro Control Center + plugin IPC** |
+| Agent statusline | Process-per-update | N/A (Zsh) | N/A (Zsh) | **Daemon-rendered, theme-native (<5ms)** |
 | Theme sync | Manual | Manual | Manual | **Automatic (inotify)** |
 | Config format | TOML | Zsh source | Zsh source | **TOML** |
 | Crash recovery | N/A | Fallback | N/A | **Static fallback prompt** |
@@ -589,7 +692,7 @@ The foundation: replace Starship with equal or better prompt quality.
 - **Rust** 1.75+ (for building from source)
 - A terminal with **TrueColor** support (`COLORTERM=truecolor`)
 - A [**Nerd Font**](https://www.nerdfonts.com/) for glyphs
-- **Omarchy Quattro** (optional, for Control Center and theme sync)
+- **Omarchy Quattro** (optional, for Control Center, theme sync, plugin IPC — `omarchy-shell` enables `omarchy-shell call community.omarchy10k <method>`)
 - **ble.sh** (optional, for transient/right prompts and syntax highlighting)
 
 ## License

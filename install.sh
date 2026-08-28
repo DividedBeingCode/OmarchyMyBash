@@ -35,6 +35,10 @@ case "${1:-}" in
 
         rm -f "${BIN_DIR}/omarchy10k" "${BIN_DIR}/omarchy10kd" && ok "Removed binaries" || warn "Binaries not found"
         rm -rf "${PLUGIN_DIR}" && ok "Removed Quattro plugin" || warn "Plugin not found"
+        if command -v omarchy-shell &>/dev/null; then
+            omarchy-shell shell rescanPlugins 2>/dev/null && ok "Quattro plugin rescan triggered" || true
+            warn "If the widget was enabled, also remove it from Setup > Plugins (or ~/.config/omarchy/shell.json)."
+        fi
         rm -f "${HOOK_DIR}/omarchy10k" && ok "Removed theme hook" || warn "Hook not found"
         rm -f "${TEMPLATE_DIR}/omarchy10k.toml.tpl" && ok "Removed theme template" || true
         rm -rf "${DATA_DIR}" && ok "Removed data directory" || true
@@ -62,14 +66,26 @@ else
     printf "\n${C_BOLD}  OMARCHY10K INSTALLER${C_RESET}\n\n"
 fi
 
-# Step 1: Build
-if [[ -f "${SCRIPT_DIR}/Cargo.toml" ]]; then
-    info "Building from source..."
-    (cd "$SCRIPT_DIR" && cargo build --release 2>&1) || fail "Cargo build failed"
-    ok "Build complete"
-else
-    fail "Cargo.toml not found in ${SCRIPT_DIR}. Run this script from the omarchy10k directory."
+# Step 1: Dependencies
+if ! command -v cargo &>/dev/null; then
+    if command -v omarchy-pkg-add &>/dev/null; then
+        fail "Rust toolchain missing. Install it with:  omarchy-pkg-add rust  then re-run this installer."
+    else
+        fail "cargo not found. Install Rust (https://rustup.rs) and re-run this installer."
+    fi
 fi
+if ! command -v git &>/dev/null; then
+    if command -v omarchy-pkg-add &>/dev/null; then
+        fail "git missing. Install it with:  omarchy-pkg-add git  then re-run this installer."
+    else
+        fail "git not found. Install git and re-run this installer."
+    fi
+fi
+
+# Step 2: Build
+info "Building from source..."
+(cd "$SCRIPT_DIR" && cargo build --release 2>&1) || fail "Cargo build failed"
+ok "Build complete"
 
 # Step 2: Install binaries
 info "Installing binaries to ${BIN_DIR}..."
