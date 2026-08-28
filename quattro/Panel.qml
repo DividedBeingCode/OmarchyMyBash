@@ -771,6 +771,7 @@ Panel {
                 id: scrollArea
                 anchors.fill: parent
                 clip: true
+                Component.onCompleted: contentY = 1150 // TEMP-VERIFY
                 contentWidth: content.implicitWidth
                 contentHeight: content.implicitHeight
                 boundsBehavior: Flickable.StopAtBounds
