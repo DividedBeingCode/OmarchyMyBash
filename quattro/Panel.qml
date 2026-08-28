@@ -1122,7 +1122,6 @@ Panel {
                     radius: Style.cornerRadius
                     color: Style.normalFillFor(root.barForeground, Color.accent, Color.urgent)
                 }
-                color_bg: "transparent"
             }
 
             ActionButton {
@@ -2109,10 +2108,24 @@ Text {
         property string label
         property string value
         property var options: []
+        property string configKey
         signal changed(string val)
+
+        // Modified-vs-default: accent ink bar on the left edge + reset chip
+        // after the options, both only when this row's key diverges from the
+        // daemon's defaults snapshot.
+        readonly property bool modified: configKey.length > 0 && root.isModified(configKey)
 
         width: parent ? parent.width : 200
         spacing: Style.space(8)
+
+        Rectangle {
+            width: 3
+            height: parent.height
+            radius: 1
+            visible: parent.modified
+            color: Color.accent
+        }
 
         Text {
             width: parent.width * 0.35
@@ -2153,6 +2166,28 @@ Text {
                         onClicked: changed(modelData)
                     }
                 }
+            }
+        }
+
+        Rectangle {
+            width: Style.spacing.controlHeight * 0.8
+            height: Style.spacing.controlHeight
+            radius: Style.cornerRadius
+            visible: parent.modified
+            color: Style.normalFillFor(root.barForeground, Color.accent, Color.urgent)
+
+            Text {
+                anchors.centerIn: parent
+                text: "\u21ba"
+                color: Color.muted
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.resetConfigKey(parent.parent.configKey)
             }
         }
     }
