@@ -225,6 +225,7 @@ __o10k_bridge_request() {
             __o10k_set_notify_threshold "$threshold"
             __O10K_TRANSIENT="${transient:-}"
             { printf '%s' "$PS1" > "$__O10K_CACHE.$$.tmp" && mv "$__O10K_CACHE.$$.tmp" "$__O10K_CACHE"; } 2>/dev/null &
+            disown "$!" 2>/dev/null || true
             # Bridge writes the side-channel flags before its response
             # fields; refresh immediately so the 133;C/D gate is current
             # without a one-render lag.
@@ -519,6 +520,7 @@ __o10k_render_prompt() {
                 PS1="$left"
                 __O10K_LAST_RIGHT=$(echo "$response" | python3 -c "import sys,json; r=json.load(sys.stdin).get('right',''); print(r if r else '')" 2>/dev/null)
                 { printf '%s' "$PS1" > "$__O10K_CACHE.$$.tmp" && mv "$__O10K_CACHE.$$.tmp" "$__O10K_CACHE"; } 2>/dev/null &
+                disown "$!" 2>/dev/null || true
 
                 local threshold sem unf transient_str
                 threshold=$(echo "$response" | python3 -c "import sys,json; t=json.load(sys.stdin).get('notify_threshold_ms'); print(t if t else '')" 2>/dev/null)
@@ -548,6 +550,11 @@ __o10k_render_prompt() {
 __O10K_PREEXEC_READY=0
 
 __o10k_preexec() {
+    # Omarchy10k owns preexec handling and keeps promptvars disabled. Clear any
+    # PS0 expression restored after .bashrc (notably Ghostty's injected Bash
+    # hook) before Bash expands it as literal command-prefix text.
+    PS0=''
+
     [[ "$__O10K_PREEXEC_READY" == "1" ]] || return
     __O10K_PREEXEC_READY=0
 

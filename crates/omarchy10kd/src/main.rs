@@ -83,6 +83,26 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(0);
     });
 
+    // Signal-driven socket cleanup. Closing the terminal delivers SIGHUP and
+    // service stops deliver SIGTERM — both default-terminate the daemon and
+    // skip the parent-watch cleanup, leaving a stale socket behind that every
+    // client then lists as a live session.
+    let sock_for_signals = sock_path.clone();
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        let mut sighup = signal(SignalKind::hangup()).expect("install SIGHUP handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+        tokio::select! {
+            _ = sigterm.recv() => {},
+            _ = sighup.recv() => {},
+            _ = sigint.recv() => {},
+        }
+        info!("signal received, removing socket and shutting down");
+        server::remove_socket_file(&sock_for_signals);
+        std::process::exit(0);
+    });
+
     // Run the server
     server::run_server(&sock_path, state).await
 }

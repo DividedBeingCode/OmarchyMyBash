@@ -57,8 +57,12 @@ Item {
 
     // ── Discovery ──────────────────────────────────────────────────────────
     function discoverSockets() {
+        // Only sockets whose owning shell PID is still alive; dead shells
+        // leave socket files behind that would surface as ghost sessions.
         serviceSocketFinder.exec(["sh", "-c",
-            "ls '" + service.runtimeDir + "'/omarchy10k-*.sock 2>/dev/null"])
+            "for f in '" + service.runtimeDir + "'/omarchy10k-*.sock; do " +
+            "[[ -e \"$f\" ]] || continue; p=${f##*-}; p=${p%.sock}; " +
+            "kill -0 \"$p\" 2>/dev/null && timeout 1 socat -u OPEN:/dev/null UNIX-CONNECT:\"$f\" 2>/dev/null && echo \"$f\"; done"])
     }
 
     // ── Session bookkeeping ────────────────────────────────────────────────

@@ -45,7 +45,10 @@ The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as
 Service (Item, service kind — mounted at shell startup)
 ├── daemonStatus / sessions / lastStatus reactive state
 ├── eventReceived(var) signal bus
-├── serviceSocketFinder Process → discovers every omarchy10k-*.sock (10s timer)
+├── serviceSocketFinder Process → discovers omarchy10k-*.sock with liveness
+│   filter: owning shell PID must be alive (kill -0) AND the socket must
+│   accept a connection (socat probe) — dead shells and SIGKILLed daemons
+│   leave socket files behind that would otherwise surface as ghost sessions
 ├── Instantiator → one persistent Socket per session (hello → status)
 ├── controlSocket Socket (config_get/config_set/invalidate_git for IPC)
 └── IpcHandler target "community.omarchy10k"
@@ -125,6 +128,13 @@ The bar glyph tooltip reflects live daemon status:
 | Panel closes | `controller.hide()`, disconnect `daemonSocket` |
 | Tab switch | `Loader` swaps among 5 tab components |
 | Undo click | Pop last config snapshot from circular buffer, re-apply, save |
+
+### Body layout conventions (fixed to match first-party panels)
+
+- Content is wrapped in a `ScrollView` (`ScrollBar.vertical` AsNeeded, `interactive` only when content overflows) — tall tabs scroll instead of clipping or stretching the card.
+- `contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(560))` — the second cap argument stops the card ballooning per tab.
+- The card supplies the padding (`KeyboardPanel` popupPadding); the content Column adds none — no double-inset, dividers use `PanelSeparator` at full width.
+- Toast/error are out-of-flow overlays anchored to the card bottom, so appearing notices never resize the panel.
 
 ## UX Features (v0.3)
 
@@ -242,6 +252,7 @@ Notes:
 - **Config methods never throw.** No-daemon / write-failure returns `{"ok":false,"error":"…"}`; a successfully queued write returns `{"ok":true,"queued":true}` (the daemon's ok/error reply is consumed asynchronously; persistent failures surface on the next status poll and via the `eventReceived` signal bus).
 - `config_set` writes go through `Model.buildConfigSet` over the hub's own persistent control socket — the panel does not need to be open. (Deviation from the original task wording, which assumed the *panel's* `daemonSocket`: the panel disconnects on close, so an always-loaded hub socket is the only path that keeps the target answering when no panel is open.)
 - install.sh keybind hints are W2's scope, not documented here.
+- **Second target on the bar widget:** `BarWidget.qml` registers `IpcHandler { target: "community.omarchy10k.panel" }` with `toggle()` / `open()` / `close()` — opens the Control Center popout without a pointer click (mirrors first-party widgets that register one target each). `omarchy-shell community.omarchy10k.panel toggle`.
 
 ## Service Plugin: `Service.qml` (2.2)
 

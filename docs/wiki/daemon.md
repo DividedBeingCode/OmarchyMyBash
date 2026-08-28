@@ -33,6 +33,16 @@ async fn monitor_parent() {
 }
 ```
 
+### Signal Handlers
+
+A second spawned task installs tokio handlers for SIGTERM, SIGHUP, and SIGINT.
+On the first signal it removes the socket file and exits. This matters because
+closing the terminal delivers SIGHUP and service stops deliver SIGTERM — both
+default-terminate the daemon before the parent monitor's next 2-second tick,
+which used to leave a stale socket behind that every client then listed as a
+live session. SIGKILL still orphans sockets; discovery-side liveness probes
+cover that case.
+
 Uses an inline `extern "C" { fn kill(...) }` declaration instead of depending on the `libc` crate — keeps the dependency tree minimal.
 
 ### Filesystem Watchers

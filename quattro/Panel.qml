@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -283,8 +284,13 @@ Panel {
 
     // ── Daemon IPC ─────────────────────────────────────────────────────────
     function discoverAllSockets() {
+        // Only sockets whose owning shell PID is still alive. A dead shell's
+        // socket file lingers and otherwise surfaces as a session with no
+        // data behind it.
         socketFinder.exec(["sh", "-c",
-            "ls '" + Model.runtimeDir(Quickshell.env("XDG_RUNTIME_DIR")) + "'/omarchy10k-*.sock 2>/dev/null"])
+            "for f in '" + Model.runtimeDir(Quickshell.env("XDG_RUNTIME_DIR")) + "'/omarchy10k-*.sock; do " +
+            "[[ -e \"$f\" ]] || continue; p=${f##*-}; p=${p%.sock}; " +
+            "kill -0 \"$p\" 2>/dev/null && timeout 1 socat -u OPEN:/dev/null UNIX-CONNECT:\"$f\" 2>/dev/null && echo \"$f\"; done"])
     }
 
     function connectToSession(idx) {
@@ -367,11 +373,6 @@ Panel {
         Qt.callLater(root.requestPalette)
     }
 
-    function _onSocketDisconnected() {
-        if (root.opened)
-            root.daemonStatus = "not running"
-    }
-
     function _onSocketError() {
         console.warn("omarchy10k: socket error on " + (root.discoveredSocketPath || "unknown"))
         daemonSocket.connected = false
@@ -381,6 +382,10 @@ Panel {
                 return s.path !== root.discoveredSocketPath
             })
         }
+        // The first discovered socket can belong to a shell that died between
+        // listing and connecting — fall through to the next live session.
+        if (root.opened && root.sessionList.length > 0 && !daemonSocket.connected)
+            root.connectToSession(0)
     }
 
     // ── Tool Detection ─────────────────────────────────────────────────────
@@ -522,7 +527,7 @@ Panel {
         }
         onConnectedChanged: {
             if (connected) root._onSocketConnected()
-            else root._onSocketDisconnected()
+            else if (root.opened) root.daemonStatus = "not running"
         }
         onError: root._onSocketError()
     }
@@ -566,7 +571,7 @@ Panel {
         open: root.opened
         focusTarget: keyCatcher
         contentWidth: panel.fittedContentWidth(Style.space(360))
-        contentHeight: panel.fittedContentHeight(content.implicitHeight)
+        contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(560))
 
         PanelKeyCatcher {
             id: keyCatcher
@@ -574,77 +579,85 @@ Panel {
             onCloseRequested: root.close()
             onTabRequested: function(direction) { root.switchPanel(direction) }
 
-            Column {
-                id: content
-                width: parent.width
-                spacing: Style.space(12)
-                padding: Style.space(16)
-
-                Row {
-                    spacing: Style.space(8)
-
-                    Rectangle {
-                        width: 8; height: 8; radius: 4
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: root.daemonStatus === "running"
-                            ? (Color.green || "#9ece6a")
-                            : reconnectTimer.running ? "#e0af68" : (Color.red || "#f7768e")
-                    }
-
-                    Text {
-                        text: "Omarchy10k Control Center"
-                        color: root.barForeground
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.subtitle
-                        font.bold: true
-                    }
-
-                    Rectangle {
-                        width: undoText.implicitWidth + Style.space(8)
-                        height: undoText.implicitHeight + Style.space(4)
-                        radius: Style.space(3)
-                        color: undoMa.containsMouse ? (Color.accent || "#7aa2f7") : "transparent"
-                        visible: root._undoStack.length > 0
-
-                        Text {
-                            id: undoText
-                            anchors.centerIn: parent
-                            text: "\u21A9 Undo"
-                            color: undoMa.containsMouse
-                                ? (Color.background || "#1a1b26")
-                                : (Color.muted || "#414868")
-                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                            font.pixelSize: Style.font.caption
-                        }
-
-                        MouseArea {
-                            id: undoMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.undoConfig()
-                        }
-                    }
+            ScrollView {
+                id: scrollArea
+                anchors.fill: parent
+                clip: true
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical.policy: content.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                Binding {
+                    target: scrollArea.contentItem
+                    property: "interactive"
+                    value: content.implicitHeight > scrollArea.height
                 }
 
-                Rectangle {
-                    width: parent.width - Style.space(32)
-                    height: previewContent.implicitHeight + Style.space(16)
-                    x: Style.space(16)
-                    radius: Style.space(4)
-                    color: Qt.darker(Color.background || "#1a1b26", 1.5)
-                    visible: root.previewText.length > 0 || !root._featureAvailable("0.3")
+                Column {
+                    id: content
+                    width: scrollArea.availableWidth
+                    spacing: Style.space(12)
 
-                    Column {
-                        id: previewContent
-                        anchors.fill: parent
-                        anchors.margins: Style.space(8)
-                        spacing: Style.space(4)
+                   Row {
+                       spacing: Style.space(8)
 
+                       Rectangle {
+                           width: 8; height: 8; radius: 4
+                           anchors.verticalCenter: parent.verticalCenter
+                           color: root.daemonStatus === "running"
+                               ? (Color.green || "#9ece6a")
+                               : reconnectTimer.running ? "#e0af68" : (Color.red || "#f7768e")
+                       }
+
+                       Text {
+                           text: "Omarchy10k Control Center"
+                           color: root.barForeground
+                           font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                           font.pixelSize: Style.font.subtitle
+                           font.bold: true
+                       }
+
+                       Rectangle {
+                           width: undoText.implicitWidth + Style.space(8)
+                           height: undoText.implicitHeight + Style.space(4)
+                           radius: Style.space(3)
+                           color: undoMa.containsMouse ? (Color.accent || "#7aa2f7") : "transparent"
+                           visible: root._undoStack.length > 0
+
+                           Text {
+                               id: undoText
+                               anchors.centerIn: parent
+                               text: "\u21A9 Undo"
+                               color: undoMa.containsMouse
+                                   ? (Color.background || "#1a1b26")
+                                   : (Color.muted || "#414868")
+                               font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                               font.pixelSize: Style.font.caption
+                           }
+
+                           MouseArea {
+                               id: undoMa
+                               anchors.fill: parent
+                               hoverEnabled: true
+                               cursorShape: Qt.PointingHandCursor
+                               onClicked: root.undoConfig()
+                           }
+                       }
+                   }
+
+                   Rectangle {
+                       width: parent.width
+                       height: previewContent.implicitHeight + Style.space(16)
+                       radius: Style.space(4)
+                       color: Qt.darker(Color.background || "#1a1b26", 1.5)
+                       visible: root.previewText.length > 0 || !root._featureAvailable("0.3")
+
+                       Column {
+                           id: previewContent
                         Text {
                             text: root._featureAvailable("0.3")
                                 ? root.previewText
-                                : "Live preview requires daemon v0.3+"
+                                : (root.daemonStatus === "running"
+                                    ? "Live preview requires daemon v0.3+"
+                                    : "Daemon not running — open a shell with the Omarchy10k prompt")
                             textFormat: Text.StyledText
                             color: root._featureAvailable("0.3")
                                 ? (Color.foreground || "#a9b1d6")
@@ -652,150 +665,157 @@ Panel {
                             font.family: "monospace"
                             font.pixelSize: Style.font.body
                             font.italic: !root._featureAvailable("0.3")
+                            elide: Text.ElideRight
+                            width: parent.width
                         }
 
-                        Row {
-                            spacing: Style.space(4)
+                           Row {
+                               spacing: Style.space(4)
 
-                            Repeater {
-                                model: [
-                                    { label: "Error", prop: "previewError" },
-                                    { label: "SSH", prop: "previewSsh" },
-                                    { label: "Long cmd", prop: "previewLongCmd" }
-                                ]
-                                delegate: Rectangle {
-                                    width: toggleLabel.implicitWidth + Style.space(12)
-                                    height: toggleLabel.implicitHeight + Style.space(4)
-                                    radius: Style.space(3)
-                                    color: root[modelData.prop]
-                                        ? (Color.accent || "#7aa2f7")
-                                        : (Color.lighter_background || "#24283b")
+                               Repeater {
+                                   model: [
+                                       { label: "Error", prop: "previewError" },
+                                       { label: "SSH", prop: "previewSsh" },
+                                       { label: "Long cmd", prop: "previewLongCmd" }
+                                   ]
+                                   delegate: Rectangle {
+                                       width: toggleLabel.implicitWidth + Style.space(12)
+                                       height: toggleLabel.implicitHeight + Style.space(4)
+                                       radius: Style.space(3)
+                                       color: root[modelData.prop]
+                                           ? (Color.accent || "#7aa2f7")
+                                           : (Color.lighter_background || "#24283b")
 
-                                    Text {
-                                        id: toggleLabel
-                                        anchors.centerIn: parent
-                                        text: modelData.label
-                                        color: root[modelData.prop]
-                                            ? (Color.background || "#1a1b26")
-                                            : (Color.muted || "#414868")
-                                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                                        font.pixelSize: Style.font.caption - 1
-                                    }
+                                       Text {
+                                           id: toggleLabel
+                                           anchors.centerIn: parent
+                                           text: modelData.label
+                                           color: root[modelData.prop]
+                                               ? (Color.background || "#1a1b26")
+                                               : (Color.muted || "#414868")
+                                           font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                           font.pixelSize: Style.font.caption - 1
+                                       }
 
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: {
-                                            root[modelData.prop] = !root[modelData.prop]
-                                            root.requestPreview()
-                                        }
-                                    }
+                                       MouseArea {
+                                           anchors.fill: parent
+                                           cursorShape: Qt.PointingHandCursor
+                                           onClicked: {
+                                               root[modelData.prop] = !root[modelData.prop]
+                                               root.requestPreview()
+                                           }
+                                       }
+                                   }
+                               }
+                           }
+                       }
+                   }
+
+                   Row {
+                       id: tabBar
+                       spacing: Style.space(4)
+                       property int currentTab: 0
+
+                       Repeater {
+                            model: ["Appearance", "Context", "Segments", "Shell", "Advanced"]
+                            delegate: Rectangle {
+                                width: tabLabel.implicitWidth + Style.space(12)
+                                height: tabLabel.implicitHeight + Style.space(8)
+                                radius: Style.space(4)
+                                color: tabBar.currentTab === index
+                                    ? (Color.accent || "#7aa2f7")
+                                    : "transparent"
+
+                                Text {
+                                    id: tabLabel
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    color: tabBar.currentTab === index
+                                        ? (Color.background || "#1a1b26")
+                                        : (root.barForeground || "#a9b1d6")
+                                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                    font.pixelSize: Style.font.caption
+                                    font.bold: tabBar.currentTab === index
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: tabBar.currentTab = index
                                 }
                             }
                         }
                     }
-                }
 
-                Row {
-                    id: tabBar
-                    spacing: Style.space(4)
-                    property int currentTab: 0
+                   PanelSeparator {
+                       foreground: root.barForeground
+                   }
 
-                    Repeater {
-                        model: ["Appearance", "Context", "Segments", "Shell", "Advanced"]
-                        delegate: Rectangle {
-                            width: tabLabel.implicitWidth + Style.space(16)
-                            height: tabLabel.implicitHeight + Style.space(8)
-                            radius: Style.space(4)
-                            color: tabBar.currentTab === index
-                                ? (Color.accent || "#7aa2f7")
-                                : "transparent"
+                   Loader {
+                       id: tabContent
+                       width: parent.width
+                       sourceComponent: {
+                           switch (tabBar.currentTab) {
+                               case 0: return appearanceTab
+                               case 1: return contextTab
+                               case 2: return segmentsTab
+                               case 3: return shellTab
+                               case 4: return advancedTab
+                           }
+                       }
+                   }
 
-                            Text {
-                                id: tabLabel
-                                anchors.centerIn: parent
-                                text: modelData
-                                color: tabBar.currentTab === index
-                                    ? (Color.background || "#1a1b26")
-                                    : (root.barForeground || "#a9b1d6")
-                                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                                font.pixelSize: Style.font.body
-                                font.bold: tabBar.currentTab === index
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: tabBar.currentTab = index
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: parent.width - Style.space(32)
-                    height: 1
-                    color: Color.muted || "#414868"
-                    x: Style.space(16)
-                }
-
-                Loader {
-                    id: tabContent
-                    width: parent.width - Style.space(32)
-                    x: Style.space(16)
-                    sourceComponent: {
-                        switch (tabBar.currentTab) {
-                            case 0: return appearanceTab
-                            case 1: return contextTab
-                            case 2: return segmentsTab
-                            case 3: return shellTab
-                            case 4: return advancedTab
-                        }
-                    }
-                }
-
-                Rectangle {
-                    visible: root._showError
-                    width: parent.width - Style.space(32)
-                    height: visible ? errorText.implicitHeight + Style.space(12) : 0
-                    x: Style.space(16)
-                    radius: Style.space(4)
-                    color: Color.red || "#f7768e"
-
-                    Text {
-                        id: errorText
-                        anchors.centerIn: parent
-                        text: root.lastError
-                        color: Color.background || "#1a1b26"
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.caption
-                        wrapMode: Text.WordWrap
-                        width: parent.width - Style.space(16)
-                    }
-                }
-
-                Rectangle {
-                    visible: root._showToast
-                    width: parent.width - Style.space(32)
-                    height: visible ? toastText.implicitHeight + Style.space(10) : 0
-                    x: Style.space(16)
-                    radius: Style.space(4)
-                    color: Color.accent || "#7aa2f7"
-                    opacity: root._showToast ? 1 : 0
-
-                    Behavior on opacity { NumberAnimation { duration: 300 } }
-
-                    Text {
-                        id: toastText
-                        anchors.centerIn: parent
-                        text: root.toastMessage
-                        color: Color.background || "#1a1b26"
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.caption
-                    }
-                }
             }
         }
+            }
+            // Out-of-flow notices: anchored to the card bottom so appearing
+            // toast/error text never resizes the panel or shifts the layout.
+            Rectangle {
+                visible: root._showError
+                width: parent.width - Style.space(24)
+                height: visible ? errorText.implicitHeight + Style.space(12) : 0
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Style.space(12)
+                radius: Style.space(4)
+                color: Color.red || "#f7768e"
+                z: 10
+
+                Text {
+                    id: errorText
+                    anchors.centerIn: parent
+                    text: root.lastError
+                    color: Color.background || "#1a1b26"
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                    width: parent.width - Style.space(16)
+                }
+            }
+
+            Rectangle {
+                visible: root._showToast
+                width: toastText.implicitWidth + Style.space(24)
+                height: visible ? toastText.implicitHeight + Style.space(12) : 0
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Style.space(12)
+                radius: Style.space(4)
+                color: Color.accent || "#7aa2f7"
+                opacity: root._showToast ? 1 : 0
+                z: 10
+
+                Behavior on opacity { NumberAnimation { duration: 300 } }
+
+                Text {
+                    id: toastText
+                    anchors.centerIn: parent
+                    text: root.toastMessage
+                    color: Color.background || "#1a1b26"
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                }
+            }
     }
 
     // ── Tab: Appearance ────────────────────────────────────────────────────
@@ -882,7 +902,7 @@ Panel {
                 }
             }
 
-            Rectangle { width: parent.width - Style.space(32); height: 1; color: Color.muted || "#414868"; x: Style.space(16) }
+            PanelSeparator { foreground: root.barForeground }
 
             // ── Glyph Pickers ──────────────────────────────────────────
             Text {
@@ -969,7 +989,7 @@ Panel {
                 ]
             }
 
-            Rectangle { width: parent.width - Style.space(32); height: 1; color: Color.muted || "#414868"; x: Style.space(16) }
+            PanelSeparator { foreground: root.barForeground }
 
             // ── Frame Controls ─────────────────────────────────────────
             Text {
@@ -1018,7 +1038,7 @@ Panel {
                 onChanged: function(val) { root.setConfigValue("prompt.transient", val === "On") }
             }
 
-            Rectangle { width: parent.width - Style.space(32); height: 1; color: Color.muted || "#414868"; x: Style.space(16) }
+            PanelSeparator { foreground: root.barForeground }
 
             // ── Theme ──────────────────────────────────────────────────
             Text {
@@ -1225,11 +1245,7 @@ Panel {
             StatusRow { label: "Zoxide"; status: root.zoxideStatus }
             StatusRow { label: "fzf"; status: root.fzfStatus }
 
-            Rectangle {
-                width: parent.width
-                height: 1
-                color: Color.muted || "#414868"
-            }
+            PanelSeparator { foreground: root.barForeground }
 
             ControlRow {
                 label: "Notify After"
@@ -1453,6 +1469,7 @@ Panel {
                         spacing: Style.space(8)
 
                         Text {
+                            id: sessionPidText
                             text: "Shell " + modelData.shellPid
                             color: index === root.activeSessionIndex
                                 ? (Color.background || "#1a1b26")
@@ -1467,7 +1484,8 @@ Panel {
                             font.family: root.bar ? root.bar.fontFamily : Style.font.family
                             font.pixelSize: Style.font.caption
                             elide: Text.ElideMiddle
-                            width: parent.width * 0.5
+                            // Stop short of the floating terminal button on the right.
+                            width: parent.width - sessionPidText.implicitWidth - Style.space(40)
                         }
                     }
 
@@ -1649,7 +1667,8 @@ Panel {
             width: parent.width
 
             Text {
-                width: parent.width * 0.22
+                id: glyphLabel
+                width: parent.width * 0.26
                 text: label
                 color: root.barForeground || "#a9b1d6"
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -1660,7 +1679,7 @@ Panel {
 
             Flow {
                 id: glyphFlow
-                width: parent.width * 0.75
+                width: parent.width - glyphLabel.width - Style.space(8)
                 spacing: Style.space(3)
 
                 Repeater {
@@ -1685,8 +1704,6 @@ Panel {
                                     : (Color.foreground || "#a9b1d6")
                                 font.family: "monospace"
                                 font.pixelSize: Style.font.body
-                                horizontalAlignment: Text.AlignHCenter
-                                width: parent.parent.width - Style.space(6)
                             }
 
                             Text {
@@ -1696,8 +1713,6 @@ Panel {
                                     : (Color.muted || "#414868")
                                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
                                 font.pixelSize: Style.font.caption - 2
-                                horizontalAlignment: Text.AlignHCenter
-                                width: parent.parent.width - Style.space(6)
                             }
                         }
 

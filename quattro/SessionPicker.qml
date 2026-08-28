@@ -207,8 +207,8 @@ Item {
 
                 Column {
                     anchors.fill: parent
-                    anchors.margins: 16
-                    spacing: 10
+                    anchors.margins: Style.space(16)
+                    spacing: Style.space(12)
 
                     Text {
                         text: "Omarchy10k Sessions"
@@ -219,17 +219,19 @@ Item {
                     }
 
                     Text {
+                        id: sessionHint
                         width: parent.width
                         text: root.hyprland
                             ? "Enter focuses the session's terminal · Esc closes"
                             : "Enter opens a floating terminal in the session's CWD · Esc closes"
+                        color: root.mutedColor
                         font.pixelSize: 11
                     }
 
                     ListView {
                         id: sessionList
                         width: parent.width
-                        height: parent.height - 46
+                        height: parent.height - sessionHint.y - sessionHint.height - Style.space(8)
                         model: root.rows
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
@@ -240,8 +242,8 @@ Item {
                             required property int index
 
                             width: sessionList.width
-                            height: rowCol.implicitHeight + 14
-                            radius: 6
+                            height: rowCol.implicitHeight + Style.space(14)
+                            radius: Style.space(4)
                             color: index === root.selectedIndex ? root.selectedBg : Qt.lighter(root.surfaceColor, 1.15)
 
                             MouseArea {
@@ -260,8 +262,10 @@ Item {
 
                                 Text {
                                     width: parent.width
-                                    text: modelData.cwd || "(cwd unknown)"
-                                    color: index === root.selectedIndex ? root.selectedText : root.surfaceText
+                                    text: modelData.cwd || ("Shell " + modelData.shellPid)
+                                    color: index === root.selectedIndex
+                                        ? root.selectedText
+                                        : (modelData.cwd ? root.surfaceText : root.mutedColor)
                                     font.family: "monospace"
                                     font.pixelSize: 12
                                     elide: Text.ElideMiddle
@@ -269,6 +273,7 @@ Item {
 
                                 Text {
                                     width: parent.width
+                                    visible: text.length > 0
                                     text: {
                                         var bits = []
                                         if (modelData.branch) bits.push(modelData.branch + (modelData.dirty ? " ●" : ""))
@@ -277,7 +282,7 @@ Item {
                                         var age = root._formatAge(modelData.ageSecs)
                                         if (age) bits.push(age)
                                         if (modelData.pid) bits.push("pid " + modelData.pid)
-                                        return bits.length > 0 ? bits.join("  ·  ") : "no git/duration data yet"
+                                        return bits.join("  ·  ")
                                     }
                                     color: index === root.selectedIndex ? root.selectedText : root.mutedColor
                                     font.family: "monospace"

@@ -67,7 +67,9 @@ BarWidget {
 
     function discoverBarSocket() {
         barSocketFinder.exec(["sh", "-c",
-            "ls '" + Model.runtimeDir(Quickshell.env("XDG_RUNTIME_DIR")) + "'/omarchy10k-*.sock 2>/dev/null | head -1"])
+            "for f in '" + Model.runtimeDir(Quickshell.env("XDG_RUNTIME_DIR")) + "'/omarchy10k-*.sock; do " +
+            "[[ -e \"$f\" ]] || continue; p=${f##*-}; p=${p%.sock}; " +
+            "kill -0 \"$p\" 2>/dev/null && timeout 1 socat -u OPEN:/dev/null UNIX-CONNECT:\"$f\" 2>/dev/null && echo \"$f\"; done | head -1"])
     }
 
     function _handleBarStatusMessage(raw) {
@@ -165,6 +167,28 @@ BarWidget {
         tooltipText: "Omarchy10k" + (barDaemonStatus === "running" ? " ✓" : " ✗")
         onPressed: function(buttonCode) {
             if (buttonCode === Qt.LeftButton) root.toggle()
+        }
+    }
+
+    // IPC: lets scripts and other surfaces open the Control Center without a
+    // pointer click, mirroring first-party widgets that register one target
+    // each (omarchy-shell call community.omarchy10k.panel toggle).
+    IpcHandler {
+        target: "community.omarchy10k.panel"
+
+        function toggle(): string {
+            root.toggle()
+            return "ok"
+        }
+
+        function open(): string {
+            root.open()
+            return "ok"
+        }
+
+        function close(): string {
+            root.close()
+            return "ok"
         }
     }
 }
