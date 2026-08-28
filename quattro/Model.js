@@ -3,18 +3,17 @@
 // All mutable state lives in Panel.qml as reactive QML properties.
 .pragma library
 
-function configDir() {
-    var xdg = Qt.getenv("XDG_CONFIG_HOME");
-    if (xdg) return xdg + "/omarchy10k";
-    return (Qt.getenv("HOME") || "/tmp") + "/.config/omarchy10k";
+function configDir(xdgConfigHome, home) {
+    if (xdgConfigHome) return xdgConfigHome + "/omarchy10k";
+    return (home || "/tmp") + "/.config/omarchy10k";
 }
 
-function configPath() {
-    return configDir() + "/config.toml";
+function configPath(xdgConfigHome, home) {
+    return configDir(xdgConfigHome, home) + "/config.toml";
 }
 
-function runtimeDir() {
-    return Qt.getenv("XDG_RUNTIME_DIR") || "/tmp";
+function runtimeDir(xdgRuntimeDir) {
+    return xdgRuntimeDir || "/tmp";
 }
 
 function buildCommand(name, id) {
@@ -61,15 +60,31 @@ function stripAnsi(str) {
 // Handles the subset used by omarchy10k: sections, key = value with
 // string, bool, and integer types. Ignores comments and blank lines.
 
+// Strips a comment starting at an unquoted `#`, so `#` inside quoted
+// values (e.g. hex colors) survives. Escapes are honored in double quotes.
+function stripComment(line) {
+    var quote = "";
+    for (var i = 0; i < line.length; i++) {
+        var ch = line[i];
+        if (quote) {
+            if (quote === "\"" && ch === "\\") i++;
+            else if (ch === quote) quote = "";
+        } else if (ch === "\"" || ch === "'") {
+            quote = ch;
+        } else if (ch === "#") {
+            return line.substring(0, i);
+        }
+    }
+    return line;
+}
+
 function parseTOML(text) {
     var result = {};
     var section = "";
     var lines = text.split("\n");
 
     for (var i = 0; i < lines.length; i++) {
-        var line = lines[i].replace(/#.*$/, "").trim();
-        if (line.length === 0) continue;
-
+        var line = stripComment(lines[i]).trim();
         var secMatch = line.match(/^\[([^\]]+)\]$/);
         if (secMatch) {
             section = secMatch[1];
@@ -178,8 +193,9 @@ function applyConfig(flat, target) {
     for (var i = 0; i < keys.length; i++) {
         var tomlKey = keys[i];
         var prop = CONFIG_MAP[tomlKey];
-        if (flat.hasOwnProperty(tomlKey))
-            target[prop] = flat[tomlKey];
+        var val = flat[tomlKey];
+        if (flat.hasOwnProperty(tomlKey) && val !== undefined && val !== null)
+            target[prop] = val;
     }
 }
 
@@ -211,7 +227,7 @@ function flattenConfig(obj, prefix) {
             for (var j = 0; j < subKeys.length; j++) {
                 result[subKeys[j]] = sub[subKeys[j]];
             }
-        } else {
+        } else if (v !== null) {
             result[full] = v;
         }
     }

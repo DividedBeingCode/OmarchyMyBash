@@ -21,6 +21,10 @@ __O10K_SOCKET="${__O10K_SOCKET_DIR}/omarchy10k-$$.sock"
 __O10K_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy10k"
 __O10K_CACHE="${__O10K_CACHE_DIR}/last_prompt"
 
+# PS1 content (daemon/path/branch text) must never undergo parameter or
+# command expansion — keep promptvars off for this shell.
+shopt -u promptvars
+
 if [[ -f "$__O10K_CACHE" ]]; then
     PS1=$(<"$__O10K_CACHE")
 fi
@@ -145,8 +149,22 @@ __o10k_start_bridge() {
         return 0
     fi
 
+    # Restarting over a dead coprocess: close its fds first so they don't leak
+    if (( __O10K_BRIDGE_PID > 0 )); then
+        exec {__O10K_BRIDGE[0]}>&- {__O10K_BRIDGE[1]}>&- 2>/dev/null
+    fi
+
     coproc __O10K_BRIDGE { "$__O10K_BIN" bridge --socket "$__O10K_SOCKET" 2>/dev/null; }
     __O10K_BRIDGE_PID=$!
+}
+
+# Best-effort drain of late-arriving coproc fields so a failed read cannot
+# shift the request/response stream by one on the next request.
+__o10k_bridge_drain() {
+    local junk
+    while IFS= read -r -d $'\0' -t 0.1 -u "${__O10K_BRIDGE[0]}" junk 2>/dev/null; do
+        :
+    done
 }
 
 __o10k_bridge_request() {
@@ -156,17 +174,45 @@ __o10k_bridge_request() {
             __o10k_start_bridge
             echo "$request" >&"${__O10K_BRIDGE[1]}" 2>/dev/null || return 1
         }
-        local left right
-        IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" left 2>/dev/null
-        IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" right 2>/dev/null
+        local left right threshold=""
+        # NUL-framed fields: left, right, notify_threshold_ms (may be empty)
+        if ! IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" left 2>/dev/null; then
+            # Left read failed — abort (caller falls back to socket send)
+            # instead of consuming the next field's data.
+            __o10k_bridge_drain
+            return 1
+        fi
+        if IFS= read -r -d $'\0' -t 0.5 -u "${__O10K_BRIDGE[0]}" right 2>/dev/null; then
+            IFS= read -r -d $'\0' -t 0.5 -u "${__O10K_BRIDGE[0]}" threshold 2>/dev/null \
+                || __o10k_bridge_drain
+        else
+            # Right field lost — stream position uncertain, so drain the rest
+            # (including any late-arriving right/threshold) and skip reading.
+            right=""
+            __o10k_bridge_drain
+        fi
         if [[ -n "$left" ]]; then
             PS1="$left"
             __O10K_LAST_RIGHT="${right:-}"
+            [[ -n "${threshold:-}" ]] && __O10K_NOTIFY_THRESHOLD="$threshold"
             { printf '%s' "$PS1" > "$__O10K_CACHE.$$.tmp" && mv "$__O10K_CACHE.$$.tmp" "$__O10K_CACHE"; } 2>/dev/null &
             return 0
         fi
+        __o10k_bridge_drain
     fi
     return 1
+}
+
+# Rate-limited (5s) daemon+bridge restart used when recovery finds a missing
+# socket or a socket whose daemon no longer answers a status probe.
+__o10k_try_restart() {
+    local now="${EPOCHREALTIME:-0}"
+    now="${now%%[.,]*}"
+    (( now - ${__O10K_LAST_RESTART_ATTEMPT:-0} > 5 )) || return 0
+    __O10K_LAST_RESTART_ATTEMPT="$now"
+    rm -f "$__O10K_SOCKET"
+    __o10k_start_daemon
+    __o10k_start_bridge
 }
 
 # Portable Unix socket send — legacy fallback when bridge is unavailable
@@ -245,6 +291,17 @@ __o10k_check_chpwd() {
 
 __O10K_FALLBACK_PS1='\[\e[1;34m\]\w\[\e[0m\] \[\e[1;32m\]❯\[\e[0m\] '
 
+# Percent-encode characters that are unsafe or would terminate a file:// URI
+# early (space, %, #, ?) and drop control characters before emitting OSC 7.
+__o10k_uri_encode() {
+    local s="${1//[[:cntrl:]]/}"
+    s="${s//%/%25}"
+    s="${s// /%20}"
+    s="${s//#/%23}"
+    s="${s//\?/%3F}"
+    printf '%s' "$s"
+}
+
 __o10k_render_prompt() {
     local exit_code=$?
 
@@ -256,8 +313,9 @@ __o10k_render_prompt() {
     # Desktop notification for long-running commands
     if (( __O10K_CMD_DURATION > ${__O10K_NOTIFY_THRESHOLD:-10000} )); then
         local _notify_cmd="${__O10K_LAST_CMD:-command}"
-        # Strip control characters and semicolons that could break OSC 777
-        _notify_cmd="${_notify_cmd//[;$'\a'$'\e']/}"
+        # Strip all C0 control characters (CR/LF/VT/FF/BEL/ESC/...) and
+        # semicolons that could break OSC 777 framing
+        _notify_cmd="${_notify_cmd//[[:cntrl:];]/}"
         printf '\033]777;notify;Command finished;%s took %dms\007' \
             "$_notify_cmd" "$__O10K_CMD_DURATION"
     fi
@@ -269,16 +327,19 @@ __o10k_render_prompt() {
 
     printf '\033]9;4;0\007'
 
-    # Restart daemon/bridge if socket is missing or status probe fails
-    if ! { [[ -S "$__O10K_SOCKET" ]] && (( __O10K_BRIDGE_PID > 0 )) && kill -0 "$__O10K_BRIDGE_PID" 2>/dev/null; }; then
-        local _now_restart="${EPOCHREALTIME:-0}"
-        _now_restart="${_now_restart%%[.,]*}"
-        if (( _now_restart - ${__O10K_LAST_RESTART_ATTEMPT:-0} > 5 )); then
-            __O10K_LAST_RESTART_ATTEMPT="$_now_restart"
-            rm -f "$__O10K_SOCKET"
-            __o10k_start_daemon
+    # Recovery: probe a present socket before touching it — a healthy daemon's
+    # socket is never deleted (only the bridge may have died), while a dead
+    # daemon behind a stale socket is rm'd and restarted. Rate limited to 5s.
+    if [[ -S "$__O10K_SOCKET" ]]; then
+        if (( __O10K_BRIDGE_PID > 0 )) && kill -0 "$__O10K_BRIDGE_PID" 2>/dev/null; then
+            : # socket present and bridge alive — nothing to recover
+        elif __o10k_socket_send '{"command":"status"}' >/dev/null 2>&1; then
             __o10k_start_bridge
+        else
+            __o10k_try_restart
         fi
+    else
+        __o10k_try_restart
     fi
 
     if [[ -S "$__O10K_SOCKET" ]]; then
@@ -290,7 +351,10 @@ __o10k_render_prompt() {
         local si_flag="true"
         (( __O10K_EMIT_OSC133 )) || si_flag="false"
 
-        local escaped_cwd="${PWD//\\/\\\\}"
+        # Control characters would corrupt the request JSON — strip them in
+        # addition to escaping backslashes and quotes
+        local escaped_cwd="${PWD//[[:cntrl:]]/}"
+        escaped_cwd="${escaped_cwd//\\/\\\\}"
         escaped_cwd="${escaped_cwd//\"/\\\"}"
         local request
         request=$(printf '{"cwd":"%s","exit_code":%d,"cmd_duration_ms":%d,"cols":%d,"jobs":%d,"shell_integration":%s}' \
@@ -298,7 +362,7 @@ __o10k_render_prompt() {
 
         # Try bridge first (no fork/exec in hot path)
         if __o10k_bridge_request "$request"; then
-            printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$PWD"
+            printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$(__o10k_uri_encode "$PWD")"
             printf '\033[?2026l'
             return
         fi
@@ -321,7 +385,7 @@ __o10k_render_prompt() {
                     __O10K_NOTIFY_THRESHOLD="$threshold"
                 fi
 
-                printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$PWD"
+                printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$(__o10k_uri_encode "$PWD")"
                 printf '\033[?2026l'
                 return
             fi
@@ -329,7 +393,7 @@ __o10k_render_prompt() {
     fi
 
     PS1="$__O10K_FALLBACK_PS1"
-    printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$PWD"
+    printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$(__o10k_uri_encode "$PWD")"
     printf '\033[?2026l'
 }
 

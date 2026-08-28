@@ -283,7 +283,7 @@ impl<'a> PromptRenderer<'a> {
 
         if !left_names.contains("git")
             && ctx.git_status.is_repo
-            && !ctx.git_status.branch.is_empty()
+            && (!ctx.git_status.stale || ctx.config.git.stale_display)
         {
             let branch_icon = GlyphCatalog::branch_icon(&ctx.config.git.branch_icon);
             let icon_part = if branch_icon.is_empty() {

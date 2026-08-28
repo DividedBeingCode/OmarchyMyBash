@@ -79,7 +79,7 @@ Checks performed (in order):
 | fzf | `fzf --version` succeeds | — | Not installed (optional) |
 | Terminal | `TERM_PROGRAM` or `TERM` | — | — |
 | Daemon | Socket exists + status ok | Socket exists but unresponsive | Not running |
-| Hooks | `PROMPT_COMMAND` contains o10k | Check after init | — |
+| Hooks | `O10K_PARENT_PID` exported (adapter installed) | Not detected — check after init | — |
 | Config | config.toml exists at XDG path | — | Using defaults |
 
 ### `omarchy10k reload`
@@ -129,10 +129,12 @@ One-command upgrade path. Pulls latest source, rebuilds, replaces binaries, refr
 3. `git pull --ff-only` (unless `--no-pull`; skips if dirty working tree)
 4. `cargo build --release` (unless `--no-build`)
 5. Atomic binary install to `~/.local/bin/` (write to `.tmp`, rename)
-6. Copy `quattro/*` to plugin directory
-7. Copy `hooks/theme-set` to hook directory
-8. Send `shutdown` command to all running daemon sockets (`omarchy10k-*.sock`)
-9. Print version change summary
+6. Copy `quattro/*` to plugin directory; patch `manifest.json` version from `Cargo.toml`
+7. Trigger Quattro plugin rescan (`omarchy-shell shell rescanPlugins`, silent if unavailable)
+8. Copy `hooks/theme-set` to hook directory
+9. Copy `templates/omarchy10k.toml.tpl` to `~/.local/share/omarchy/templates/` (theme bridge)
+10. Send `shutdown` command to all running daemon sockets (`omarchy10k-*.sock`)
+11. Print version change summary
 
 Running daemons auto-restart on the next prompt render via the Bash adapter's existing reconnection logic.
 

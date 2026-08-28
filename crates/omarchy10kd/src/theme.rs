@@ -26,14 +26,28 @@ pub struct AnsiColor {
 
 impl AnsiColor {
     pub fn from_hex(hex: &str) -> Option<Self> {
+        // Walk chars, not bytes, so multibyte input never panics on slicing.
         let hex = hex.trim_start_matches('#');
-        if hex.len() != 6 {
+        let chars: Vec<char> = hex.chars().collect();
+        if chars.len() != 6 {
+            warn!("rejected invalid hex color '{hex}': expected 6 hex digits");
             return None;
         }
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        Some(Self { r, g, b })
+        let parse_pair = |pair: [char; 2]| -> Option<u8> {
+            let s: String = pair.iter().collect();
+            u8::from_str_radix(&s, 16).ok()
+        };
+        match (
+            parse_pair([chars[0], chars[1]]),
+            parse_pair([chars[2], chars[3]]),
+            parse_pair([chars[4], chars[5]]),
+        ) {
+            (Some(r), Some(g), Some(b)) => Some(Self { r, g, b }),
+            _ => {
+                warn!("rejected invalid hex color '{hex}': expected hex digits");
+                None
+            }
+        }
     }
 
     pub fn fg_escape(&self) -> String {

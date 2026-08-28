@@ -83,7 +83,8 @@ Panel {
     property var _undoStack: []
     property int _undoMaxSize: 10
 
-    readonly property string _configPath: Model.configPath()
+    readonly property string _configPath: Model.configPath(
+        Quickshell.env("XDG_CONFIG_HOME"), Quickshell.env("HOME"))
 
     // ── Panel Lifecycle ────────────────────────────────────────────────────
     function open() {
@@ -178,12 +179,11 @@ Panel {
         if (daemonSocket.connected) {
             var patch = Model.unflattenPatch(Model.collectConfig(root))
             daemonSocket.write(Model.buildConfigSet(patch, "cfg-save"))
-            daemonSocket.flush()
         } else {
-            var toml = Model.buildTOML(root._configFlat)
-            var escaped = toml.replace(/'/g, "'\\''")
-            configWriter.exec(["sh", "-c",
-                "mkdir -p '" + Model.configDir() + "' && printf '%s\\n' '" + escaped + "' > '" + _configPath + "'"])
+            console.warn("omarchy10k: config save skipped — no daemon connected")
+            root.lastError = "Saving settings requires a running omarchy10k daemon"
+            root._showError = true
+            errorTimer.restart()
         }
 
         Qt.callLater(root.requestPreview)
@@ -215,7 +215,7 @@ Panel {
     // ── Daemon IPC ─────────────────────────────────────────────────────────
     function discoverAllSockets() {
         socketFinder.exec(["sh", "-c",
-            "ls " + Model.runtimeDir() + "/omarchy10k-*.sock 2>/dev/null"])
+            "ls '" + Model.runtimeDir(Quickshell.env("XDG_RUNTIME_DIR")) + "'/omarchy10k-*.sock 2>/dev/null"])
     }
 
     function connectToSession(idx) {
@@ -295,6 +295,17 @@ Panel {
             root.daemonStatus = "not running"
     }
 
+    function _onSocketError() {
+        console.warn("omarchy10k: socket error on " + (root.discoveredSocketPath || "unknown"))
+        daemonSocket.connected = false
+        if (root.opened) root.daemonStatus = "not running"
+        if (root.discoveredSocketPath.length > 0) {
+            root.sessionList = root.sessionList.filter(function (s) {
+                return s.path !== root.discoveredSocketPath
+            })
+        }
+    }
+
     // ── Tool Detection ─────────────────────────────────────────────────────
     function detectTools() {
         root.bleshStatus = "checking..."
@@ -327,14 +338,6 @@ Panel {
         command: ["cat", root._configPath]
         stdout: StdioCollector {
             onStreamFinished: root._applyParsedConfig(this.text)
-        }
-    }
-
-    Process {
-        id: configWriter
-        onRunningChanged: {
-            if (!running && root._configDirty === false)
-                root.sendDaemonCommand("reload_config")
         }
     }
 
@@ -438,6 +441,7 @@ Panel {
             if (connected) root._onSocketConnected()
             else root._onSocketDisconnected()
         }
+        onError: root._onSocketError()
     }
 
     Timer {

@@ -206,8 +206,40 @@ fn install_plugin(source_dir: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(&plugin_dir)?;
 
     copy_dir_contents(&plugin_src, &plugin_dir)?;
+
+    if let Some(version) = source_version(source_dir) {
+        let manifest = plugin_dir.join("manifest.json");
+        if manifest.exists() {
+            if let Ok(contents) = std::fs::read_to_string(&manifest) {
+                let patched = patch_manifest_version(&contents, &version);
+                let _ = std::fs::write(&manifest, patched);
+            }
+        }
+    }
+
     ok("Quattro plugin updated");
     Ok(())
+}
+
+fn patch_manifest_version(manifest: &str, version: &str) -> String {
+    let mut result = String::with_capacity(manifest.len());
+    let mut patched = false;
+    for line in manifest.lines() {
+        let trimmed = line.trim_start();
+        // Patch only the FIRST "version" key; nested "version" keys (which
+        // appear later, deeper in the document) keep their own values.
+        if !patched && trimmed.starts_with("\"version\"") {
+            // Preserve the original line's trailing-comma-ness
+            let comma = if trimmed.trim_end().ends_with(',') { "," } else { "" };
+            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+            result.push_str(&format!("{indent}\"version\": \"{version}\"{comma}\n"));
+            patched = true;
+        } else {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    result
 }
 
 fn install_hook(source_dir: &Path) -> anyhow::Result<()> {
@@ -230,6 +262,37 @@ fn install_hook(source_dir: &Path) -> anyhow::Result<()> {
         std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))?;
     }
     ok("Theme hook updated");
+    Ok(())
+}
+
+fn rescan_plugins() {
+    if let Ok(status) = Command::new("omarchy-shell")
+        .args(["shell", "rescanPlugins"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        if status.success() {
+            ok("Quattro plugin rescan triggered");
+        }
+    }
+}
+
+fn install_template(source_dir: &Path) -> anyhow::Result<()> {
+    let tpl_src = source_dir.join("templates/omarchy10k.toml.tpl");
+    if !tpl_src.exists() {
+        warn("Theme bridge template not found; skipping");
+        return Ok(());
+    }
+
+    info("Installing theme bridge template...");
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let tpl_dir = PathBuf::from(&home).join(".local/share/omarchy/templates");
+    std::fs::create_dir_all(&tpl_dir)?;
+
+    let dst = tpl_dir.join("omarchy10k.toml.tpl");
+    std::fs::copy(&tpl_src, &dst)?;
+    ok("Theme bridge template updated");
     Ok(())
 }
 
@@ -326,7 +389,9 @@ pub fn run(no_pull: bool, no_build: bool) -> anyhow::Result<()> {
 
     install_binaries(&source_dir)?;
     install_plugin(&source_dir)?;
+    rescan_plugins();
     install_hook(&source_dir)?;
+    install_template(&source_dir)?;
     write_breadcrumb(&source_dir);
     restart_daemons();
 

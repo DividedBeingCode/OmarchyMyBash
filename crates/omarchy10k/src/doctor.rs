@@ -174,11 +174,16 @@ async fn check_daemon(socket_path: &Path) {
 }
 
 fn check_hooks() {
-    let prompt_cmd = std::env::var("PROMPT_COMMAND").unwrap_or_default();
-    if prompt_cmd.contains("__o10k_render_prompt") || prompt_cmd.contains("o10k") {
-        println!("  Hook conflicts                 ✓ none detected");
-    } else {
-        println!("  Hook conflicts                 ? (check after init)");
+    // PROMPT_COMMAND is not inherited by child processes, so a doctor run can
+    // never observe it. The adapter exports O10K_PARENT_PID when installed
+    // (shell/omarchy10k.bash) — use that as the adapter-installed signal.
+    match std::env::var("O10K_PARENT_PID") {
+        Ok(pid) if !pid.is_empty() => {
+            println!("  Hook conflicts                 ✓ adapter installed (O10K_PARENT_PID set)");
+        }
+        _ => {
+            println!("  Hook conflicts                 ? (adapter not detected — check after init)");
+        }
     }
 }
 

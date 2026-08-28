@@ -83,13 +83,22 @@ impl LayoutEngine {
             let mut pending: Vec<(usize, &Segment, bool)> = Vec::new();
 
             for (idx, seg) in &candidates {
-                let width = if remaining < seg.preferred_width + separator_width {
+                // The first placed segment consumes no separator.
+                let sep = if pending.is_empty() { 0 } else { separator_width };
+
+                let width = if remaining < seg.preferred_width + sep {
                     seg.compact_width()
                 } else {
                     seg.preferred_width
                 };
 
-                let needed = width + if pending.is_empty() { 0 } else { separator_width };
+                // Honor min_width: hide a segment rather than shrink it
+                // below its minimum.
+                if width < seg.min_width {
+                    continue;
+                }
+
+                let needed = width + sep;
                 if remaining >= needed {
                     let is_compact = width == seg.compact_width() && seg.compact_content.is_some();
                     remaining -= needed;

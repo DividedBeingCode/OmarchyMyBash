@@ -10,7 +10,7 @@ mod terminal;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
@@ -29,10 +29,12 @@ fn socket_path() -> PathBuf {
 async fn main() -> anyhow::Result<()> {
     // Load config
     let config_path = Config::config_path();
-    let config = Config::load(&config_path).unwrap_or_else(|e| {
-        eprintln!("warning: failed to load config: {e}, using defaults");
-        Config::default()
-    });
+    // Load config first: the log level comes from it. A load failure is
+    // logged after tracing init so it reaches the daemon log.
+    let (config, config_error) = match Config::load(&config_path) {
+        Ok(c) => (c, None),
+        Err(e) => (Config::default(), Some(e)),
+    };
 
     // Init tracing
     let filter = EnvFilter::try_from_default_env()
@@ -42,6 +44,10 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .compact()
         .init();
+
+    if let Some(e) = &config_error {
+        error!("failed to load config {}: {e}; using defaults", config_path.display());
+    }
 
     info!(
         "omarchy10kd v{} starting (pid {})",
@@ -73,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         monitor_parent().await;
         info!("parent process exited, shutting down");
-        let _ = std::fs::remove_file(&sock_for_cleanup);
+        server::remove_socket_file(&sock_for_cleanup);
         std::process::exit(0);
     });
 

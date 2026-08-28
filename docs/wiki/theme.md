@@ -64,6 +64,10 @@ Output path: `~/.local/state/omarchy/current/theme/colors.toml`
 
 The template uses Handlebars-style `{{ variable }}` placeholders. The Omarchy theme engine resolves these from the active theme's color definitions.
 
+### Template Deployment
+
+The template must be installed to `~/.local/share/omarchy/templates/omarchy10k.toml.tpl` so that Omarchy's `omarchy-theme-set-templates` can discover and render it on theme switches. Both `install.sh` and `omarchy10k update` handle this automatically. On uninstall, the deployed template is removed.
+
 ## Theme-Set Hook
 
 `hooks/theme-set` is installed to `~/.config/omarchy/hooks/theme-set.d/omarchy10k` and runs after every Omarchy theme switch.
@@ -194,4 +198,5 @@ No 256-color or 16-color fallback exists. The `doctor` command checks for `COLOR
 | `~/.local/state/omarchy/current/theme.name` | Current theme name | Omarchy theme engine |
 | `~/.config/omarchy/hooks/theme-set.d/omarchy10k` | Post-theme-switch hook | User-installed |
 | `templates/omarchy10k.toml.tpl` | Template (in source tree) | Developer |
+| `~/.local/share/omarchy/templates/omarchy10k.toml.tpl` | Deployed template | `install.sh` / `omarchy10k update` |
 | `~/.config/omarchy10k/config.toml` `[theme.custom]` | User color overrides | User |

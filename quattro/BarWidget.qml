@@ -43,7 +43,7 @@ BarWidget {
 
     function discoverBarSocket() {
         barSocketFinder.exec(["sh", "-c",
-            "ls " + Model.runtimeDir() + "/omarchy10k-*.sock 2>/dev/null | head -1"])
+            "ls '" + Model.runtimeDir(Quickshell.env("XDG_RUNTIME_DIR")) + "'/omarchy10k-*.sock 2>/dev/null | head -1"])
     }
 
     function _handleBarStatusMessage(raw) {
@@ -99,6 +99,11 @@ BarWidget {
                 barStatusSocket.write(Model.buildHello("bar-handshake"))
                 barStatusSocket.flush()
             }
+        }
+        onError: {
+            barStatusSocket.connected = false
+            root.barDaemonStatus = "not running"
+            root.barSocketPath = ""
         }
     }
 

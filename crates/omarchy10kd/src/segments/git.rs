@@ -32,7 +32,8 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         }
     };
 
-    let fg = if git.stale {
+    let show_stale = git.stale && ctx.config.git.stale_display;
+    let fg = if show_stale {
         ctx.palette.muted.fg_escape()
     } else if git.conflicted > 0 {
         ctx.palette.red.fg_escape()

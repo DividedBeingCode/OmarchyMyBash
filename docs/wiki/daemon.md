@@ -13,8 +13,8 @@ Module tree: `config`, `git`, `layout`, `render`, `segments`, `server`, `style`,
 ### Startup Sequence
 
 ```
-1. Init tracing subscriber (env-filter from config.daemon.log_level)
-2. Load Config from ~/.config/omarchy10k/config.toml (or defaults)
+1. Load Config from ~/.config/omarchy10k/config.toml (or defaults on failure — the error is logged via `tracing::error!` after subscriber init, so it reaches the daemon log)
+2. Init tracing subscriber (env-filter from config.daemon.log_level)
 3. Load ThemePalette via `ThemePalette::resolve_palette(&config)` (unified path for all source modes)
 4. Build DaemonState (Arc): config, palette, git cache (TTL from `config.git.cache_ttl_ms`), config path
 5. Compute socket path: $XDG_RUNTIME_DIR/omarchy10k-{O10K_PARENT_PID}.sock
@@ -89,7 +89,9 @@ pub struct DaemonState {
 
 ```
 run_server(socket_path, state):
+    if socket file exists → clear_stale_socket(): unlink only if it is a socket owned by the current uid AND a connect probe fails (stale); a live listener or a foreign/non-socket file aborts startup with an error instead of hijacking
     bind UnixListener at socket_path
+    chmod socket file to 0o600 (PermissionsExt)
     loop:
         accept connection → spawn handle_connection task
 
@@ -128,7 +130,7 @@ Connections are persistent — the server reads lines in a loop until EOF. This 
 | `reload_config` | `state.reload_config()` | Re-reads TOML from disk, updates `RwLock<Config>` |
 | `reload_theme` | `state.reload_theme()` | Calls `ThemePalette::resolve_palette(&config)`, updates `RwLock<ThemePalette>` |
 | `invalidate_git` | `state.git_cache.invalidate_all()` | Clears all cached git statuses |
-| `shutdown` | Responds `{"status":"bye"}`, removes socket file, calls `exit(0)` | Clean shutdown with socket cleanup |
+| `shutdown` | Responds `{"status":"bye"}`, removes socket file via `remove_socket_file()` (only if still a socket owned by the current uid), calls `exit(0)` | Clean shutdown with ownership-checked socket cleanup |
 | `status` | Reads process info | Returns `status`, `pid`, `version`, `protocol_version`, `cwd` |
 | `palette` | Reads in-memory palette | Returns theme colors as hex (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`) |
 | `config_get` | Serializes in-memory config | Returns full config as JSON (requires `Serialize` on Config) |
@@ -278,7 +280,7 @@ Uses the `directories` crate for XDG compliance. Falls back to `$HOME/.config/om
 | `git.enabled` | Yes | Toggles git segment |
 | `git.mode` | Yes | adaptive/compact/expanded/hidden |
 | `git.cache_ttl_ms` | Yes | Git cache TTL in milliseconds (default 5000) |
-| `git.stale_display` | Yes | `stale` field set on stale/cold cache hits |
+| `git.stale_display` | Yes | Gates stale coloring: when `true` (default), stale cache hits render muted in the left git segment; when `false`, the `stale` flag is ignored for coloring |
 | `git.max_threads` | No | Single-threaded git subprocess |
 | `segments.os` | Yes | OS icon segment |
 | `segments.container` | Yes | Docker/Podman/Toolbox/Distrobox detection |
@@ -326,7 +328,7 @@ Holds semantic color roles as `AnsiColor` (r, g, b):
 pub struct AnsiColor { pub r: u8, pub g: u8, pub b: u8 }
 
 impl AnsiColor {
-    pub fn from_hex(hex: &str) -> Option<Self>    // "#7aa2f7" → AnsiColor
+    pub fn from_hex(hex: &str) -> Option<Self>    // "#7aa2f7" → AnsiColor; char-boundary safe (never byte-slices); rejects invalid length/non-hex with None + tracing::warn!
     pub fn fg_escape(&self) -> String             // "\x1b[38;2;122;162;247m"
     pub fn bg_escape(&self) -> String             // "\x1b[48;2;122;162;247m"
 }
@@ -385,6 +387,7 @@ This replaces the separate startup/reload code paths and fixes the previous bug 
 pub struct GitCache {
     cache: Arc<RwLock<HashMap<PathBuf, CachedStatus>>>,
     in_flight: Arc<RwLock<HashSet<PathBuf>>>,
+    generation: Arc<AtomicU64>,  // bumped by invalidate()/invalidate_all(); refresh tasks drop results that raced an invalidate
     ttl_ms: AtomicU64,  // updatable via set_ttl()
 }
 ```
@@ -406,9 +409,10 @@ Cache key is the **repository root path**, not the cwd. Multiple cwds within the
 
 Spawns a tokio task that:
 1. Checks/sets the `in_flight` set for request coalescing (duplicate refreshes for the same repo are skipped)
-2. Calls `fetch_git_status(repo_root).await`
-3. Updates the cache with fresh status and timestamp
-4. Removes the repo from `in_flight`
+2. Calls `fetch_git_status(repo_root).await` — returns `None` on spawn error or non-zero git exit
+3. Drops the result if the cache generation changed mid-flight (an `invalidate` raced the refresh); the next `get_status` schedules a fresh refresh
+4. On success: updates the cache with fresh status and timestamp. On failure: keeps any previous cache entry in place; inserts an `is_repo: false` entry only when none exists, so the segment renders `None` instead of a fake empty repo
+5. Removes the repo from `in_flight`
 
 ### Status Fetching
 

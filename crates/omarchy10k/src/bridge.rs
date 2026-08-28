@@ -80,18 +80,30 @@ pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
 }
 
 fn write_prompt(stdout: &mut io::Stdout, response: &str) {
-    let (left, right) = extract_prompt_parts(response);
-    let _ = stdout.write_all(left.as_bytes());
-    let _ = stdout.write_all(&[0]);
-    let _ = stdout.write_all(right.as_bytes());
-    let _ = stdout.write_all(&[0]);
+    match extract_prompt_parts(response) {
+        Some((left, right, threshold)) => {
+            let _ = stdout.write_all(left.as_bytes());
+            let _ = stdout.write_all(&[0]);
+            let _ = stdout.write_all(right.as_bytes());
+            let _ = stdout.write_all(&[0]);
+            let _ = stdout.write_all(threshold.as_bytes());
+            let _ = stdout.write_all(&[0]);
+        }
+        None => {
+            write_fallback(stdout);
+            return;
+        }
+    }
     let _ = stdout.flush();
 }
 
 fn write_fallback(stdout: &mut io::Stdout) {
-    let _ = stdout.write_all(b"\\[\\e[1;34m\\]\\w\\[\\e[0m\\] \\[\\e[1;32m\\]\\xe2\\x9d\\xaf\\[\\e[0m\\] ");
+    // PS1 escapes (\[ and \e) stay literal text; the ❯ glyph is the real
+    // UTF-8 byte sequence (U+276F).
+    let _ = stdout.write_all(b"\\[\\e[1;34m\\]\\w\\[\\e[0m\\] \\[\\e[1;32m\\]\xe2\x9d\xaf\\[\\e[0m\\] ");
     let _ = stdout.write_all(&[0]);
     let _ = stdout.write_all(&[0]); // empty right prompt
+    let _ = stdout.write_all(&[0]); // empty notify_threshold_ms
     let _ = stdout.flush();
 }
 
@@ -122,29 +134,37 @@ async fn connect_with_retry(socket_path: &Path, max_retries: u32) -> anyhow::Res
     anyhow::bail!("failed to connect to daemon socket")
 }
 
-fn extract_prompt_parts(response: &str) -> (String, String) {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(response.trim()) {
-        let left = v
-            .get("left")
-            .and_then(|l| l.as_str())
-            .unwrap_or("")
-            .to_string();
-        let right = v
-            .get("right")
-            .and_then(|r| r.as_str())
-            .unwrap_or("")
-            .to_string();
-        (
-            if left.is_empty() {
-                response.trim().to_string()
-            } else {
-                left
-            },
-            right,
-        )
-    } else {
-        (response.trim().to_string(), String::new())
+fn extract_prompt_parts(response: &str) -> Option<(String, String, String)> {
+    let trimmed = response.trim();
+    // Try a full JSON parse first, then a parse starting at the first '{' to
+    // catch a JSON object embedded in surrounding noise.
+    let mut parsed = serde_json::from_str::<serde_json::Value>(trimmed).ok();
+    if parsed.is_none() {
+        if let Some(start) = trimmed.find('{') {
+            parsed = serde_json::from_str::<serde_json::Value>(&trimmed[start..]).ok();
+        }
     }
+    let v = parsed?;
+    let left = v
+        .get("left")
+        .and_then(|l| l.as_str())
+        .unwrap_or("")
+        .to_string();
+    if left.is_empty() {
+        // JSON error/control payloads must never become PS1
+        return None;
+    }
+    let right = v
+        .get("right")
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .to_string();
+    let threshold = v
+        .get("notify_threshold_ms")
+        .and_then(|t| t.as_u64())
+        .map(|t| t.to_string())
+        .unwrap_or_default();
+    Some((left, right, threshold))
 }
 
 fn parse_kv_to_json(line: &str) -> String {

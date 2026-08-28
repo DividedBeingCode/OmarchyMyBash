@@ -171,7 +171,7 @@ The daemon response `left` field is stripped of ANSI via `Model.stripAnsi()` bef
 
 ```javascript
 socketFinder.exec(["sh", "-c",
-    "ls " + Model.runtimeDir() + "/omarchy10k-*.sock 2>/dev/null"])
+    "ls '" + Model.runtimeDir(Quickshell.env("XDG_RUNTIME_DIR")) + "'/omarchy10k-*.sock 2>/dev/null"])
 ```
 
 Enumerates **all** `omarchy10k-*.sock` files in `$XDG_RUNTIME_DIR` (or `/tmp`). Each discovered socket is parsed to extract shell PID and added to the `sessionList` model. The user can select between sessions in the Advanced tab.
@@ -198,6 +198,8 @@ socketFinder returns all socket paths
 ### Reconnection
 
 `reconnectTimer` fires every 5 seconds when panel is open and daemon is not running. Re-runs socket discovery.
+
+On socket `error` (stale socket file, dead daemon), the panel marks the session dead (`daemonSocket.connected = false`, `daemonStatus = "not running"`) and removes the failed path from `sessionList`, so the timer re-discovers instead of spinning against a stale socket. The bar widget does the same on its status socket (clears `barSocketPath`; the next poll re-discovers).
 
 On panel close, socket is explicitly disconnected.
 
@@ -272,13 +274,13 @@ setConfigValue(key, value)
 
 On daemon error, `lastError` is set and the red error toast appears for 5 seconds.
 
-**Fallback:** If the daemon does not support the config API, falls back to direct TOML file I/O:
-
-```
-Model.buildTOML(_configFlat) → TOML string (single-quote escaped)
-  → configWriter.exec(["sh", "-c", "mkdir -p dir && printf ... > file"])
-  → configWriter.onRunningChanged → sendDaemonCommand("reload_config")
-```
+**No offline writes:** If `daemonSocket` is not connected, the debounced save is
+refused — the panel never rebuilds or overwrites `config.toml` itself. Instead
+`lastError` is set, the red error toast tells the user that saving settings
+requires a running omarchy10k daemon, and the change stays in the panel
+properties for when a daemon reconnects. All config writes go through the
+daemon's `config_set` (see [architecture.md](architecture.md), "Data Flow:
+Config Change via Quattro").
 
 ### CONFIG_MAP
 
@@ -455,7 +457,6 @@ When multiple shells are running, each has its own daemon socket. The Advanced t
 | ID | Command | Trigger |
 |----|---------|---------|
 | `configReader` | `cat config.toml` | Panel open, reload, reset |
-| `configWriter` | `sh -c "mkdir -p && cat > file"` | Debounced save (fallback) |
 | `socketFinder` | `ls $XDG_RUNTIME_DIR/omarchy10k-*.sock` | Panel open, reconnect |
 | `barSocketFinder` | `ls … \| head -1` | BarWidget init, bar poll |
 | `toolDetector` | 5× `command -v` | Panel open |
@@ -474,9 +475,10 @@ Stateless helper library (`.pragma library`):
 
 | Function | Purpose |
 |----------|---------|
-| `configDir()` | `$XDG_CONFIG_HOME/omarchy10k` (falls back to `$HOME/.config/omarchy10k`) |
-| `configPath()` | `configDir()/config.toml` |
-| `runtimeDir()` | `$XDG_RUNTIME_DIR` or `/tmp` |
+| `configDir(xdgConfigHome, home)` | `$XDG_CONFIG_HOME/omarchy10k` (falls back to `$HOME/.config/omarchy10k`); env values passed in from QML via `Quickshell.env()` |
+| `configPath(xdgConfigHome, home)` | `configDir()/config.toml` |
+| `runtimeDir(xdgRuntimeDir)` | `$XDG_RUNTIME_DIR` or `/tmp`; env value passed in from QML |
+| `stripComment(line)` | Removes an unquoted `#` comment, preserving `#` inside quoted values |
 | `buildCommand(name, id)` | JSON control command string with newline |
 | `buildHello(id)` | Hello handshake message (version `"0.3"`) |
 | `buildConfigGet(id)` | Builds config_get request |
@@ -484,13 +486,13 @@ Stateless helper library (`.pragma library`):
 | `buildPreview(context, id)` | Builds preview request with simulated context |
 | `stripAnsi(str)` | Removes ANSI/OSC escape sequences from preview text |
 | `protocolAtLeast(current, min)` | Dotted version comparison (e.g. `"0.3" >= "0.2"`) |
-| `flattenConfig(nested)` | Flattens nested config object to dotted keys |
+| `flattenConfig(nested)` | Flattens nested config object to dotted keys; skips null leaves |
 | `unflattenPatch(flat)` | Unflattens dotted keys to nested object |
 | `parseDaemonResponse(json)` | Safe JSON parse with error wrapping |
 | `parseTOML(text)` | Subset TOML parser → flat key-value object |
 | `buildTOML(flat)` | Flat object → sectioned TOML string |
 | `CONFIG_MAP` | TOML key ↔ QML property mapping (31 keys) |
-| `applyConfig(flat, target)` | Load parsed config into QML properties |
+| `applyConfig(flat, target)` | Load parsed config into QML properties; skips undefined/null values |
 | `collectConfig(source)` | Export QML properties to flat object |
 | `parseToolOutput(text)` | Parse `name=path\|missing` format |
 
@@ -499,7 +501,7 @@ Stateless helper library (`.pragma library`):
 The `parseTOML()` implementation supports:
 - `[section]` headers
 - `key = "string"`, `key = true/false`, `key = integer`
-- `#` comments
+- `#` comments (quote-aware — `#` inside quoted values is preserved)
 
 It does not support: nested tables, arrays, inline tables, multi-line strings, dotted keys.
 
@@ -544,24 +546,17 @@ Requires a running Omarchy Quattro desktop with Quickshell-based bar system.
 
 Recorded by the [Bug Audit](bug-audit.md).
 
-### The fallback config writer destroys `config.toml`
+### The fallback config writer destroys `config.toml` (fixed: offline writer removed)
 
-When `daemonSocket` is not connected, `Panel.qml`'s `_flushSave` rebuilds the
-whole file from `Model.parseTOML`'s flat output:
+`Panel.qml`'s `_flushSave` used to rebuild the whole file from `Model.parseTOML`'s
+flat output whenever `daemonSocket` was disconnected. `parseTOML` keeps only
+`section.key = scalar` pairs, so round-tripping stripped every comment and dropped
+the nested `[theme.custom]` table entirely.
 
-```qml
-var toml = Model.buildTOML(root._configFlat)
-configWriter.exec(["sh", "-c", "mkdir -p '…' && printf '%s\\n' '…' > '" + _configPath + "'"])
-```
-
-`parseTOML` keeps only `section.key = scalar` pairs. Round-tripping through it
-strips every comment and drops the nested `[theme.custom]` table entirely. The
-shell quoting itself is correct (`'` → `'\''`), so this is data loss rather than
-injection.
-
-The daemon-connected path (`config set`) is safe — the daemon parses the existing
-file, deep-merges the patch, and refuses to overwrite a file it cannot parse.
-Prefer keeping the panel connected. See
+The offline writer has been removed: config saves now require a connected daemon
+and always go through `config_set` (the daemon deep-merges the patch and refuses
+to overwrite a file it cannot parse). When no daemon is connected the panel shows
+an error toast instead of writing the file. See
 [Bug Audit #19](bug-audit.md#19-quattros-fallback-config-writer-destroys-the-config-file).
 
 ### Every save writes every mapped key

@@ -161,6 +161,14 @@ Response:
 {"type":"config","status":"ok"}
 ```
 
+If any value in the patch cannot be converted to TOML (e.g. JSON `null`), nothing is written and the daemon responds instead:
+
+```json
+{"type":"config","status":"error","error":"values for keys a.b are not representable in TOML; nothing was written","failed_keys":["a.b"]}
+```
+
+`failed_keys` names the offending patch keys. The write is all-or-nothing: a patch containing even one unconvertible value leaves `config.toml` untouched.
+
 The daemon **recursively merges** the JSON patch into `config.toml` on disk and reloads in-memory config. Top-level sections are merged, not replaced — keys absent from the patch are preserved. For example, a patch containing `{"git":{"mode":"compact"}}` updates only `git.mode` without touching `git.cache_ttl_ms` or other git keys.
 
 Behavior details:
@@ -169,6 +177,7 @@ Behavior details:
 - **I/O error:** Write failures return a structured error response instead of dropping the connection.
 - **Atomic write:** Uses temp file + rename to prevent corruption on crash.
 - **Theme reload:** When the patch touches the `[theme]` section, the daemon automatically calls `reload_theme()` after `reload_config()` so palette changes take effect immediately.
+- **Unconvertible values:** Values that fail JSON→TOML conversion (e.g. `null`) are collected up front; if any exist, the daemon responds `status:"error"` with `failed_keys` listing them and writes nothing (all-or-nothing).
 
 **Used by:** Quattro panel (primary write path).
 

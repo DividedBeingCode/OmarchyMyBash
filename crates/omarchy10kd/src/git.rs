@@ -58,6 +58,9 @@ struct CachedStatus {
 pub struct GitCache {
     cache: Arc<RwLock<HashMap<PathBuf, CachedStatus>>>,
     in_flight: Arc<RwLock<HashSet<PathBuf>>>,
+    // Bumped on every invalidate; refresh tasks compare their start snapshot
+    // against this at insert time so a pre-invalidation snapshot is dropped.
+    generation: Arc<AtomicU64>,
     ttl_ms: AtomicU64,
 }
 
@@ -66,6 +69,7 @@ impl GitCache {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
             in_flight: Arc::new(RwLock::new(HashSet::new())),
+            generation: Arc::new(AtomicU64::new(0)),
             ttl_ms: AtomicU64::new(ttl_ms),
         }
     }
@@ -113,6 +117,8 @@ impl GitCache {
     fn schedule_refresh(&self, repo_root: PathBuf) {
         let cache = Arc::clone(&self.cache);
         let in_flight = Arc::clone(&self.in_flight);
+        let generation = Arc::clone(&self.generation);
+        let gen_at_start = generation.load(Ordering::SeqCst);
 
         tokio::spawn(async move {
             {
@@ -125,12 +131,40 @@ impl GitCache {
 
             let status = fetch_git_status(&repo_root).await;
 
-            {
-                let mut c = cache.write().await;
-                c.insert(repo_root.clone(), CachedStatus {
-                    status,
-                    fetched_at: Instant::now(),
-                });
+            if generation.load(Ordering::SeqCst) != gen_at_start {
+                // Cache was invalidated while this refresh ran in flight;
+                // re-inserting the pre-invalidation snapshot would resurrect
+                // stale data. Drop the result — the next get_status schedules
+                // a fresh refresh.
+                debug!(
+                    "dropped in-flight git refresh for {} (invalidated mid-flight)",
+                    repo_root.display()
+                );
+            } else {
+                match status {
+                    Some(status) => {
+                        cache.write().await.insert(repo_root.clone(), CachedStatus {
+                            status,
+                            fetched_at: Instant::now(),
+                        });
+                    }
+                    None => {
+                        // Fetch failed: keep any previous cache entry in place;
+                        // only mark is_repo:false when we have nothing better,
+                        // so the segment renders None instead of a fake repo.
+                        let mut c = cache.write().await;
+                        if !c.contains_key(&repo_root) {
+                            c.insert(repo_root.clone(), CachedStatus {
+                                status: GitStatus {
+                                    is_repo: false,
+                                    repo_root: repo_root.clone(),
+                                    ..Default::default()
+                                },
+                                fetched_at: Instant::now(),
+                            });
+                        }
+                    }
+                }
             }
 
             {
@@ -141,16 +175,19 @@ impl GitCache {
     }
 
     pub async fn invalidate(&self, repo_root: &Path) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         let mut cache = self.cache.write().await;
         cache.remove(repo_root);
         debug!("invalidated git cache for {}", repo_root.display());
     }
 
     pub async fn invalidate_all(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         let mut cache = self.cache.write().await;
         cache.clear();
     }
 }
+
 
 fn find_repo_root(mut dir: &Path) -> Option<PathBuf> {
     loop {
@@ -190,7 +227,7 @@ fn detect_worktree(repo_root: &Path) -> Option<String> {
     }
 }
 
-async fn fetch_git_status(repo_root: &Path) -> GitStatus {
+async fn fetch_git_status(repo_root: &Path) -> Option<GitStatus> {
     let start = Instant::now();
 
     let output = match tokio::process::Command::new("git")
@@ -202,22 +239,19 @@ async fn fetch_git_status(repo_root: &Path) -> GitStatus {
         Ok(o) => o,
         Err(e) => {
             warn!("git status failed: {e}");
-            return GitStatus {
-                is_repo: true,
-                repo_root: repo_root.to_path_buf(),
-                ..Default::default()
-            };
+            return None;
         }
     };
 
-    if !output.status.success() {
-        return GitStatus {
-            is_repo: true,
-            repo_root: repo_root.to_path_buf(),
-            ..Default::default()
-        };
-    }
 
+    if !output.status.success() {
+        warn!(
+            "git status exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return None;
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut status = parse_porcelain_v2(&stdout);
     status.is_repo = true;
@@ -242,7 +276,7 @@ async fn fetch_git_status(repo_root: &Path) -> GitStatus {
         repo_root.display(),
         start.elapsed()
     );
-    status
+    Some(status)
 }
 
 fn parse_porcelain_v2(output: &str) -> GitStatus {

@@ -1,3 +1,4 @@
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -117,9 +118,12 @@ pub async fn run_server(
     socket_path: &Path,
     state: Arc<DaemonState>,
 ) -> anyhow::Result<()> {
-    // Clean up stale socket
+    // Validate/clean up any leftover file at the socket path
     if socket_path.exists() {
-        std::fs::remove_file(socket_path)?;
+        if let Err(e) = clear_stale_socket(socket_path) {
+            error!("socket path check failed: {e}");
+            return Err(e);
+        }
     }
 
     // Ensure parent directory exists
@@ -128,6 +132,8 @@ pub async fn run_server(
     }
 
     let listener = UnixListener::bind(socket_path)?;
+    // Only the owner may talk to the daemon (prompt data, control commands).
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
     info!("daemon listening on {}", socket_path.display());
 
     loop {
@@ -145,6 +151,63 @@ pub async fn run_server(
             }
         }
     }
+}
+
+mod libc {
+    unsafe extern "C" {
+        pub fn getuid() -> u32;
+    }
+}
+
+/// Handle a leftover file at the socket path before binding: unlink it only
+/// when it is a socket owned by the current user that nothing is listening
+/// on. A live listener means another daemon owns the path — bail out
+/// instead of hijacking it.
+fn clear_stale_socket(socket_path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let meta = std::fs::metadata(socket_path)?;
+    if !meta.file_type().is_socket() {
+        anyhow::bail!(
+            "{} exists and is not a socket; refusing to remove it",
+            socket_path.display()
+        );
+    }
+    if meta.uid() != unsafe { libc::getuid() } {
+        anyhow::bail!(
+            "{} is owned by another user; refusing to remove it",
+            socket_path.display()
+        );
+    }
+    match std::os::unix::net::UnixStream::connect(socket_path) {
+        Ok(_) => anyhow::bail!(
+            "another daemon is already listening on {}; refusing to hijack it",
+            socket_path.display()
+        ),
+        Err(_) => {
+            info!("removing stale socket {}", socket_path.display());
+            std::fs::remove_file(socket_path)?;
+            Ok(())
+        }
+    }
+}
+
+/// Remove the daemon's socket file on shutdown, but only if it is still a
+/// socket owned by the current user (never delete a swapped-in file).
+pub fn remove_socket_file(socket_path: &Path) {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let Ok(meta) = std::fs::metadata(socket_path) else {
+        return; // already gone
+    };
+    if !meta.file_type().is_socket() || meta.uid() != unsafe { libc::getuid() } {
+        warn!(
+            "{} is no longer our socket; leaving it in place",
+            socket_path.display()
+        );
+        return;
+    }
+    let _ = std::fs::remove_file(socket_path);
 }
 
 async fn write_response(
@@ -189,7 +252,7 @@ async fn handle_control(
         "shutdown" => {
             info!("shutdown requested");
             write_response(writer, serde_json::json!({"type":"control","status":"bye"}), request_id).await?;
-            let _ = std::fs::remove_file(&state.socket_path);
+            remove_socket_file(&state.socket_path);
             std::process::exit(0);
         }
         "status" => {
@@ -422,12 +485,29 @@ async fn handle_connection(
                                 Err(_) => toml::Table::new(),
                             };
 
+                            let mut failed_keys: Vec<String> = Vec::new();
                             if let Some(obj) = patch.as_object() {
                                 for (k, v) in obj {
-                                    if let Ok(toml_val) = serde_json::from_value::<toml::Value>(v.clone()) {
-                                        merge_toml_value(doc.entry(k.clone()).or_insert(toml::Value::Table(toml::Table::new())), toml_val);
+                                    match serde_json::from_value::<toml::Value>(v.clone()) {
+                                        Ok(toml_val) => {
+                                            merge_toml_value(doc.entry(k.clone()).or_insert(toml::Value::Table(toml::Table::new())), toml_val);
+                                        }
+                                        Err(_) => failed_keys.push(k.clone()),
                                     }
                                 }
+                            }
+
+                            if !failed_keys.is_empty() {
+                                // All-or-nothing: never write a partial patch.
+                                warn!("config set: unconvertible values for keys: {}", failed_keys.join(", "));
+                                write_response(&mut writer, serde_json::json!({
+                                    "type": "config",
+                                    "status": "error",
+                                    "error": format!("values for keys {} are not representable in TOML; nothing was written", failed_keys.join(", ")),
+                                    "failed_keys": failed_keys,
+                                }), request_id).await?;
+                                line.clear();
+                                continue;
                             }
 
                             if let Some(parent) = config_path.parent() {

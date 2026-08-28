@@ -7,6 +7,22 @@ PASS=0
 FAIL=0
 SKIP=0
 
+# ── Hermetic sandbox ───────────────────────────────────────────────────────
+# Redirect all XDG state into a temp dir so the suite never touches the
+# developer's real config, cache, or runtime directories.
+TEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/omarchy10k-itest.XXXXXX")"
+export XDG_CONFIG_HOME="$TEST_TMP/config"
+export XDG_CACHE_HOME="$TEST_TMP/cache"
+export XDG_RUNTIME_DIR="$TEST_TMP/runtime"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR" "$TEST_TMP/home"
+
+cleanup() {
+    kill "${DAEMON_PID:-}" 2>/dev/null || true
+    wait "${DAEMON_PID:-}" 2>/dev/null || true
+    rm -rf "$TEST_TMP"
+}
+trap cleanup EXIT
+
 pass() { echo "  ✓ $1"; (( PASS++ )); }
 fail() { echo "  ✘ $1: $2"; (( FAIL++ )); }
 skip() { echo "  - $1 (skipped: $2)"; (( SKIP++ )); }
@@ -94,7 +110,7 @@ else
     fail "omarchy10k init bash" "adapter script missing __o10k_render_prompt"
 fi
 
-if echo "$INIT_OUTPUT" | grep -q "BLE_VERSION"; then
+if echo "$INIT_OUTPUT" | grep -q "bleopt prompt_ps1_transient"; then
     pass "omarchy10k init bash (contains ble.sh detection)"
 else
     fail "omarchy10k init bash" "adapter script missing ble.sh detection"
@@ -125,12 +141,25 @@ rm -f "$SOCKET"
 # Start daemon
 "$DAEMON" &
 DAEMON_PID=$!
-sleep 1
 
-if [[ -S "$SOCKET" ]]; then
+# Bounded readiness wait (~5s in 0.1s steps); readiness failure is FATAL,
+# not a skip — every later socket test depends on the daemon being up.
+SOCKET_READY=0
+for _ in $(seq 1 50); do
+    if [[ -S "$SOCKET" ]]; then
+        SOCKET_READY=1
+        break
+    fi
+    kill -0 "$DAEMON_PID" 2>/dev/null || break
+    sleep 0.1
+done
+
+if (( SOCKET_READY )); then
     pass "daemon creates socket"
 else
-    fail "daemon creates socket" "socket not found at $SOCKET"
+    fail "daemon creates socket" "socket not found at $SOCKET within 5s"
+    echo "FATAL: daemon socket never appeared; cannot run socket tests."
+    exit 1
 fi
 
 # Status command
@@ -197,16 +226,16 @@ if [[ -S "$SOCKET" ]]; then
         fail "prompt renders in narrow terminal" "empty response"
     fi
 
-    # Git directory prompt (test in the workspace which may be a git repo)
-    if git -C "$SCRIPT_DIR/.." rev-parse --git-dir >/dev/null 2>&1; then
-        GIT_RESP=$(sock_send "$SOCKET" "{\"cwd\":\"$SCRIPT_DIR/..\",\"exit_code\":0,\"cmd_duration_ms\":0,\"cols\":120,\"jobs\":0}")
+    # Git directory prompt (the repo root is a git checkout)
+    if git -C "$SCRIPT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+        GIT_RESP=$(sock_send "$SOCKET" "{\"cwd\":\"$SCRIPT_DIR\",\"exit_code\":0,\"cmd_duration_ms\":0,\"cols\":120,\"jobs\":0}")
         if [[ -n "$GIT_RESP" ]]; then
             pass "prompt renders in git repo"
         else
             fail "prompt renders in git repo" "empty response"
         fi
     else
-        skip "prompt renders in git repo" "parent not a git repo"
+        skip "prompt renders in git repo" "repo not a git checkout"
     fi
 else
     skip "prompt rendering tests" "no socket"
@@ -245,11 +274,15 @@ fi
 
 section "Hook Broker (Bash Sourcing)"
 
-# Source the adapter in a subshell, forcing interactive mode for the guard
-HOOK_TEST=$(bash -i -c '
-    __O10K_BIN="echo"
-    __O10K_DAEMON_BIN="true"
-    __O10K_SOCKET="/dev/null/nonexistent"
+# Source the adapter in a fresh interactive shell: --noprofile --norc keeps the
+# user's ~/.bashrc from injecting an installed adapter, the sandboxed HOME/XDG
+# dirs keep it from touching real state, and O10K_BIN/O10K_DAEMON_BIN (the
+# variables the adapter actually reads) are pointed at harmless no-ops so no
+# real daemon can be spawned from PATH.
+HOOK_TEST=$(env HOME="$TEST_TMP/home" BASH_ENV=/dev/null ENV=/dev/null \
+    bash --noprofile --norc -i -c '
+    export O10K_BIN="echo"
+    export O10K_DAEMON_BIN="true"
 
     source '"$SCRIPT_DIR"'/shell/omarchy10k.bash 2>/dev/null || true
 

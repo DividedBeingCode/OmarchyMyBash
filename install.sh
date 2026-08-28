@@ -10,6 +10,7 @@ CONFIG_DIR="${HOME}/.config/omarchy10k"
 DATA_DIR="${HOME}/.local/share/omarchy10k"
 PLUGIN_DIR="${HOME}/.config/omarchy/plugins/community.omarchy10k"
 HOOK_DIR="${HOME}/.config/omarchy/hooks/theme-set.d"
+TEMPLATE_DIR="${HOME}/.local/share/omarchy/templates"
 BASHRC="${HOME}/.bashrc"
 INIT_LINE='eval "$(omarchy10k init bash)"'
 UPDATE_MODE=false
@@ -35,6 +36,7 @@ case "${1:-}" in
         rm -f "${BIN_DIR}/omarchy10k" "${BIN_DIR}/omarchy10kd" && ok "Removed binaries" || warn "Binaries not found"
         rm -rf "${PLUGIN_DIR}" && ok "Removed Quattro plugin" || warn "Plugin not found"
         rm -f "${HOOK_DIR}/omarchy10k" && ok "Removed theme hook" || warn "Hook not found"
+        rm -f "${TEMPLATE_DIR}/omarchy10k.toml.tpl" && ok "Removed theme template" || true
         rm -rf "${DATA_DIR}" && ok "Removed data directory" || true
 
         if [[ -f "$BASHRC" ]] && grep -qF "$INIT_LINE" "$BASHRC"; then
@@ -76,8 +78,9 @@ mkdir -p "$BIN_DIR"
 for bin in omarchy10k omarchy10kd; do
     src="${SCRIPT_DIR}/target/release/${bin}"
     if [[ -f "$src" ]]; then
-        cp "$src" "${BIN_DIR}/${bin}"
-        chmod +x "${BIN_DIR}/${bin}"
+        cp "$src" "${BIN_DIR}/.${bin}.tmp"
+        chmod +x "${BIN_DIR}/.${bin}.tmp"
+        mv "${BIN_DIR}/.${bin}.tmp" "${BIN_DIR}/${bin}"
         ok "${bin}"
     else
         fail "${bin} not found at ${src}"
@@ -113,7 +116,21 @@ if [[ -d "${SCRIPT_DIR}/quattro" ]]; then
     info "Installing Quattro Control Center plugin..."
     mkdir -p "$PLUGIN_DIR"
     cp -r "${SCRIPT_DIR}/quattro/"* "$PLUGIN_DIR/"
+    # Sync manifest.json version with Cargo.toml
+    cargo_version=$(grep -m1 '^version' "${SCRIPT_DIR}/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
+    if [[ -n "$cargo_version" && -f "${PLUGIN_DIR}/manifest.json" ]]; then
+        # Patch only the FIRST "version" occurrence (the manifest's own, not a
+        # later dependency's). GNU sed range form; degrade to a warning on error.
+        if ! sed -i "0,/\"version\": *\"[^\"]*\"/s//\"version\": \"${cargo_version}\"/" "${PLUGIN_DIR}/manifest.json"; then
+            warn "Could not sync manifest.json version with Cargo.toml"
+        fi
+    else
+        warn "manifest.json not found; skipping version sync"
+    fi
     ok "Plugin installed to ${PLUGIN_DIR}"
+    if command -v omarchy-shell &>/dev/null; then
+        omarchy-shell shell rescanPlugins 2>/dev/null && ok "Quattro plugin rescan triggered" || true
+    fi
 else
     warn "Quattro plugin directory not found; skipping"
 fi
@@ -129,6 +146,16 @@ else
     warn "Theme hook not found; skipping"
 fi
 
+# Step 6: Theme bridge template (optional)
+if [[ -f "${SCRIPT_DIR}/templates/omarchy10k.toml.tpl" ]]; then
+    info "Installing theme bridge template..."
+    mkdir -p "$TEMPLATE_DIR"
+    cp "${SCRIPT_DIR}/templates/omarchy10k.toml.tpl" "${TEMPLATE_DIR}/omarchy10k.toml.tpl"
+    ok "Template installed to ${TEMPLATE_DIR}"
+else
+    warn "Theme template not found; skipping"
+fi
+
 # Summary
 if [[ "$UPDATE_MODE" == true ]]; then
     printf "\n${C_GREEN}${C_BOLD}  Update complete!${C_RESET}\n\n"
@@ -139,7 +166,11 @@ else
     printf "  ${C_BOLD}Next steps:${C_RESET}\n"
     printf "    1. Open a new terminal (or run: source ~/.bashrc)\n"
     printf "    2. Run: ${C_BLUE}omarchy10k doctor${C_RESET} to verify\n"
-    printf "    3. Add the Omarchy10k widget to your Quattro bar\n"
+    if command -v omarchy-shell &>/dev/null; then
+        printf "    3. Enable the bar widget: ${C_BLUE}omarchy plugin enable community.omarchy10k${C_RESET}\n"
+    else
+        printf "    3. (Optional) If using Omarchy Quattro, add the widget to your bar\n"
+    fi
     printf "\n  To uninstall: ${C_BLUE}./install.sh --uninstall${C_RESET}\n"
     printf "  To update:    ${C_BLUE}omarchy10k update${C_RESET}  or  ${C_BLUE}./install.sh --update${C_RESET}\n\n"
 fi

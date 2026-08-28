@@ -11,13 +11,13 @@ for sock in "$SOCKET_DIR"/omarchy10k-*.sock; do
     if command -v socat &>/dev/null; then
         echo "$MSG" | socat - UNIX-CONNECT:"$sock" 2>/dev/null || true
     elif command -v python3 &>/dev/null; then
-        python3 -c "
-import socket
+        python3 -c '
+import socket, sys
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.settimeout(2)
-s.connect('$sock')
-s.sendall(b'$MSG\n')
+s.connect(sys.argv[1])
+s.sendall((sys.argv[2] + "\n").encode())
 s.close()
-" 2>/dev/null || true
+' "$sock" "$MSG" 2>/dev/null || true
     fi
 done

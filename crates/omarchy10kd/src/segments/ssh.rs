@@ -1,5 +1,6 @@
 use crate::layout::Segment;
 use super::SegmentContext;
+use unicode_width::UnicodeWidthStr;
 
 pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     if !ctx.config.segments.ssh.enabled {
@@ -29,7 +30,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
 
     let content = format!("\u{f489} {short_host}");
     let compact = format!("\u{f489}");
-    let width = content.len() as u16;
+    let width = UnicodeWidthStr::width(content.as_str()) as u16;
 
     Some(Segment {
         name: "ssh",

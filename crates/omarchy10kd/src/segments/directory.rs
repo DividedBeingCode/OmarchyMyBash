@@ -39,7 +39,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
             .and_then(|h| h.into_string().ok())
             .unwrap_or_default();
         let abs_path = ctx.cwd;
-        let osc_open = format!("\x1b]8;;file://{hostname}{abs_path}\x1b\\");
+        let osc_open = format!("\x1b]8;;file://{hostname}{}\x1b\\", percent_encode_path(abs_path));
         let osc_close = "\x1b]8;;\x1b\\";
         format!(
             "{}{}{}",
@@ -70,7 +70,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
 }
 
 fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
+    if UnicodeWidthStr::width(path) <= max_len {
         return path.to_string();
     }
     let parts: Vec<&str> = path.split('/').collect();
@@ -83,7 +83,7 @@ fn truncate_path(path: &str, max_len: usize) -> String {
 }
 
 fn smart_truncate(path: &str, max_len: usize, _repo_root_style: &str) -> String {
-    if path.len() <= max_len {
+    if UnicodeWidthStr::width(path) <= max_len {
         return path.to_string();
     }
 
@@ -124,7 +124,7 @@ fn smart_truncate(path: &str, max_len: usize, _repo_root_style: &str) -> String 
     }
 
     let result = result_parts.join("/");
-    if result.len() <= max_len {
+    if UnicodeWidthStr::width(result.as_str()) <= max_len {
         result
     } else {
         // Last resort: keep just first + last
@@ -145,6 +145,21 @@ fn unique_prefix(target: &str, before: &[&str], after: &[&str]) -> String {
     }
 
     target.to_string()
+}
+
+/// Percent-encode a path for use in a file:// URI: everything outside the
+/// RFC 3986 unreserved set plus `/` is escaped, so spaces, `#`, `%`, `?`,
+/// and control characters cannot corrupt the hyperlink target.
+fn percent_encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'-' | b'_' | b'.' | b'~' | b'/' => out.push(byte as char),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 mod hostname {

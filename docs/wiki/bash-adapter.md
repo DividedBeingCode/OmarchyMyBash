@@ -23,14 +23,15 @@ __O10K_INITIALIZED=1
 After guards pass, the adapter:
 
 1. Sets up path variables (`__O10K_BIN`, `__O10K_DAEMON_BIN`, `__O10K_SOCKET`)
-2. Loads instant prompt cache from `${XDG_CACHE_HOME:-$HOME/.cache}/omarchy10k/last_prompt` (if present)
-3. Detects terminal shell integration and sets `__O10K_EMIT_OSC133`
-4. Declares hook arrays (`__O10K_HOOKS_precmd`, `preexec`, `chpwd`, `shell_exit`)
-5. Registers `EXIT` trap for `__o10k_cleanup`
-6. Creates cache directory (`__O10K_CACHE_DIR`) if missing
-7. Starts the daemon (`__o10k_start_daemon`)
-8. Starts bridge coprocess (`__o10k_start_bridge`)
-9. Installs hooks based on ble.sh availability (`__o10k_install_hooks`)
+2. Disables `promptvars` (`shopt -u promptvars`) so PS1 content — daemon/path/branch text — never undergoes parameter or command expansion
+3. Loads instant prompt cache from `${XDG_CACHE_HOME:-$HOME/.cache}/omarchy10k/last_prompt` (if present)
+4. Detects terminal shell integration and sets `__O10K_EMIT_OSC133`
+5. Declares hook arrays (`__O10K_HOOKS_precmd`, `preexec`, `chpwd`, `shell_exit`)
+6. Registers `EXIT` trap for `__o10k_cleanup`
+7. Creates cache directory (`__O10K_CACHE_DIR`) if missing
+8. Starts the daemon (`__o10k_start_daemon`)
+9. Starts bridge coprocess (`__o10k_start_bridge`)
+10. Installs hooks based on ble.sh availability (`__o10k_install_hooks`)
 
 ## Instant Prompt Cache
 
@@ -92,12 +93,13 @@ Called at init time alongside daemon startup.
 ### Request (`__o10k_bridge_request`)
 
 1. Writes the JSON request to the coprocess stdin
-2. Reads two NUL-terminated fields from coprocess stdout (2 second timeout each): `left\0right\0`
+2. Reads three NUL-terminated fields from coprocess stdout: `left\0right\0notify_threshold_ms\0` (left: 2s timeout; right/threshold: 0.5s each)
 3. Sets `PS1` from the `left` field
 4. Caches the `right` field in `__O10K_LAST_RIGHT` for ble.sh right prompt
-5. Writes the instant prompt cache in the background (see [Instant Prompt Cache](#instant-prompt-cache))
+5. Sets `__O10K_NOTIFY_THRESHOLD` from the third field when non-empty
+6. Writes the instant prompt cache in the background (see [Instant Prompt Cache](#instant-prompt-cache))
 
-If the bridge is unavailable or times out, the adapter falls back to `__o10k_socket_send` + `parse-prompt`.
+If the left read fails or times out, the request aborts immediately (worst-case latency ≈ 2s instead of 4s) and the reader best-effort drains late-arriving fields so the stream cannot shift by one; the adapter then falls back to `__o10k_socket_send` + `parse-prompt`.
 
 ## Shell Integration Detection
 
@@ -243,10 +245,10 @@ The adapter emits several terminal control sequences beyond OSC 133 shell integr
 After every successful PS1 assignment, the adapter reports the current working directory:
 
 ```bash
-printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$PWD"
+printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$(__o10k_uri_encode "$PWD")"
 ```
 
-Enables Ghostty, Foot, and WezTerm to open new tabs/splits in the shell's current directory. Emitted on bridge success, socket fallback success, and static fallback paths.
+`$PWD` is passed through `__o10k_uri_encode`, which percent-encodes URI-unsafe characters (space → `%20`, `%` → `%25`, `#` → `%23`, `?` → `%3F`) and strips control characters, so paths with special characters cannot truncate or corrupt the sequence.
 
 ### OSC 777 — Desktop Notifications
 
@@ -254,8 +256,10 @@ When a command's duration exceeds `__O10K_NOTIFY_THRESHOLD` (default 10000 ms), 
 
 ```bash
 printf '\033]777;notify;Command finished;%s took %dms\007' \
-    "${__O10K_LAST_CMD:-command}" "$__O10K_CMD_DURATION"
+    "$_notify_cmd" "$__O10K_CMD_DURATION"
 ```
+
+The command text is sanitized before interpolation: all C0 control characters (CR, LF, VT, FF, BEL, ESC, …) and semicolons are stripped so the text cannot break OSC 777 framing.
 
 Supported by Ghostty, Foot, and WezTerm. Threshold is configurable via the `O10K_NOTIFY_THRESHOLD` environment variable or `segments.notification.threshold_ms` in config (Quattro panel).
 
@@ -295,10 +299,10 @@ Transport priority:
 
 ### Hardening Notes
 
-- **JSON escaping:** The prompt request JSON-escapes `$PWD` (backslashes and double-quotes) before embedding it in the request string. Directories with special characters (e.g. `C:\Users` or paths containing `"`) no longer produce malformed JSON.
+- **JSON escaping:** The prompt request strips control characters from `$PWD` and JSON-escapes backslashes and double-quotes before embedding it in the request string. Directories with special characters (e.g. `C:\Users`, paths containing `"`, or embedded newlines) no longer produce malformed JSON.
 - **Python3 fallback safety:** The Python3 socket snippet accepts socket path and message as `sys.argv[1]` and `sys.argv[2]` instead of interpolating shell variables into the script. This eliminates code injection via crafted socket paths.
-- **Daemon restart detection:** Before each prompt render, `__o10k_render_prompt` checks if the socket exists AND the bridge PID is alive. If either is missing, and at least 5 seconds have passed since the last restart attempt, the adapter removes the stale socket and restarts both the daemon and bridge automatically. Rate-limiting prevents restart storms on persistent failures.
-- **Bridge fallback NUL framing:** The bridge's `write_fallback()` function emits two NUL-terminated fields (`left\0right\0`) matching the normal protocol, so the bash reader never hangs waiting for the second field.
+- **Daemon restart detection:** Before each prompt render, when the bridge coprocess is dead the adapter probes a present socket with a `status` command first. A healthy daemon's socket is never removed — only the bridge is restarted. A missing socket or a failed probe removes the stale socket and restarts both daemon and bridge, rate limited to one attempt per 5 seconds.
+- **Bridge fallback NUL framing:** The bridge's `write_fallback()` function emits three NUL-terminated fields (`left\0right\0notify_threshold_ms\0`, with the threshold field empty) matching the normal protocol, so the bash reader never hangs waiting for the next field.
 
 ## Hook Installation
 
@@ -432,6 +436,6 @@ The following issues identified by the [Bug Audit](bug-audit.md) have been fixed
 | [#8 ble.sh gate never passes](bug-audit.md#8-the-blesh-version-gate-never-passes) | Detection uses `declare -F blehook` (feature probe) instead of `BLE_VERSION` numeric comparison | High |
 | [#11 Cache race between shells](bug-audit.md#11-the-instant-prompt-cache-races-between-concurrent-shells) | Cache temp files use PID-specific names (`$__O10K_CACHE.$$.tmp`) | Medium |
 | [#15 Comma-decimal locales](bug-audit.md#15-command-timing-silently-returns-zero-in-comma-decimal-locales) | `EPOCHREALTIME` values are normalized (`comma→period`) before arithmetic | Medium |
-| [#18 OSC 777 injection](bug-audit.md#18-osc-777-notification-text-is-injected-unescaped) | Command text is sanitized (`;`, BEL, ESC stripped) before OSC 777 interpolation | Low |
+| [#18 OSC 777 injection](bug-audit.md#18-osc-777-notification-text-is-injected-unescaped) | Command text is sanitized (all C0 control characters and `;` stripped) before OSC 777 interpolation | Low |
 | [#20a kill -0 PID 0](bug-audit.md#20-smaller-confirmed-defects) | Restart logic guards PID > 0 before `kill -0` | Low |
 | [#20f Fork-free jobs](bug-audit.md#20-smaller-confirmed-defects) | `jobs -p` output collected via `mapfile` + array length instead of `$(wc -l)` | Low |
