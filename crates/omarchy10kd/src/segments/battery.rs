@@ -41,7 +41,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     })
 }
 
-fn read_battery() -> Option<(u32, bool)> {
+pub fn read_battery() -> Option<(u32, bool)> {
     for bat in ["BAT0", "BAT1"] {
         let base = format!("/sys/class/power_supply/{bat}");
         let capacity_path = format!("{base}/capacity");

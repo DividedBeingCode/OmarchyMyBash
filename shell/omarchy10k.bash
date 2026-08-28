@@ -61,6 +61,31 @@ __o10k_detect_terminal_integration() {
 
 __o10k_detect_terminal_integration
 
+# ── OSC 133;C/D Semantic Prompts ──────────────────────────────────────────
+# Separate gate from the OSC 133;A/B shell-integration flag above. The
+# daemon mirrors [terminal.semantic_prompts].enabled into every prompt
+# response (semantic_prompts); default is OFF until the first response.
+__O10K_SEMANTIC_PROMPTS=0
+__O10K_EMIT_133CD=0
+
+__o10k_update_133cd() {
+    __O10K_EMIT_133CD=0
+    case "$__O10K_SHELL_INTEGRATION" in
+        off)   return ;;
+        force) __O10K_EMIT_133CD=1; return ;;
+    esac
+    (( __O10K_SEMANTIC_PROMPTS )) || return
+    [[ -n "${TMUX:-}" ]] && return   # tmux does not forward 133
+    case "${TERM_PROGRAM:-}" in ghostty|foot) ;; *) return ;; esac
+    # Ghostty auto-injects its own bash integration, which emits 133;C/D.
+    # Double emission corrupts prompt navigation — yield to it.
+    [[ -n "${GHOSTTY_SHELL_INTEGRATION_FEATURES:-}" \
+        || -n "${GHOSTTY_SHELL_FEATURES:-}" ]] && return
+    declare -F __ghostty_precmd &>/dev/null && return
+    __O10K_EMIT_133CD=1
+}
+__o10k_update_133cd
+
 # ── Hook Broker ────────────────────────────────────────────────────────────
 # Public API for tools (Mise, Atuin, Zoxide, etc.) to register callbacks
 # Usage: o10k_hook_add <event> <function_name>
@@ -174,8 +199,9 @@ __o10k_bridge_request() {
             __o10k_start_bridge
             echo "$request" >&"${__O10K_BRIDGE[1]}" 2>/dev/null || return 1
         }
-        local left right threshold=""
-        # NUL-framed fields: left, right, notify_threshold_ms (may be empty)
+        local left right threshold="" transient=""
+        # NUL-framed fields: left, right, notify_threshold_ms (may be empty),
+        # transient (may be empty)
         if ! IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" left 2>/dev/null; then
             # Left read failed — abort (caller falls back to socket send)
             # instead of consuming the next field's data.
@@ -184,6 +210,8 @@ __o10k_bridge_request() {
         fi
         if IFS= read -r -d $'\0' -t 0.5 -u "${__O10K_BRIDGE[0]}" right 2>/dev/null; then
             IFS= read -r -d $'\0' -t 0.5 -u "${__O10K_BRIDGE[0]}" threshold 2>/dev/null \
+                || __o10k_bridge_drain
+            IFS= read -r -d $'\0' -t 0.5 -u "${__O10K_BRIDGE[0]}" transient 2>/dev/null \
                 || __o10k_bridge_drain
         else
             # Right field lost — stream position uncertain, so drain the rest
@@ -194,8 +222,13 @@ __o10k_bridge_request() {
         if [[ -n "$left" ]]; then
             PS1="$left"
             __O10K_LAST_RIGHT="${right:-}"
-            [[ -n "${threshold:-}" ]] && __O10K_NOTIFY_THRESHOLD="$threshold"
+            __o10k_set_notify_threshold "$threshold"
+            __O10K_TRANSIENT="${transient:-}"
             { printf '%s' "$PS1" > "$__O10K_CACHE.$$.tmp" && mv "$__O10K_CACHE.$$.tmp" "$__O10K_CACHE"; } 2>/dev/null &
+            # Bridge writes the side-channel flags before its response
+            # fields; refresh immediately so the 133;C/D gate is current
+            # without a one-render lag.
+            __o10k_read_flags
             return 0
         fi
         __o10k_bridge_drain
@@ -248,6 +281,11 @@ __O10K_CMD_DURATION=0
 __O10K_LAST_CMD=""
 __O10K_LAST_RIGHT=""
 __O10K_NOTIFY_THRESHOLD="${O10K_NOTIFY_THRESHOLD:-10000}"
+__O10K_NOTIFY_UNFOCUSED_ONLY=0
+__O10K_HAS_NOTIFY_SEND=0
+command -v omarchy-notification-send &>/dev/null && __O10K_HAS_NOTIFY_SEND=1
+__O10K_TRANSIENT=""
+__O10K_FLAGS="${__O10K_SOCKET}.flags"
 
 __o10k_timer_start() {
     __O10K_CMD_START="${EPOCHREALTIME:-$(date +%s%N)}"
@@ -302,22 +340,122 @@ __o10k_uri_encode() {
     printf '%s' "$s"
 }
 
+# Threshold 0 or empty means notifications are OFF (daemon-disabled must
+# never fall back to the bootstrap default — the verified 0.2 no-op bug).
+__o10k_set_notify_threshold() {
+    local t="$1"
+    if [[ -z "$t" || "$t" == "0" ]]; then
+        __O10K_NOTIFY_THRESHOLD=0
+    else
+        __O10K_NOTIFY_THRESHOLD="$t"
+    fi
+}
+
+# The bridge relays per-response config flags (semantic_prompts,
+# notify_unfocused_only) through a side-channel file so the hot path keeps
+# its frozen four-field NUL framing. Reads never fork.
+__o10k_read_flags() {
+    local f=""
+    IFS= read -r f 2>/dev/null < "$__O10K_FLAGS" || f=""
+    case "$f" in
+        *semantic_prompts=1*) __O10K_SEMANTIC_PROMPTS=1 ;;
+        *semantic_prompts=0*) __O10K_SEMANTIC_PROMPTS=0 ;;
+    esac
+    case "$f" in
+        *notify_unfocused_only=1*) __O10K_NOTIFY_UNFOCUSED_ONLY=1 ;;
+        *notify_unfocused_only=0*) __O10K_NOTIFY_UNFOCUSED_ONLY=0 ;;
+    esac
+    __o10k_update_133cd
+}
+
+# Focus detection (Hyprland): the terminal emulator containing this shell is
+# the focused window when its pid is in our ancestor chain. Returns 1
+# ("not focused" — notification allowed) when focus cannot be determined.
+__o10k_terminal_focused() {
+    local pid
+    pid=$(hyprctl -j activewindow 2>/dev/null \
+        | python3 -c 'import sys,json; print(json.load(sys.stdin).get("pid") or "")' 2>/dev/null) \
+        || return 1
+    [[ -n "$pid" ]] || return 1
+    local cur=$$ ppid
+    while (( cur > 1 )); do
+        [[ "$cur" == "$pid" ]] && return 0
+        ppid=$(command sed -n 's/^PPid:[[:space:]]*//p' "/proc/$cur/status" 2>/dev/null) || return 1
+        [[ -n "$ppid" ]] || return 1
+        cur="$ppid"
+    done
+    return 1
+}
+
+# Desktop notification for a long-running command. Prefers Omarchy's themed
+# wrapper (notify-send-compatible); falls back to the sanitized OSC 777
+# path. Honors [notifications].unfocused_only via the focus probe above.
+__o10k_notify() {
+    local title="Command finished"
+    local body
+    printf -v body '%s took %dms' "${__O10K_LAST_CMD:-command}" "$__O10K_CMD_DURATION"
+
+    if (( __O10K_NOTIFY_UNFOCUSED_ONLY )) && __o10k_terminal_focused; then
+        return
+    fi
+
+    if (( __O10K_HAS_NOTIFY_SEND )); then
+        if omarchy-notification-send "$title" "$body" &>/dev/null; then
+            return
+        fi
+    fi
+
+    # Strip all C0 control characters (CR/LF/VT/FF/BEL/ESC/...) and
+    # semicolons that could break OSC 777 framing
+    body="${body//[[:cntrl:];]/}"
+    printf '\033]777;notify;%s;%s\007' "$title" "$body"
+}
+
+# Escapes a string for JSON: strips control characters (they would corrupt
+# the request stream) and escapes backslash/quote. Sets __O10K_ESCAPED.
+__o10k_json_escape() {
+    local s="${1//[[:cntrl:]]/}"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    __O10K_ESCAPED="$s"
+}
+
+# Builds the env allowlist JSON (0.1 env channel) with pure parameter
+# expansions — zero subprocesses. Frozen allowlist (12 env keys + the three
+# agent-signal keys for the 1.3 ai segment): only non-empty values are sent;
+# unset variables are skipped. Sets __O10K_ENV_JSON.
+__o10k_env_json() {
+    local env_json="" k v esc
+    for k in VIRTUAL_ENV CONDA_DEFAULT_ENV MISE_NODE_VERSION MISE_PYTHON_VERSION \
+             MISE_RUBY_VERSION MISE_GO_VERSION MISE_RUST_VERSION IN_NIX_SHELL \
+             DISTROBOX_ENTER_PATH container KUBECONFIG DIRENV_DIR \
+             CLAUDE_CODE_ENTRYPOINT CODEX_SANDBOX CODEX_HOME; do
+        v="${!k:-}"
+        [[ -n "$v" ]] || continue
+        esc="${v//[[:cntrl:]]/}"
+        esc="${esc//\\/\\\\}"
+        esc="${esc//\"/\\\"}"
+        if [[ -z "$env_json" ]]; then
+            env_json="\"$k\":\"$esc\""
+        else
+            env_json="$env_json,\"$k\":\"$esc\""
+        fi
+    done
+    __O10K_ENV_JSON="{$env_json}"
+}
+
 __o10k_render_prompt() {
     local exit_code=$?
 
     # OSC 133;D — mark end of previous command output
-    (( __O10K_EMIT_OSC133 )) && printf '\e]133;D;%d\a' "$exit_code"
+    (( __O10K_EMIT_133CD )) && printf '\e]133;D;%d\a' "$exit_code"
 
     __o10k_timer_stop
 
-    # Desktop notification for long-running commands
-    if (( __O10K_CMD_DURATION > ${__O10K_NOTIFY_THRESHOLD:-10000} )); then
-        local _notify_cmd="${__O10K_LAST_CMD:-command}"
-        # Strip all C0 control characters (CR/LF/VT/FF/BEL/ESC/...) and
-        # semicolons that could break OSC 777 framing
-        _notify_cmd="${_notify_cmd//[[:cntrl:];]/}"
-        printf '\033]777;notify;Command finished;%s took %dms\007' \
-            "$_notify_cmd" "$__O10K_CMD_DURATION"
+    # Desktop notification for long-running commands. A threshold of 0 means
+    # the daemon disabled notifications — never fall back to a default.
+    if (( __O10K_NOTIFY_THRESHOLD > 0 && __O10K_CMD_DURATION > __O10K_NOTIFY_THRESHOLD )); then
+        __o10k_notify
     fi
 
     printf '\033[?2026h'
@@ -351,14 +489,17 @@ __o10k_render_prompt() {
         local si_flag="true"
         (( __O10K_EMIT_OSC133 )) || si_flag="false"
 
-        # Control characters would corrupt the request JSON — strip them in
-        # addition to escaping backslashes and quotes
-        local escaped_cwd="${PWD//[[:cntrl:]]/}"
-        escaped_cwd="${escaped_cwd//\\/\\\\}"
-        escaped_cwd="${escaped_cwd//\"/\\\"}"
+        __o10k_read_flags
+
+        # Fresh env snapshot per render (0.1 env channel) — pure parameter
+        # expansions over the frozen 12-key allowlist, zero forks
+        __o10k_env_json
+        __o10k_json_escape "$PWD"
+        local escaped_cwd="$__O10K_ESCAPED"
         local request
-        request=$(printf '{"cwd":"%s","exit_code":%d,"cmd_duration_ms":%d,"cols":%d,"jobs":%d,"shell_integration":%s}' \
-            "$escaped_cwd" "$exit_code" "$__O10K_CMD_DURATION" "$cols" "$jobs_count" "$si_flag")
+        printf -v request \
+            '{"cwd":"%s","exit_code":%d,"cmd_duration_ms":%d,"cols":%d,"jobs":%d,"shell_integration":%s,"env":%s}' \
+            "$escaped_cwd" "$exit_code" "$__O10K_CMD_DURATION" "$cols" "$jobs_count" "$si_flag" "$__O10K_ENV_JSON"
 
         # Try bridge first (no fork/exec in hot path)
         if __o10k_bridge_request "$request"; then
@@ -379,11 +520,16 @@ __o10k_render_prompt() {
                 __O10K_LAST_RIGHT=$(echo "$response" | python3 -c "import sys,json; r=json.load(sys.stdin).get('right',''); print(r if r else '')" 2>/dev/null)
                 { printf '%s' "$PS1" > "$__O10K_CACHE.$$.tmp" && mv "$__O10K_CACHE.$$.tmp" "$__O10K_CACHE"; } 2>/dev/null &
 
-                local threshold
+                local threshold sem unf transient_str
                 threshold=$(echo "$response" | python3 -c "import sys,json; t=json.load(sys.stdin).get('notify_threshold_ms'); print(t if t else '')" 2>/dev/null)
-                if [[ -n "$threshold" ]]; then
-                    __O10K_NOTIFY_THRESHOLD="$threshold"
-                fi
+                __o10k_set_notify_threshold "$threshold"
+                sem=$(echo "$response" | python3 -c 'import sys,json; print(1 if json.load(sys.stdin).get("semantic_prompts") else 0)' 2>/dev/null)
+                unf=$(echo "$response" | python3 -c 'import sys,json; print(1 if json.load(sys.stdin).get("notify_unfocused_only") else 0)' 2>/dev/null)
+                transient_str=$(echo "$response" | python3 -c 'import sys,json; t=json.load(sys.stdin).get("transient"); print(t if t else "")' 2>/dev/null)
+                [[ -n "$sem" ]] && __O10K_SEMANTIC_PROMPTS="$sem"
+                [[ -n "$unf" ]] && __O10K_NOTIFY_UNFOCUSED_ONLY="$unf"
+                __O10K_TRANSIENT="${transient_str:-}"
+                __o10k_update_133cd
 
                 printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$(__o10k_uri_encode "$PWD")"
                 printf '\033[?2026l'
@@ -405,8 +551,16 @@ __o10k_preexec() {
     [[ "$__O10K_PREEXEC_READY" == "1" ]] || return
     __O10K_PREEXEC_READY=0
 
+    # Transient prompt (non-ble): overwrite the previous prompt line with the
+    # daemon's transient string. Only for single-line prompts (conservative —
+    # a multi-line prompt's geometry is unknown) and only when a transient
+    # was delivered. Cursor goes up one line, rewrites it, comes back.
+    if [[ -n "$__O10K_TRANSIENT" && "$PS1" != *$'\n'* ]]; then
+        printf '\033[1A\r%s\033[K\r\033[B' "$__O10K_TRANSIENT"
+    fi
+
     # OSC 133;C — mark start of command output
-    (( __O10K_EMIT_OSC133 )) && printf '\e]133;C\a'
+    (( __O10K_EMIT_133CD )) && printf '\e]133;C\a'
 
     __O10K_LAST_CMD="$BASH_COMMAND"
     printf '\033]9;4;3\007'
@@ -439,7 +593,7 @@ __o10k_install_blesh_hooks() {
 
 __o10k_preexec_blesh() {
     # OSC 133;C
-    (( __O10K_EMIT_OSC133 )) && printf '\e]133;C\a'
+    (( __O10K_EMIT_133CD )) && printf '\e]133;C\a'
     __O10K_LAST_CMD="$1"
     printf '\033]9;4;3\007'
     __o10k_timer_start
@@ -452,6 +606,9 @@ __o10k_update_rps1() {
     else
         bleopt prompt_rps1=""
     fi
+    # Daemon-provided transient string replaces the collapsed prompt via
+    # ble.sh's prompt_ps1_final; empty keeps the shipped vanish behavior.
+    bleopt prompt_ps1_final="$__O10K_TRANSIENT"
 }
 
 __o10k_install_vanilla_hooks() {
@@ -498,3 +655,13 @@ trap __o10k_cleanup EXIT
 __o10k_start_daemon
 __o10k_start_bridge
 __o10k_install_hooks
+
+# First-run intro (3.3): background and non-blocking. Skipped by the marker
+# file or O10K_NO_INTRO; the CLI itself exits silently when the daemon is
+# down (marker stays unwritten so the next shell retries).
+__o10k_intro_launch() {
+    [[ -n "${O10K_NO_INTRO:-}" ]] && return 0
+    [[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy10k/intro_shown" ]] && return 0
+    ( "$__O10K_BIN" intro >/dev/tty 2>/dev/null & ) 2>/dev/null
+}
+__o10k_intro_launch

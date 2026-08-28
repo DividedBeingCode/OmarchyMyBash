@@ -56,6 +56,127 @@ function stripAnsi(str) {
               .replace(/[\x01\x02]/g, "");
 }
 
+// ── ANSI → Rich Text (Text.StyledText) ─────────────────────────────────────
+// Same tokenizer family as stripAnsi, but SGR foreground/background codes
+// (3x/9x, 38;5, 38;2, 4x/10x, 48;5, 48;2) are converted into inline
+// <span style="..."> markup for Text.StyledText rendering (panel live
+// preview, preset gallery cards). All other escape sequences, OSC strings
+// and readline delimiters are dropped. HTML entities are escaped first so
+// prompt text containing <, >, & renders literally.
+
+var _ANSI_FG = ["#414868", "#f7768e", "#9ece6a", "#e0af68",
+                "#7aa2f7", "#bb9af7", "#7dcfff", "#a9b1d6"];
+var _ANSI_FG_BRIGHT = ["#565f89", "#ff7a93", "#b9f27c", "#ff9e64",
+                       "#7da6ff", "#c7a9ff", "#9dd6ff", "#c0caf5"];
+
+function escapeHtml(str) {
+    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function _hexRgb(r, g, b) {
+    function h(v) {
+        var s = Math.max(0, Math.min(255, v | 0)).toString(16);
+        return s.length < 2 ? "0" + s : s;
+    }
+    return "#" + h(r) + h(g) + h(b);
+}
+
+function _xterm256(idx) {
+    if (idx < 16) return idx < 8 ? _ANSI_FG[idx] : _ANSI_FG_BRIGHT[idx - 8];
+    if (idx < 232) {
+        var steps = [0, 95, 135, 175, 215, 255];
+        var n = idx - 16;
+        return _hexRgb(steps[Math.floor(n / 36)], steps[Math.floor((n % 36) / 6)], steps[n % 6]);
+    }
+    var gray = 8 + 10 * (idx - 232);
+    return _hexRgb(gray, gray, gray);
+}
+
+function ansiToRich(text) {
+    if (text === undefined || text === null) return "";
+    text = String(text);
+
+    var out = "";
+    var fg = null, bg = null, bold = false, italic = false, underline = false;
+    var open = false;
+
+    function closeSpan() {
+        if (open) { out += "</span>"; open = false; }
+    }
+
+    function openSpan() {
+        var styles = "";
+        if (fg) styles += "color:" + fg + ";";
+        if (bg) styles += "background-color:" + bg + ";";
+        if (bold) styles += "font-weight:bold;";
+        if (italic) styles += "font-style:italic;";
+        if (underline) styles += "text-decoration:underline;";
+        if (styles.length === 0) return;
+        out += '<span style="' + styles.substring(0, styles.length - 1) + '">';
+        open = true;
+    }
+
+    function applySgr(params) {
+        if (params.length === 0) { fg = bg = null; bold = italic = underline = false; return; }
+        var parts = params.split(";");
+        var i = 0;
+        while (i < parts.length) {
+            var n = parseInt(parts[i], 10);
+            if (isNaN(n)) n = 0;
+            if (n === 0) { fg = bg = null; bold = italic = underline = false; }
+            else if (n === 1) bold = true;
+            else if (n === 3) italic = true;
+            else if (n === 4) underline = true;
+            else if (n === 22) bold = false;
+            else if (n === 23) italic = false;
+            else if (n === 24) underline = false;
+            else if (n === 39) fg = null;
+            else if (n === 49) bg = null;
+            else if (n === 38 || n === 48) {
+                var color = null;
+                if (parts[i + 1] === "5" && parts[i + 2] !== undefined) {
+                    color = _xterm256(parseInt(parts[i + 2], 10) || 0);
+                    i += 2;
+                } else if (parts[i + 1] === "2" && parts[i + 4] !== undefined) {
+                    color = _hexRgb(parseInt(parts[i + 2], 10) || 0,
+                                    parseInt(parts[i + 3], 10) || 0,
+                                    parseInt(parts[i + 4], 10) || 0);
+                    i += 4;
+                } else break; // malformed sequence — drop the remainder
+                if (n === 38) fg = color; else bg = color;
+            }
+            else if (n >= 30 && n <= 37) fg = _ANSI_FG[n - 30];
+            else if (n >= 40 && n <= 47) bg = _ANSI_FG[n - 40];
+            else if (n >= 90 && n <= 97) fg = _ANSI_FG_BRIGHT[n - 90];
+            else if (n >= 100 && n <= 107) bg = _ANSI_FG_BRIGHT[n - 100];
+            i++;
+        }
+    }
+
+    var re = /\x1b\[([0-9;?]*)([a-zA-Z])|\x1b\]([^\x07\x1b]*)(?:\x07|\x1b\\)|[\x01\x02]/g;
+    var last = 0;
+    var m;
+    while ((m = re.exec(text)) !== null) {
+        if (m.index > last) out += escapeHtml(text.substring(last, m.index));
+        last = re.lastIndex;
+        if (m[2] === "m" && m[1].indexOf("?") === -1) {
+            var prevFg = fg, prevBg = bg;
+            var prevBold = bold, prevItalic = italic, prevUnderline = underline;
+            applySgr(m[1]);
+            if (fg !== prevFg || bg !== prevBg || bold !== prevBold
+                    || italic !== prevItalic || underline !== prevUnderline) {
+                closeSpan();
+                openSpan();
+            }
+        }
+        // Any other escape sequence (OSC, cursor movement, private modes,
+        // readline delimiters) is dropped.
+    }
+    if (last < text.length) out += escapeHtml(text.substring(last));
+    closeSpan();
+    return out;
+}
+
 // ── TOML Parser ─────────────────────────────────────────────────────────────
 // Handles the subset used by omarchy10k: sections, key = value with
 // string, bool, and integer types. Ignores comments and blank lines.

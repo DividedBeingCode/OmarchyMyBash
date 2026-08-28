@@ -28,6 +28,7 @@ pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
 
     let mut stdout = io::stdout();
     let socket_path = socket_path.to_path_buf();
+    let mut last_flags: Option<(bool, bool)> = None;
 
     while let Some(line) = rx.recv().await {
         let request = if line.starts_with('{') {
@@ -63,6 +64,7 @@ pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
                         if sock_writer.write_all(request.as_bytes()).await.is_ok() {
                             response.clear();
                             if sock_reader.read_line(&mut response).await.unwrap_or(0) > 0 {
+                                update_flags(&socket_path, &response, &mut last_flags);
                                 write_prompt(&mut stdout, &response);
                                 continue;
                             }
@@ -72,7 +74,10 @@ pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
                     Err(_) => write_fallback(&mut stdout),
                 }
             }
-            Ok(_) => write_prompt(&mut stdout, &response),
+            Ok(_) => {
+                update_flags(&socket_path, &response, &mut last_flags);
+                write_prompt(&mut stdout, &response);
+            }
         }
     }
 
@@ -81,12 +86,14 @@ pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
 
 fn write_prompt(stdout: &mut io::Stdout, response: &str) {
     match extract_prompt_parts(response) {
-        Some((left, right, threshold)) => {
+        Some((left, right, threshold, transient)) => {
             let _ = stdout.write_all(left.as_bytes());
             let _ = stdout.write_all(&[0]);
             let _ = stdout.write_all(right.as_bytes());
             let _ = stdout.write_all(&[0]);
             let _ = stdout.write_all(threshold.as_bytes());
+            let _ = stdout.write_all(&[0]);
+            let _ = stdout.write_all(transient.as_bytes());
             let _ = stdout.write_all(&[0]);
         }
         None => {
@@ -97,6 +104,54 @@ fn write_prompt(stdout: &mut io::Stdout, response: &str) {
     let _ = stdout.flush();
 }
 
+/// Relays per-response config flags (semantic_prompts, notify_unfocused_only)
+/// to the adapter through a side-channel file next to the socket. The frozen
+/// four-field NUL framing stays untouched; the file is rewritten only when a
+/// flag value changes.
+fn update_flags(socket_path: &Path, response: &str, last: &mut Option<(bool, bool)>) {
+    let flags = extract_flags(response);
+    if *last == Some(flags) {
+        return;
+    }
+    let path = socket_path.with_extension("sock.flags");
+    let tmp = socket_path.with_extension("sock.flags.tmp");
+    let content = format!(
+        "semantic_prompts={} notify_unfocused_only={}\n",
+        flags.0 as u8, flags.1 as u8
+    );
+    if std::fs::write(&tmp, content.as_bytes())
+        .and_then(|_| std::fs::rename(&tmp, &path))
+        .is_ok()
+    {
+        *last = Some(flags);
+    }
+}
+
+/// `(semantic_prompts, notify_unfocused_only)` from a daemon response.
+fn extract_flags(response: &str) -> (bool, bool) {
+    let Some(v) = parse_response(response) else {
+        return (false, false);
+    };
+    (
+        v.get("semantic_prompts").and_then(|f| f.as_bool()).unwrap_or(false),
+        v.get("notify_unfocused_only").and_then(|f| f.as_bool()).unwrap_or(false),
+    )
+}
+
+/// Locates the JSON object in a daemon response (full parse first, then a
+/// parse starting at the first '{' to catch embedded noise).
+fn parse_response(response: &str) -> Option<serde_json::Value> {
+    let trimmed = response.trim();
+    let parsed = serde_json::from_str::<serde_json::Value>(trimmed).ok();
+    match parsed {
+        Some(v) => Some(v),
+        None => {
+            let start = trimmed.find('{')?;
+            serde_json::from_str::<serde_json::Value>(&trimmed[start..]).ok()
+        }
+    }
+}
+
 fn write_fallback(stdout: &mut io::Stdout) {
     // PS1 escapes (\[ and \e) stay literal text; the ❯ glyph is the real
     // UTF-8 byte sequence (U+276F).
@@ -104,6 +159,7 @@ fn write_fallback(stdout: &mut io::Stdout) {
     let _ = stdout.write_all(&[0]);
     let _ = stdout.write_all(&[0]); // empty right prompt
     let _ = stdout.write_all(&[0]); // empty notify_threshold_ms
+    let _ = stdout.write_all(&[0]); // empty transient
     let _ = stdout.flush();
 }
 
@@ -134,17 +190,10 @@ async fn connect_with_retry(socket_path: &Path, max_retries: u32) -> anyhow::Res
     anyhow::bail!("failed to connect to daemon socket")
 }
 
-fn extract_prompt_parts(response: &str) -> Option<(String, String, String)> {
-    let trimmed = response.trim();
-    // Try a full JSON parse first, then a parse starting at the first '{' to
-    // catch a JSON object embedded in surrounding noise.
-    let mut parsed = serde_json::from_str::<serde_json::Value>(trimmed).ok();
-    if parsed.is_none() {
-        if let Some(start) = trimmed.find('{') {
-            parsed = serde_json::from_str::<serde_json::Value>(&trimmed[start..]).ok();
-        }
-    }
-    let v = parsed?;
+/// Splits a daemon JSON response into the four bridge fields:
+/// `(left, right, notify_threshold_ms, transient)`.
+fn extract_prompt_parts(response: &str) -> Option<(String, String, String, String)> {
+    let v = parse_response(response)?;
     let left = v
         .get("left")
         .and_then(|l| l.as_str())
@@ -164,7 +213,12 @@ fn extract_prompt_parts(response: &str) -> Option<(String, String, String)> {
         .and_then(|t| t.as_u64())
         .map(|t| t.to_string())
         .unwrap_or_default();
-    Some((left, right, threshold))
+    let transient = v
+        .get("transient")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((left, right, threshold, transient))
 }
 
 fn parse_kv_to_json(line: &str) -> String {

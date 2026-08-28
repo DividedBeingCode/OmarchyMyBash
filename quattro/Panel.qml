@@ -52,6 +52,28 @@ Panel {
     property string daemonProtocolVersion: ""
     property string discoveredSocketPath: ""
 
+    // Service-kind hub (v0.4) — mirrors daemon status + session discovery when
+    // our Service.qml is loaded by the host. Feature-detected: absent/old
+    // hosts keep the panel's own poll/reconnect path.
+    readonly property var omarchyService: root.bar && root.bar.shell
+        && typeof root.bar.shell.serviceFor === "function"
+        ? root.bar.shell.serviceFor("community.omarchy10k") : null
+
+    onOmarchyServiceChanged: _syncFromService()
+
+    Connections {
+        target: root.omarchyService
+        function onSessionsChanged() { root._syncFromService() }
+        function onDaemonStatusChanged() { root._syncFromService() }
+    }
+
+    function _syncFromService() {
+        if (!root.omarchyService) return
+        if (root.omarchyService.daemonStatus) root.daemonStatus = root.omarchyService.daemonStatus
+        if (root.omarchyService.sessions && root.omarchyService.sessions.length > 0)
+            root.sessionList = root.omarchyService.sessions
+    }
+
     // ── Multi-Session State ─────────────────────────────────────────────────
     property var sessionList: []
     property int activeSessionIndex: 0
@@ -76,6 +98,21 @@ Panel {
     property int previewJobs: 0
     property var paletteColors: ({})
     property string benchmarkOutput: ""
+
+    // Style gallery cards — static `preview` strings are the offline fallback;
+    // live renders are fetched per-preset via the daemon preview message's
+    // `style_preset` override (daemon v0.4+; W1 server.rs PreviewRequest).
+    property var presetPreviews: ({})
+    property var presetCards: [
+        { name: "omarchy",    preview: "  ~ \u276f",               desc: "Clean" },
+        { name: "powerline",  preview: "  ~ \ue0b0 git",          desc: "Classic" },
+        { name: "rainbow",    preview: "  ~ \ue0b0\ue0b0\ue0b0",  desc: "Vibrant" },
+        { name: "framed",     preview: "\u256d\u2500 ~ \u2500\u256e",  desc: "Framed" },
+        { name: "classic",    preview: "  ~ \u2502 git",          desc: "Divided" },
+        { name: "lean",       preview: "  ~/src",                  desc: "Minimal" },
+        { name: "dense",      preview: "  ~ git \u276f",          desc: "Compact" },
+        { name: "slanted",    preview: "  ~ \ue0bc git",          desc: "Modern" }
+    ]
 
     // ── Internal ───────────────────────────────────────────────────────────
     property bool _configDirty: false
@@ -187,6 +224,7 @@ Panel {
         }
 
         Qt.callLater(root.requestPreview)
+        Qt.callLater(root.requestPresetPreviews)
     }
 
     function requestPalette() {
@@ -210,6 +248,37 @@ Panel {
         }
         daemonSocket.write(Model.buildPreview(ctx, "preview"))
         daemonSocket.flush()
+    }
+
+    // Preset gallery live previews: one preview request per card with the
+    // daemon-side style.preset override (protocol v0.4 `style_preset` field).
+    // Daemons that ignore the field render the current preset for every card;
+    // the static fallback strings in `presetCards` cover no-daemon states.
+    function requestPresetPreviews() {
+        if (!daemonSocket.connected || !root._featureAvailable("0.3")) return
+        for (var i = 0; i < root.presetCards.length; i++) {
+            var name = root.presetCards[i].name
+            var ctx = {
+                cwd: "~/projects/my-app",
+                exit_code: 0,
+                cmd_duration_ms: 0,
+                cols: 120,
+                jobs: 0,
+                in_ssh: false,
+                git_branch: "main",
+                git_staged: 2,
+                git_unstaged: 1,
+                style_preset: name
+            }
+            daemonSocket.write(Model.buildPreview(ctx, "preset-" + name))
+        }
+        daemonSocket.flush()
+    }
+
+    function _applyPresetPreview(name, ansiLeft) {
+        var map = root.presetPreviews
+        map[name] = Model.ansiToRich(ansiLeft)
+        root.presetPreviews = map
     }
 
     // ── Daemon IPC ─────────────────────────────────────────────────────────
@@ -249,9 +318,16 @@ Panel {
             return
         }
 
-        if (resp.type === "preview" && resp.left) {
-            root.previewText = Model.stripAnsi(resp.left)
-            return
+        if (resp.type === "preview") {
+            if (resp.id && resp.id.indexOf("preset-") === 0) {
+                root._applyPresetPreview(resp.id.substring("preset-".length), resp.left)
+                return
+            }
+            if (resp.left) {
+                // Rendered ANSI → StyledText markup (3.1 live color preview).
+                root.previewText = Model.ansiToRich(resp.left)
+                return
+            }
         }
 
         if (resp.type === "control" && resp.palette) {
@@ -287,6 +363,7 @@ Panel {
         daemonSocket.write(Model.buildHello("handshake"))
         daemonSocket.flush()
         Qt.callLater(root.requestPreview)
+        Qt.callLater(root.requestPresetPreviews)
         Qt.callLater(root.requestPalette)
     }
 
@@ -364,6 +441,12 @@ Panel {
                         cwd: ""
                     })
                 }
+                if (root.omarchyService) {
+                    // The service hub owns discovery; only ensure a working
+                    // connection for this panel's preview/config traffic.
+                    if (sessions.length > 0 && !daemonSocket.connected) root.connectToSession(0)
+                    return
+                }
                 root.sessionList = sessions
                 if (sessions.length > 0) {
                     root.connectToSession(0)
@@ -386,7 +469,7 @@ Panel {
     Process {
         id: doctorRunner
         stdout: StdioCollector {
-            onStreamFinished: root.doctorOutput = this.text
+            onStreamFinished: root.doctorOutput = Model.stripAnsi(this.text)
         }
     }
 
@@ -428,7 +511,7 @@ Panel {
     Process {
         id: benchRunner
         stdout: StdioCollector {
-            onStreamFinished: root.benchmarkOutput = this.text
+            onStreamFinished: root.benchmarkOutput = Model.stripAnsi(this.text)
         }
     }
 
@@ -455,7 +538,7 @@ Panel {
         id: reconnectTimer
         interval: 5000
         repeat: true
-        running: root.opened && root.daemonStatus !== "running"
+        running: root.opened && root.daemonStatus !== "running" && !root.omarchyService
         onTriggered: root.discoverAllSockets()
     }
 
@@ -562,6 +645,7 @@ Panel {
                             text: root._featureAvailable("0.3")
                                 ? root.previewText
                                 : "Live preview requires daemon v0.3+"
+                            textFormat: Text.StyledText
                             color: root._featureAvailable("0.3")
                                 ? (Color.foreground || "#a9b1d6")
                                 : (Color.muted || "#414868")
@@ -736,16 +820,7 @@ Panel {
                 width: parent.width
 
                 Repeater {
-                    model: [
-                        { name: "omarchy",    preview: "  ~ \u276f",               desc: "Clean" },
-                        { name: "powerline",  preview: "  ~ \ue0b0 git",          desc: "Classic" },
-                        { name: "rainbow",    preview: "  ~ \ue0b0\ue0b0\ue0b0",  desc: "Vibrant" },
-                        { name: "framed",     preview: "\u256d\u2500 ~ \u2500\u256e",  desc: "Framed" },
-                        { name: "classic",    preview: "  ~ \u2502 git",          desc: "Divided" },
-                        { name: "lean",       preview: "  ~/src",                  desc: "Minimal" },
-                        { name: "dense",      preview: "  ~ git \u276f",          desc: "Compact" },
-                        { name: "slanted",    preview: "  ~ \ue0bc git",          desc: "Modern" }
-                    ]
+                    model: root.presetCards
                     delegate: Rectangle {
                         width: (parent.width - Style.space(18)) / 4
                         height: styleCardCol.implicitHeight + Style.space(12)
@@ -762,7 +837,8 @@ Panel {
                             spacing: Style.space(2)
 
                             Text {
-                                text: modelData.preview
+                                text: root.presetPreviews[modelData.name] || modelData.preview
+                                textFormat: Text.StyledText
                                 color: root.cfgStylePreset === modelData.name
                                     ? (Color.background || "#1a1b26")
                                     : (Color.foreground || "#a9b1d6")

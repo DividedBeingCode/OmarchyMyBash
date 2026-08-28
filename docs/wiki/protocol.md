@@ -2,7 +2,7 @@
 
 [← Index](INDEX.md) | [Daemon](daemon.md) | [Architecture](architecture.md)
 
-Omarchy10k uses **newline-delimited JSON (NDJSON)** over **Unix domain sockets** for all inter-process communication. The protocol uses **typed messages with version negotiation** — clients send a `hello` handshake on connect to learn `protocol_version` and `server_version`. Protocol version **0.3** is current; untagged legacy messages remain supported for backward compatibility.
+Omarchy10k uses **newline-delimited JSON (NDJSON)** over **Unix domain sockets** for all inter-process communication. The protocol uses **typed messages with version negotiation** — clients send a `hello` handshake on connect to learn `protocol_version` and `server_version`. Protocol version **0.4** is current; untagged legacy messages remain supported for backward compatibility.
 
 ## Transport
 
@@ -14,7 +14,7 @@ Omarchy10k uses **newline-delimited JSON (NDJSON)** over **Unix domain sockets**
 | Encoding | UTF-8 JSON |
 | Connection model | Persistent (server loops on read until EOF) |
 | Timeout | Client-side: 2 seconds (socat `-T2`, python3 `settimeout(2)`) |
-| Protocol version | `0.3` (`PROTOCOL_VERSION` in server) |
+| Protocol version | `0.4` (`PROTOCOL_VERSION` in server) |
 
 ### Socket Path Convention
 
@@ -30,7 +30,7 @@ All messages are JSON objects terminated by `\n`. Messages can optionally includ
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | string | Message type: `hello`, `control`, `prompt`, `preview`, `config`, `error` |
+| `type` | string | Message type: `hello`, `control`, `prompt`, `preview`, `config`, `statusline`, `error` |
 | `id` | string | Request ID for correlation (echoed back in response) |
 | `version` | string | Protocol version string |
 
@@ -49,7 +49,7 @@ Handshake. Returns protocol and server version.
 
 **Response:**
 ```json
-{"type":"hello","status":"ok","protocol_version":"0.3","server_version":"0.3.0"}
+{"type":"hello","status":"ok","protocol_version":"0.4","server_version":"0.4.0"}
 ```
 
 **Used by:** Quattro panel (on connect), integration tests.
@@ -85,6 +85,7 @@ Render a prompt with simulated context for live UI preview. Added in v0.3. Unlik
 | `git_branch` | string | No | `""` | Simulated git branch name. Empty string disables git repo simulation. |
 | `git_staged` | int | No | `0` | Simulated staged file count |
 | `git_unstaged` | int | No | `0` | Simulated unstaged file count |
+| `style_preset` | string | No | `""` | **v0.4 (additive).** Per-request preset override for the Quattro preset gallery: renders this preview with the named preset regardless of `style.preset`. Absent/empty = current config. |
 
 **Response:**
 ```json
@@ -123,7 +124,7 @@ Git state is synthesized from the request fields rather than queried from disk. 
 
 **Request (typed):**
 ```json
-{"type":"prompt","id":"3","cwd":"/path","exit_code":0,"cmd_duration_ms":1200,"cols":120,"jobs":0}
+{"type":"prompt","id":"3","cwd":"/path","exit_code":0,"cmd_duration_ms":1200,"cols":120,"jobs":0,"env":{"VIRTUAL_ENV":"/home/u/.venv","MISE_NODE_VERSION":"22"}}
 ```
 
 **Legacy (still supported):**
@@ -185,7 +186,7 @@ Behavior details:
 
 | Command | Direction | Since | Purpose |
 |---------|-----------|-------|---------|
-| `status` | client→daemon | 0.1 | Health check; returns pid, version, protocol_version, cwd |
+| `status` | client→daemon | 0.1 | Health check; returns pid, version, protocol_version, cwd — **plus v0.4 ambient fields** (see below) |
 | `palette` | client→daemon | 0.3 | Returns resolved theme palette as hex colors |
 | `reload_config` | client→daemon | 0.1 | Re-read config.toml from disk |
 | `reload_theme` | client→daemon | 0.1 | Re-resolve theme palette |
@@ -193,6 +194,7 @@ Behavior details:
 | `shutdown` | client→daemon | 0.1 | Graceful daemon exit |
 | `config_get` | client→daemon | 0.2 | Return full config as JSON (via typed `config` message) |
 | `config_set` | client→daemon | 0.2 | Apply config patch (via typed `config` message) |
+| `statusline` (message) | client→daemon | 0.4 | Render a Claude Code statusLine payload with the active theme (typed message, not a control command) |
 
 ### `status`
 
@@ -205,7 +207,19 @@ Health check. Returns daemon metadata.
 
 **Response:**
 ```json
-{"type":"control","status":"ok","pid":12345,"version":"0.3.0","protocol_version":"0.3","cwd":"/home/user"}
+{
+  "type": "control",
+  "status": "ok",
+  "pid": 12345,
+  "version": "0.4.0",
+  "protocol_version": "0.4",
+  "cwd": "/home/user",
+  "git": {"branch": "main", "dirty": true, "staged": 1, "unstaged": 2, "conflicted": 0, "ahead": 0, "behind": 0, "worktree": null, "stale": false},
+  "last_cmd_duration_ms": 1200,
+  "last_exit_code": 0,
+  "session_age_secs": 300,
+  "battery": {"capacity": 77, "status": "Discharging"}
+}
 ```
 
 | Field | Type | Description |
@@ -214,6 +228,13 @@ Health check. Returns daemon metadata.
 | `version` | string | Server version (`CARGO_PKG_VERSION`) |
 | `protocol_version` | string | Protocol version string |
 | `cwd` | string | Daemon's current working directory at request time (added in v0.3) |
+| `git` | object? | Ambient git snapshot (v0.4). `null` before the first prompt render. Prefers the live git cache entry, falls back to the last render summary. Fields: `branch`, `dirty`, `staged`, `unstaged`, `conflicted`, `ahead`, `behind`, `worktree` (string or null), `stale`. |
+| `last_cmd_duration_ms` | int | Duration of the command active at the last render; `0` before the first render. |
+| `last_exit_code` | int | Exit code at the last render; `0` before the first render. |
+| `session_age_secs` | int | Seconds since the daemon (shell session) started. |
+| `battery` | object? | `null` on batteryless machines; otherwise `{capacity: int, status: "Charging" \| "Discharging"}` from the same sysfs read the battery segment uses. |
+
+All v0.4 fields are **additive** — older clients ignore them safely.
 
 **Used by:** Bash adapter (health check), CLI `debug`, `doctor`, Quattro panel (on connect).
 
@@ -353,7 +374,8 @@ Legacy:
   "cmd_duration_ms": 1200,
   "cols": 120,
   "jobs": 0,
-  "shell_integration": true
+  "shell_integration": true,
+  "env": {"VIRTUAL_ENV": "/home/user/.venv", "KUBECONFIG": "/home/user/.kube/config"}
 }
 ```
 
@@ -366,6 +388,7 @@ Legacy:
 | `jobs` | int | Yes | Number of background jobs |
 | `shell_integration` | bool | No | Emit OSC 133 markers (default: `true`) |
 | `command` | string | No | Accepted but unused. When present and not a control command name, treated as prompt metadata. |
+| `env` | object | No | **v0.4 env channel.** Flattened `{"KEY": "value", ...}` map of shell-exported variables. Keys come from the adapter's allowlist (must match `[env.watch]` in config). SegmentContext reads these instead of the daemon's own environment; absent keys fall back to `std::env` for legacy clients. |
 
 ### Response
 
@@ -375,17 +398,23 @@ Legacy:
   "left": "\u001b[1;38;2;122;162;247m~/project\u001b[0m ...",
   "right": "\u001b[38;2;86;95;137m1.2s\u001b[0m \u001b[38;2;122;162;247m\u001b[0m main",
   "transient": "\u001b[38;2;86;95;137m❯\u001b[0m ",
-  "git_stale": false
+  "git_stale": false,
+  "notify_threshold_ms": 10000,
+  "semantic_prompts": false,
+  "notify_unfocused_only": false
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | string | Always `"prompt"` for typed responses |
-| `left` | string | Full prompt string with ANSI escape codes and optional OSC 133 markers |
+| `left` | string | Full prompt string with ANSI escape codes and optional OSC 133 markers. With the `powerline`/`rainbow` presets (v0.4), includes SGR `48;2` background fills and flipped-color separators. |
 | `right` | string? | Right prompt (duration + branch). Present when `prompt.right_prompt = true`. |
 | `transient` | string? | Transient replacement prompt. Present when `prompt.transient = true`. |
 | `git_stale` | bool | Whether git data is from a stale or cold cache hit |
+| `notify_threshold_ms` | int | **v0.4.** Notification threshold in ms. Always a number: the configured threshold when `[notifications].enabled`, **`0` when disabled** — the adapter treats 0/empty as OFF. (Previously null/absent on disable, which the adapter misread as "keep default": the no-op bug.) |
+| `semantic_prompts` | bool | **v0.4.** Whether the adapter may emit OSC 133;C/D (from `[terminal.semantic_prompts].enabled`, default `false`). Missing field = `false` for old daemons. |
+| `notify_unfocused_only` | bool | **v0.4.** Restrict notifications to unfocused terminals (bash-side focus gating). |
 
 ### Error Response
 
@@ -394,6 +423,49 @@ When prompt rendering fails:
 ```json
 {"type":"error","error":"description of what went wrong"}
 ```
+
+
+### `statusline` Message (v0.4)
+
+Render a Claude Code **statusLine** stdin JSON payload through the daemon with
+the current config and theme palette. Added in v0.4. Target: `<50ms` warm
+render, no OSC 133 markers, left-only output.
+
+**Request:**
+```json
+{
+  "type": "statusline",
+  "id": "9",
+  "payload": {
+    "model": {"id": "claude-opus", "display_name": "Opus"},
+    "workspace": {"current_dir": "/home/user/project", "project_dir": "/home/user/project"},
+    "cost": {"total_cost_usd": 0.034, "total_duration_ms": 45000},
+    "context_window": {"used_percentage": 41.7}
+  }
+}
+```
+
+The `payload` object is the Claude Code statusLine JSON verbatim. Parsing is
+**tolerant**: unknown fields are skipped, missing sections simply render fewer
+parts, and a flat payload (fields at the top level, no `payload` wrapper) is
+accepted for manual/test invocations.
+
+**Response:**
+```json
+{"type":"statusline","status":"ok","left":"<ansi>"}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Always `"statusline"` |
+| `status` | string | `"ok"` on success, `"error"` on unparseable payload |
+| `left` | string | Left-only ANSI line: model name (accent), context % (green/yellow/red at `[statusline].context_warning_pct`/`context_critical_pct`, default 60/85), cost when present (muted), cwd basename (foreground) |
+
+Errors keep the same shape with `"status":"error"` and an `error` string; the
+CLI falls back to its builtin render on error or timeout.
+
+**Used by:** CLI `omarchy10k statusline claude-code` (reads Claude Code stdin
+JSON, forwards as payload).
 
 ## Backward Compatibility
 
@@ -416,12 +488,13 @@ Primary path uses the bridge coprocess (`omarchy10k bridge`):
 ```bash
 coproc __O10K_BRIDGE { "$__O10K_BIN" bridge --socket "$__O10K_SOCKET"; }
 # Write JSON request to coproc stdin
-# Read two NUL-terminated fields from coproc stdout: left\0right\0
+# Read four NUL-terminated fields from coproc stdout:
+#   left \0 right \0 notify_threshold_ms \0 transient
 IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" left
 IFS= read -r -d $'\0' -t 2 -u "${__O10K_BRIDGE[0]}" right
 ```
 
-The bridge emits `left\0right\0` per response — the `right` field carries the right prompt for ble.sh's `prompt_rps1`. The right field may be empty when right prompt is disabled.
+Since v0.4 the bridge emits **four** NUL-terminated fields per response: `left \0 right \0 notify_threshold_ms \0 transient`. `write_fallback` (no daemon) emits empty 3rd/4th fields. Old 3-field readers still work — the 4th field is simply ignored by a reader that stops after `right`. The `notify_threshold_ms` field is empty/`0` when notifications are disabled (**OFF**, not "keep default"), and the `transient` field carries the daemon's transient prompt string (ble.sh feeds it via transient hooks; non-ble.sh gets the line-2 overwrite). The `right` field may be empty when right prompt is disabled.
 
 Fallback uses `__o10k_socket_send` with socat or python3:
 
@@ -451,6 +524,10 @@ Uses Tokio `UnixStream` for async socket I/O. Single request-response per connec
 ### Quattro Panel (`Panel.qml`)
 
 Uses Quickshell's `Socket` component with `SplitParser` for NDJSON line splitting. Keeps persistent connection while panel is open. Sends `hello` on connect, then uses `config_get` / `config_set` for config management (with TOML file I/O fallback for older daemons).
+
+Since v0.4 the panel also sends a per-request `style_preset` override on
+`preview` messages for the preset gallery cards (additive; absent = current
+config preset).
 
 v0.3 additions:
 - **`preview`** — live prompt preview with simulated context toggles (error state, SSH, long command duration)

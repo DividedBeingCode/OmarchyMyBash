@@ -1,6 +1,8 @@
 mod bridge;
 mod doctor;
+mod intro;
 mod prompt;
+mod statusline;
 mod update;
 
 use clap::{Parser, Subcommand};
@@ -60,6 +62,16 @@ enum Commands {
         /// Socket path (defaults to auto-detected)
         #[arg(long)]
         socket: Option<String>,
+    },
+
+    /// Render the Claude Code statusline via the daemon (reads statusLine JSON from stdin)
+    Statusline,
+
+    /// One-time themed welcome on first shell start
+    Intro {
+        /// Render even if the intro marker file exists
+        #[arg(long)]
+        force: bool,
     },
 
     /// Extract the left prompt from a JSON daemon response (used internally)
@@ -152,6 +164,13 @@ async fn main() -> anyhow::Result<()> {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(socket_path);
             bridge::run(&sock).await?;
+        }
+        Commands::Statusline => {
+            statusline::run(&socket_path()).await?;
+        }
+
+        Commands::Intro { force } => {
+            intro::run(&socket_path(), force).await?;
         }
 
         Commands::ParsePrompt => {

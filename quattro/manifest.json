@@ -2,13 +2,15 @@
   "schemaVersion": 1,
   "id": "community.omarchy10k",
   "name": "Omarchy10k",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "Ian Johnston",
   "license": "MIT",
   "description": "Control Center for the Omarchy10k shell experience. Configure prompt style, theme, segments, and shell integrations from the Quattro bar.",
-  "kinds": ["bar-widget"],
+  "kinds": ["bar-widget", "service", "overlay"],
   "entryPoints": {
-    "barWidget": "BarWidget.qml"
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml",
+    "overlay": "SessionPicker.qml"
   },
   "barWidget": {
     "displayName": "Omarchy10k",

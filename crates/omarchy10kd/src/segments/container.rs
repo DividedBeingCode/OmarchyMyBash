@@ -7,7 +7,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         return None;
     }
 
-    let container_type = detect_container()?;
+    let container_type = detect_container(ctx)?;
     let prefix = if ctx.config.segments.container.icon == "auto" {
         "⬡"
     } else {
@@ -32,8 +32,8 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     })
 }
 
-fn detect_container() -> Option<&'static str> {
-    if std::env::var_os("DISTROBOX_ENTER_PATH").is_some() {
+fn detect_container(ctx: &SegmentContext<'_>) -> Option<&'static str> {
+    if ctx.env_get("DISTROBOX_ENTER_PATH").is_some() {
         return Some("distrobox");
     }
     if std::path::Path::new("/.dockerenv").exists() {
@@ -42,7 +42,7 @@ fn detect_container() -> Option<&'static str> {
     if std::path::Path::new("/run/.containerenv").exists() {
         return Some("podman");
     }
-    if std::env::var_os("container").is_some() {
+    if ctx.env_get("container").is_some() {
         return Some("toolbox");
     }
     None

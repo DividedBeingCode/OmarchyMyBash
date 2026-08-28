@@ -4,7 +4,7 @@
 
 The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as a bar widget in the Omarchy Quattro panel. It reads and writes config files, communicates with running daemon instances over Unix sockets, detects installed shell tools, and previews prompt output in real time.
 
-**Protocol version:** 0.3 (hello handshake and feature gating)
+**Protocol version:** 0.3 hello handshake (feature gating); v0.4 daemon adds `style_preset` on `preview` requests.
 
 ## Manifest (`quattro/manifest.json`)
 
@@ -13,9 +13,16 @@ The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as
   "schemaVersion": 1,
   "id": "community.omarchy10k",
   "name": "Omarchy10k",
-  "version": "0.3.0",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "version": "0.4.0",
+  "author": "Ian Johnston",
+  "license": "MIT",
+  "description": "Control Center for the Omarchy10k shell experience. Configure prompt style, theme, segments, and shell integrations from the Quattro bar.",
+  "kinds": ["bar-widget", "service", "overlay"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml",
+    "overlay": "SessionPicker.qml"
+  },
   "barWidget": {
     "displayName": "Omarchy10k",
     "category": "Shell",
@@ -25,40 +32,50 @@ The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as
 }
 ```
 
-- `allowMultiple: false` — only one instance on the bar
-- `defaultSection: "right"` — appears in right bar section by default
+- `kinds` ↔ `entryPoints` are 1:1: `bar-widget`→`BarWidget.qml`, `service`→`Service.qml`, `overlay`→`SessionPicker.qml` (all relative, inside the plugin dir)
+- `allowMultiple: false` — only one bar widget instance; `defaultSection: "right"`
+- The `service` kind mounts `Service.qml` at shell startup **when the plugin is enabled** — for third-party plugins that means the id is present in `shell.json` `plugins[]` (`omarchy plugin add`/`enable` does this)
+- The `overlay` kind is loaded on summon (`omarchy-shell shell summon community.omarchy10k '<payload>'` or the plugin's own `picker` IPC method)
+- Older Quattro hosts that do not know `service`/`overlay` kinds simply ignore them (manifest validation only requires a non-empty `kinds` array and safe relative `entryPoints` paths) — the bar-widget path keeps working unchanged
 - Panel path is not declared in manifest — `BarWidget.qml` loads `Panel.qml` via `Loader`
 
 ## Component Hierarchy
 
 ```
+Service (Item, service kind — mounted at shell startup)
+├── daemonStatus / sessions / lastStatus reactive state
+├── eventReceived(var) signal bus
+├── serviceSocketFinder Process → discovers every omarchy10k-*.sock (10s timer)
+├── Instantiator → one persistent Socket per session (hello → status)
+├── controlSocket Socket (config_get/config_set/invalidate_git for IPC)
+└── IpcHandler target "community.omarchy10k"
+
 BarWidget (qs.Ui.BarWidget)
-├── barDaemonStatus / barSocketPath (daemon poll state)
-├── barSocketFinder Process → discovers first socket
-├── barStatusSocket Socket + SplitParser (independent IPC)
-├── barPollTimer Timer (5s, runs when panel closed)
+├── omarchyService (shell.serviceFor("community.omarchy10k"), feature-detected)
+│   └── present → mirrors daemonStatus, poll timer off
+│   └── absent  → barSocketFinder + barStatusSocket + barPollTimer (5s), unchanged
 ├── Loader → Panel.qml
-├── WidgetButton
-│   ├── text: "❯"
-│   ├── tooltip: "Omarchy10k ✓" or "Omarchy10k ✗"
-│   └── onClicked: toggle()
-└── panel ↔ bar wiring (injectPanel on load/bar change)
+└── WidgetButton (❯ glyph, ✓/✗ tooltip)
 
 Panel (qs.Ui.Panel, manageIpc: false)
 ├── Header: connection dot + title + ↩ Undo button
-├── Live prompt preview box + Error/SSH/Long cmd toggles
+├── Live prompt preview (ANSI → StyledText colors) + Error/SSH/Long cmd toggles
 ├── Tab bar: Appearance, Context, Segments, Shell, Advanced
+├── omarchyService mirror (daemonStatus + sessionList, feature-detected)
 ├── 5× Component tabs (Loader-switched)
-├── Error toast (red, 5s) + config diff toast (accent, 2s fade)
-├── Inline components: ControlRow, StatusRow, ActionButton, GlyphRow
-├── 11× Process (config, socket, tools, doctor, benchmark, install, clipboard, …)
-├── 1× Socket (daemonSocket + SplitParser)
-└── 4× Timer (save 300ms, reconnect 5s, error 5s, toast 2s)
+└── Processes/Sockets/Timers as in v0.3 (own daemonSocket still drives preview/config)
+
+SessionPicker (Item, overlay kind — summoned on demand)
+├── open(payloadJson) / close() entry-point contract
+├── PanelWindow (WlrLayer.Overlay, exclusive keyboard) + scrim + Escape/dismiss
+├── ListView of live sessions (CWD, branch, dirty, last duration, age)
+├── focuswindow pid:<shellPid> via hyprctl → fallback omarchy-launch-floating-terminal
+└── graceful empty state (no sessions / service not loaded / non-Hyprland)
 ```
 
 ## BarWidget (`BarWidget.qml`)
 
-The bar widget maintains its own daemon connection independent of the panel, so connection status is visible even when the Control Center is closed.
+The bar widget mirrors the Service hub's state when the host loaded `Service.qml`; otherwise it maintains its own daemon connection independent of the panel, so connection status is visible even when the Control Center is closed.
 
 ### Properties
 
@@ -67,16 +84,18 @@ The bar widget maintains its own daemon connection independent of the panel, so 
 | `barDaemonStatus` | `"running"`, `"stopped"`, `"error"`, `"not running"`, or `"unknown"` |
 | `barSocketPath` | Path to the first discovered `omarchy10k-*.sock` |
 
-### Daemon Status Polling
+### Daemon Status: Service hub first, poll fallback
 
-When the panel is **closed**, `barPollTimer` fires every 5 seconds:
+`readonly property var omarchyService: root.bar.shell.serviceFor("community.omarchy10k")` — feature-detected (guarded on `bar`, `bar.shell`, and `typeof serviceFor === "function"`):
 
-1. `discoverBarSocket()` — lists sockets, takes the first match
-2. Connects `barStatusSocket` to that path
-3. Sends `hello` handshake, then `status` command
-4. Updates `barDaemonStatus` from the response
+- **Service present:** `barDaemonStatus` tracks `omarchyService.daemonStatus` (via `Connections.onDaemonStatusChanged`), the widget's own status socket is disconnected, and `barPollTimer.running: !root.opened && !root.omarchyService` stops the 5s poll — the hub's persistent connections replace it.
+- **Service absent (old host, plugin not enabled as a service, or hub failed):** exactly the v0.3 path — `barPollTimer` fires every 5 seconds while the panel is closed:
+  1. `discoverBarSocket()` — lists sockets, takes the first match
+  2. Connects `barStatusSocket` to that path
+  3. Sends `hello` handshake, then `status` command
+  4. Updates `barDaemonStatus` from the response
 
-When the panel is **open**, polling stops (`running: !root.opened`) to avoid duplicate IPC with the panel's `daemonSocket`.
+  Polling stops while the panel is open (`running: !root.opened`) to avoid duplicate IPC with the panel's `daemonSocket`.
 
 ### Tooltip
 
@@ -90,8 +109,8 @@ The bar glyph tooltip reflects live daemon status:
 | Import | Components Used |
 |--------|----------------|
 | `QtQuick` | Core QML types |
-| `Quickshell` | Base types |
-| `Quickshell.Io` | `Process`, `Socket`, `StdioCollector`, `SplitParser` |
+| `Quickshell` | Base types, `Instantiator`, `PanelWindow` (SessionPicker) |
+| `Quickshell.Io` | `Process`, `Socket`, `StdioCollector`, `SplitParser`, `IpcHandler` |
 | `qs.Commons` | `Color` (accent, background, muted, green, red) |
 | `qs.Ui` | `BarWidget`, `Panel`, `WidgetButton`, `KeyboardPanel`, `PanelKeyCatcher`, `Style` |
 | `Model.js` | `parseTOML`, `buildTOML`, `buildCommand`, `buildPreview`, `protocolAtLeast`, etc. |
@@ -140,7 +159,7 @@ The bar glyph tooltip reflects live daemon status:
 | Degradation labels | Per-feature: preview shows "Live preview requires daemon v0.3+" and palette shows "Palette preview requires daemon v0.3+" when protocol < 0.3; Advanced tab shows "full (v0.3+)" / "degraded (upgrade daemon)" |
 | Benchmark display | "Run Benchmark" button with scrollable results (`omarchy10k benchmark --iterations 50`) |
 
-## Live Prompt Preview
+## Live Prompt Preview (ANSI-colored, v0.4)
 
 Above the tab bar, a preview box shows the rendered left prompt with simulated context. On socket connect and after each debounced save, the panel sends a `preview` message:
 
@@ -159,7 +178,92 @@ Above the tab bar, a preview box shows the rendered left prompt with simulated c
 }
 ```
 
-The daemon response `left` field is stripped of ANSI via `Model.stripAnsi()` before display. Pill toggles (Error, SSH, Long cmd) flip boolean preview properties and call `requestPreview()`.
+The daemon response `left` field is converted with `Model.ansiToRich()` (not stripped) and rendered in a monospace `Text` with `textFormat: Text.StyledText`, so SGR colors (3x/9x, 38;5, 38;2, 48;* backgrounds, bold/italic/underline) show as real colors. Pill toggles (Error, SSH, Long cmd) flip boolean preview properties and call `requestPreview()`. `Model.stripAnsi()` remains in use for doctor/benchmark output where color is not wanted.
+
+### `Model.ansiToRich(text)`
+
+Same tokenizer family as `stripAnsi`, but SGR state is carried across the stream and emitted as inline `<span style="…">` markup:
+
+- HTML entities (`&`, `<`, `>`) are escaped first, so prompt text renders literally
+- `30–37`/`90–97` → themed ANSI palette, `38;5;n` → xterm-256 (cube + grayscale computed), `38;2;r;g;b` → truecolor; `48;*` mirrors each as `background-color`
+- `0` resets all, `1/3/4` set bold/italic/underline, `22/23/24/39/49` clear individual attributes, `2` clears bold
+- Every other escape (OSC strings, cursor movement, private modes, `\x01`/`\x02` readline delimiters) is dropped
+- Output is a single span per contiguous SGR run; spans are only emitted when a style is active
+
+### Preset Gallery Live Previews
+
+The Appearance tab's 8 style cards render **live daemon previews** instead of hardcoded strings: `requestPresetPreviews()` sends one `preview` request per preset with the id `preset-<name>` and the v0.4 `style_preset` override field (daemon renders one-shot with that preset; no config mutation — see [protocol.md](protocol.md)). Responses route by id into `presetPreviews[name]`; the card shows the rich preview (`textFormat: Text.StyledText`), falling back to the static glyph string when the daemon is unreachable or older than the override. Requires daemon ≥ 0.3 for previews, ≥ 0.4 for per-card distinct presets.
+
+## v0.4 Spike: Quattro Plugin Platform Contract (verified upstream)
+
+Verified 2026-08-27 against `basecamp/omarchy` branch `quattro`:
+
+- Manifest/kinds/entryPoints validation + enable semantics: [`shell/services/PluginRegistry.qml`](https://raw.githubusercontent.com/basecamp/omarchy/quattro/shell/services/PluginRegistry.qml)
+- Plugin platform + IPC docs: [`docs/omarchy-shell.md`](https://raw.githubusercontent.com/basecamp/omarchy/quattro/docs/omarchy-shell.md)
+- Plugin catalogue: [`shell/plugins/README.md`](https://raw.githubusercontent.com/basecamp/omarchy/quattro/shell/plugins/README.md)
+- Loader/service wiring: [`shell/shell.qml`](https://raw.githubusercontent.com/basecamp/omarchy/quattro/shell/shell.qml) (`ensureService`, `_syncServices`, panel `Instantiator`)
+- IPC-by-plugin example: [`shell/plugins/background/Background.qml`](https://raw.githubusercontent.com/basecamp/omarchy/quattro/shell/plugins/background/Background.qml) (`IpcHandler { target: "background" }`)
+- Overlay example: [`shell/plugins/emojis/Emojis.qml`](https://raw.githubusercontent.com/basecamp/omarchy/quattro/shell/plugins/emojis/Emojis.qml)
+
+Contract facts extracted (all load-bearing for this plugin):
+
+1. **Kinds** (1:1 with `entryPoints` keys): `bar-widget`→`barWidget`, `bar`→`bar`, `panel`→`panel`, `overlay`→`overlay`, `menu`→`menu`, `service`→`service`. Entry points are QML `Item`s; `panel`/`overlay`/`menu` must expose `open(payloadJson)` / `close()`.
+2. **Injection** — the host sets, when the property is declared on the instance: `omarchyPath`, `shell`, `manifest`, `barWidgetRegistry`, `pluginRegistry`; panel/overlay/menu items additionally get `service` = `shell.serviceFor(<own plugin id>)`.
+3. **Service lifecycle** — services are instantiated at shell startup by `shell._syncServices()` for every *enabled* manifest declaring kind `service`. Third-party plugins are enabled ⇔ present in `shell.json` `plugins[]`, so a third-party service needs that entry (plugin add/enable provides it). Services are destroyed when the plugin is disabled/removed; editing plugin files hot-reloads.
+4. **Overlay lifecycle** — overlays (like panels/menus) load on demand; a `Loader` stays active while the overlay is open (or forever with `keepLoaded: true`). Summon/hide/toggle: `omarchy-shell shell summon|hide|toggle <id> '<payloadJson>'`; the overlay's `open(payloadJson)` receives the payload, `close()`/`shell.hide(id)` closes. `WlrLayershell.layer: WlrLayer.Overlay` + `WlrKeyboardFocus.Exclusive` is the fullscreen-overlay pattern used by first-party overlays.
+5. **IPC registration** — a plugin declares `IpcHandler { target: "<plugin-id>"; function method(arg: type): returnType {} }`. The CLI `omarchy-shell call <id> <method> [args]` dispatches to the function **by its QML name** (camelCase); methods answer on stdout with exit 0. First-party per-widget targets are named for the plugin (`omarchy.clock`), so the third-party convention is `target: "community.omarchy10k"`.
+6. **Consuming a service from another component** — bar widgets reach services via `bar.shell.serviceFor("<id>")` (upstream `omarchy.media` widget pattern); panel/overlay components can declare `property var service` and receive their own plugin's service via injection.
+
+## IPC Target: `community.omarchy10k` (2.1)
+
+Registered by `Service.qml` (persistent, so the target exists whether or not any panel is open):
+
+```bash
+omarchy-shell call community.omarchy10k status
+omarchy-shell call community.omarchy10k sessions
+omarchy-shell call community.omarchy10k setLayout powerline   # intel doc's "set-layout"
+omarchy-shell call community.omarchy10k toggleTransient        # intel doc's "toggle-transient"
+omarchy-shell call community.omarchy10k picker                 # opens the session picker overlay
+omarchy-shell call community.omarchy10k invalidateGit          # intel doc's "invalidate-git"
+```
+
+| Method | Returns | Behavior |
+|--------|---------|----------|
+| `status()` | JSON object | `ok`, `daemon`, `sessions`, plus the primary session's enriched `status` fields (pid, version, protocol_version, cwd, git, last_cmd_duration_ms, last_exit_code, session_age_secs, battery). `ok:false` when no daemon is running. |
+| `sessions()` | JSON array | One object per live socket: `shell_pid`, `pid`, `cwd`, `branch`, `dirty`, `last_cmd_duration_ms`, `session_age_secs`. |
+| `setLayout(preset)` | JSON object | Queues `config_set {"style":{"preset":…}}` on the hub's control socket. |
+| `toggleTransient()` | JSON object | Reads cached `prompt.transient` (from `config_get` at connect), queues the flipped value via `config_set`. |
+| `picker()` | `"ok"` or JSON error | `shell.summon("community.omarchy10k", "{}")` — opens the overlay. |
+| `invalidateGit()` | JSON object | Queues the `invalidate_git` control command on the primary socket. |
+
+Notes:
+
+- Method names are the QML function names (camelCase, per upstream's `IpcHandler` dispatch). The intel doc's kebab names (`set-layout`, `toggle-transient`, `invalidate-git`) map onto `setLayout` / `toggleTransient` / `invalidateGit` — QML function names cannot contain dashes.
+- **Config methods never throw.** No-daemon / write-failure returns `{"ok":false,"error":"…"}`; a successfully queued write returns `{"ok":true,"queued":true}` (the daemon's ok/error reply is consumed asynchronously; persistent failures surface on the next status poll and via the `eventReceived` signal bus).
+- `config_set` writes go through `Model.buildConfigSet` over the hub's own persistent control socket — the panel does not need to be open. (Deviation from the original task wording, which assumed the *panel's* `daemonSocket`: the panel disconnects on close, so an always-loaded hub socket is the only path that keeps the target answering when no panel is open.)
+- install.sh keybind hints are W2's scope, not documented here.
+
+## Service Plugin: `Service.qml` (2.2)
+
+One persistent connection hub replacing the three duplicated poll/reconnect lifecycles:
+
+- **Discovery:** `ls $XDG_RUNTIME_DIR/omarchy10k-*.sock` on startup + every 10s; the session socket set is only rebuilt when the discovered path list actually changes (no churn).
+- **Per-session sockets:** a `Quickshell` `Instantiator` holds one persistent `Socket` per path; each handshakes (`hello`) and issues `status`. Responses update `sessions[i]` (`pid`, `cwd`, `branch`, `dirty`, `lastCmdMs`, `ageSecs`) and, for the primary session, `lastStatus` + `daemonStatus = "running"`.
+- **Control socket:** a dedicated connection to the first socket for `config_get` (seeds the transient cache) / `config_set` / control commands used by the IPC target.
+- **State surface:** `daemonStatus` (`"running"`/`"not running"`), `sessions`, `lastStatus`, and the `eventReceived(var)` signal bus (reserved for daemon push events: `long_command`, `git_stale`, `battery_low`).
+- **Consumers:** `BarWidget` mirrors `daemonStatus` (poll timer off); `Panel` mirrors `daemonStatus` + `sessionList` on the hub's change signals; `SessionPicker` reads `sessions` via host injection.
+- **Graceful fallback:** every consumer feature-detects the hub (`typeof shell.serviceFor === "function"` + null check). Without it, BarWidget polls as in v0.3, the panel re-discovers on its 5s `reconnectTimer`, and the overlay shows its "service not loaded" empty state. On old hosts that ignore the `service` kind, `Service.qml` is simply never instantiated.
+
+## Session Picker Overlay: `SessionPicker.qml` (2.3)
+
+Fullscreen overlay (summoned by the `picker` IPC method, a Hyprland keybind, or `omarchy-shell shell summon community.omarchy10k '{}'`):
+
+- Lists every live session with **CWD, git branch (+ dirty dot), last command duration, session age**, and pid — data read from the plugin's own `Service` (`property var service`, host-injected).
+- **Enter / click** activates: under Hyprland (`HYPRLAND_INSTANCE_SIGNATURE` set) it runs `hyprctl dispatch focuswindow pid:<shellPid>`; on nonzero exit (or non-Hyprland) it falls back to `omarchy-launch-floating-terminal` from the session's CWD, then closes.
+  - *Assumption:* the socket-name PID is the shell session PID; `focuswindow pid:` matches client windows exactly, so the pid→window hit is best-effort with the terminal fallback as guarantee.
+- **Escape / scrim click** closes (`shell.hide(<id>)` when the host is available, plain hide otherwise).
+- **Empty state** when no sessions are live or the service isn't loaded (with a hint); non-Hyprland adjusts the help line to the terminal-fallback behavior.
+- Rendering follows the first-party overlay pattern: `PanelWindow` anchored to all edges, transparent, `WlrLayer.Overlay`, exclusive keyboard focus, scrim + centered card, with `Color.menu.*` theme tokens falling back to `Color.*` then hard-coded values.
 
 ## Config Undo
 
@@ -337,6 +441,8 @@ Redesigned in v0.3 with a visual style gallery, glyph pickers, and frame control
 
 An 8-card grid replaces the old Preset dropdown. Each card shows a visual preview of the style, its name, and a short description. Clicking a card sets `style.preset`:
 
+Each card's preview line renders the **live daemon preview** for that preset (see [Preset Gallery Live Previews](#preset-gallery-live-previews)); the static glyphs below are the offline fallback. Clicking a card still sets `style.preset`.
+
 | Card | Preview | Description |
 |------|---------|-------------|
 | omarchy | `~ ❯` | Clean |
@@ -389,6 +495,7 @@ Changing theme source triggers `requestPalette()` to refresh the color swatch ro
 | Control | TOML Key | Options |
 |---------|----------|---------|
 | Git | `git.mode` | adaptive, compact, expanded, hidden |
+
 | Duration | `segments.command_duration.show_above_ms` | 500, 1000, 1500, 3000, 5000 ms |
 | SSH | `segments.ssh.show` | auto, always, never |
 | Exit Status | `segments.exit_status.show_signal_name` | Signal names / Codes only |
@@ -446,6 +553,8 @@ Install buttons appear only when the tool status contains `✗ not found`. After
 
 When multiple shells are running, each has its own daemon socket. The Advanced tab provides a session selector:
 
+When the v0.4 service hub is loaded, this list mirrors `Service.sessions` (live branch/dirty/duration data per row) and the panel's own `socketFinder` only maintains the working connection. Without the hub the behavior below applies unchanged.
+
 - Lists all discovered `omarchy10k-*.sock` files
 - Each entry shows shell PID, working directory, and a floating-terminal icon
 - Clicking a row switches the active session (disconnect + reconnect)
@@ -453,9 +562,11 @@ When multiple shells are running, each has its own daemon socket. The Advanced t
 - Config changes apply to the selected session's daemon
 
 ## Process Components
-
 | ID | Command | Trigger |
 |----|---------|---------|
+| `serviceSocketFinder` (in `Service.qml`) | `ls $XDG_RUNTIME_DIR/omarchy10k-*.sock` | Service startup + 10s timer |
+| `hyprctlFocus` (in `SessionPicker.qml`) | `hyprctl dispatch focuswindow pid:<shellPid>` | Session picker activation |
+| `focusLauncher` (in `SessionPicker.qml`) | `cd '<cwd>' && omarchy-launch-floating-terminal` | Picker fallback focus |
 | `configReader` | `cat config.toml` | Panel open, reload, reset |
 | `socketFinder` | `ls $XDG_RUNTIME_DIR/omarchy10k-*.sock` | Panel open, reconnect |
 | `barSocketFinder` | `ls … \| head -1` | BarWidget init, bar poll |
@@ -484,7 +595,9 @@ Stateless helper library (`.pragma library`):
 | `buildConfigGet(id)` | Builds config_get request |
 | `buildConfigSet(patch, id)` | Builds config_set request with JSON patch |
 | `buildPreview(context, id)` | Builds preview request with simulated context |
-| `stripAnsi(str)` | Removes ANSI/OSC escape sequences from preview text |
+| `stripAnsi(str)` | Removes ANSI/OSC escape sequences (doctor/benchmark output) |
+| `ansiToRich(text)` | Converts SGR ANSI into `Text.StyledText` span markup (live preview, preset cards) |
+| `escapeHtml(str)` | Escapes `&`, `<`, `>` (used by `ansiToRich`) |
 | `protocolAtLeast(current, min)` | Dotted version comparison (e.g. `"0.3" >= "0.2"`) |
 | `flattenConfig(nested)` | Flattens nested config object to dotted keys; skips null leaves |
 | `unflattenPatch(flat)` | Unflattens dotted keys to nested object |
@@ -515,11 +628,13 @@ Key QML properties on `Panel.qml` beyond config fields:
 | `toastMessage` / `_showToast` | Config diff / undo / paste toast |
 | `doctorOutput` | Scrollable doctor command output |
 | `benchmarkOutput` | Scrollable benchmark results |
-| `previewText` | Stripped ANSI left prompt for preview box |
+| `previewText` | ANSI→StyledText left prompt for the color preview box |
 | `previewError` / `previewSsh` / `previewLongCmd` | Preview context toggles |
 | `paletteColors` | Theme color map from `palette` IPC response |
 | `_undoStack` / `_undoMaxSize` | Config undo circular buffer (max 10) |
 | `sessionList` / `activeSessionIndex` | Multi-session socket list |
+| `presetPreviews` / `presetCards` | Style-gallery live renders (id-routed `preview` replies) / card fallback strings |
+| `omarchyService` | The plugin's `Service` hub instance when the host loaded it (null otherwise) |
 
 ## Styling
 
@@ -536,8 +651,21 @@ Color fallbacks when `qs.Commons.Color` is unavailable:
 
 ## Installation
 
+The plugin is a git repo with `manifest.json` at its root, so the standard flow works:
+
+```bash
+omarchy plugin add <repo-url>          # clones into ~/.config/omarchy/plugins/community.omarchy10k/
+omarchy plugin enable community.omarchy10k
+```
+
+Enabling records the id in `shell.json` `plugins[]`, which is what makes the host mount `Service.qml` at startup and allows the overlay to be summoned. The bar widget appears in the right section (`barWidget.defaultSection`).
+
+Manual copy also works:
+
 ```bash
 cp -r quattro/ ~/.config/omarchy/plugins/community.omarchy10k/
+omarchy-shell shell rescanPlugins
+omarchy plugin enable community.omarchy10k
 ```
 
 Requires a running Omarchy Quattro desktop with Quickshell-based bar system.

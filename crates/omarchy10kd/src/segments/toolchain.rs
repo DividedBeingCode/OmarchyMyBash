@@ -7,7 +7,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         return None;
     }
 
-    let parts = collect_tool_versions();
+    let parts = collect_tool_versions(ctx);
     if parts.is_empty() {
         return None;
     }
@@ -30,7 +30,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     })
 }
 
-fn collect_tool_versions() -> Vec<String> {
+fn collect_tool_versions(ctx: &SegmentContext<'_>) -> Vec<String> {
     let tools: [(&str, &str, &str); 5] = [
         ("MISE_NODE_VERSION", "⬢", "node"),
         ("MISE_PYTHON_VERSION", "🐍", "python"),
@@ -41,7 +41,7 @@ fn collect_tool_versions() -> Vec<String> {
 
     let mut parts = Vec::new();
     for (var, icon, _name) in tools {
-        if let Ok(version) = std::env::var(var) {
+        if let Some(version) = ctx.env_get(var) {
             if !version.is_empty() {
                 parts.push(format!("{icon} {version}"));
             }

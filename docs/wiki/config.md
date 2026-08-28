@@ -47,7 +47,6 @@ Curated visual preset system. Controls separators, frames/ornaments, caps, and s
 | **slanted** | `` slanted (U+E0BC) | none | none | Modern angled |
 | **minimal** | space | none | none | Directory only, single-line |
 | **pure** | space | none | none | Directory + git only |
-
 ### `[style.separators]`
 
 Override the preset's default separator. Both `left` and `right` can be set independently.
@@ -155,8 +154,8 @@ Controls git integration.
 | `enabled` | bool | `true` | — | Yes | Toggle git segment entirely. |
 | `mode` | string | `"adaptive"` | `hidden`, `compact`, `expanded`, `adaptive` | Yes | Git segment detail level. `adaptive` shows expanded when dirty, compact when clean. |
 | `branch_icon` | string | `"powerline"` | `powerline` (U+E0A0), `octicon` (U+F418), `nerd` (U+F126), `text` (`git:`), `none`, custom | Yes | Branch icon glyph displayed before the branch name in both left and right prompt git segments. Routes through `GlyphCatalog::branch_icon()`. Added in v0.3. |
-| `stale_display` | bool | `true` | — | **No** | The key itself is never read. The `stale` flag it nominally gates is honoured unconditionally in both `segments/git.rs` and `render_right`, so stale display is always on and the switch does nothing. |
-| `max_threads` | int | `4` | — | No | Parallelism for git queries. Single-threaded in practice. |
+| `stale_display` | bool | `true` | — | Yes | Show the git segment (muted, `⟳ branch` via `stale_icon`) while git data is stale (large repo / cold cache) instead of hiding it. Wired in v0.4 (previously the switch did nothing). |
+| `stale_icon` | string | `"⟳"` | — | Yes | Glyph prepended to the branch name when `git_stale` is true and `stale_display` is on. Added in v0.4. |
 | `cache_ttl_ms` | int | `5000` | — | Yes | Cache TTL in milliseconds for git status entries. Updated on config reload via `GitCache::set_ttl()`. |
 
 ## `[segments.os]`
@@ -203,6 +202,19 @@ Detects container runtime environment (Docker, Podman, Distrobox, Toolbox). Adde
 | `icon` | string | `"auto"` | `auto` or any string | Yes | Prefix glyph. `auto` uses `⬡`; any other string is used verbatim (emoji or custom glyph). |
 
 Detection order: `$DISTROBOX_ENTER_PATH` → `/.dockerenv` → `/run/.containerenv` → `$container` env var.
+
+## `[env.watch]`
+
+Environment channel allowlist (protocol 0.4). The bash adapter sends exactly
+these variables in the prompt request's `env` object — pure parameter
+expansions, zero forks — and daemon segments read them via `SegmentContext::env_get`
+instead of the daemon's own (frozen) environment. Keys missing from the map
+fall back to `std::env` for legacy clients.
+
+| Key | Type | Default | Implemented | Description |
+|-----|------|---------|-------------|-------------|
+| `keys` | string[] | 12-key frozen allowlist | Yes | `VIRTUAL_ENV`, `CONDA_DEFAULT_ENV`, `MISE_NODE_VERSION`, `MISE_PYTHON_VERSION`, `MISE_RUBY_VERSION`, `MISE_GO_VERSION`, `MISE_RUST_VERSION`, `IN_NIX_SHELL`, `DISTROBOX_ENTER_PATH`, `container`, `KUBECONFIG`, `DIRENV_DIR`. The default must match the adapter's built-in list (frozen protocol contract). Add `CLAUDE_CODE_ENTRYPOINT` / `CODEX_*` here to power `[segments.ai]`. |
+
 
 ## `[segments.python]`
 
@@ -267,16 +279,48 @@ Shows battery level from Linux sysfs. Added in v0.3.
 
 Reads `/sys/class/power_supply/BAT0` (or `BAT1`). Icon: `🔋` discharging, `🔌` charging.
 
-## `[segments.notification]`
+## `[notifications]`
 
-Long-running command desktop notifications. Added in v0.3.
+Long-running command desktop notifications. Added in v0.4 (replaces the
+`[segments.notification]` stub).
 
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
-| `enabled` | bool | `true` | — | Yes | Toggle notifications. When enabled, the daemon includes `notify_threshold_ms` in prompt responses for the bash adapter. |
-| `threshold_ms` | int | `10000` | — | Yes | Minimum command duration (ms) before emitting OSC 777 notification. The daemon sends this value in prompt responses; the bash adapter reads it and updates its threshold. Editable in Quattro Shell tab ("Notify After": 5s/10s/30s). Falls back to `$O10K_NOTIFY_THRESHOLD` env var on first prompt before daemon response. |
+| `enabled` | bool | `true` | — | Yes | Toggle notifications. When enabled, the daemon includes `notify_threshold_ms` in prompt responses; when disabled it emits **`0`** (the adapter treats 0/empty as OFF — this fixes the v0.3 no-op bug where disabling was silently ignored). |
+| `threshold_ms` | int | `10000` | — | Yes | Minimum command duration (ms) before emitting OSC 777 notification. |
+| `unfocused_only` | bool | `false` | — | Yes | Hint delivered as `notify_unfocused_only` in prompt responses; the bash adapter gates on terminal focus. |
 
-Notifications are emitted from the bash adapter via OSC 777 (`\033]777;notify;...\007`), compatible with Ghostty and Foot.
+**Deprecated alias:** `[segments.notification]` (`enabled`, `threshold_ms`)
+remains parsed for old configs and maps into `[notifications]` while the new
+table is left at its defaults; any explicit `[notifications]` key wins.
+Notifications are emitted from the bash adapter via OSC 777
+(`\033]777;notify;...\007`), compatible with Ghostty and Foot.
+
+## `[segments.ai]`
+
+Agent signal segment (v0.4): one glyph + tool name while an AI coding agent is
+active in the session. Detection is env-var-only via the env channel
+(`CLAUDE_CODE_ENTRYPOINT` → `✦ claude`; `CODEX_SANDBOX`/`CODEX_HOME` → `✳ codex`),
+so it degrades to hidden and cannot break. Add those keys to `[env.watch].keys`
+for reliable detection.
+
+| Key | Type | Default | Implemented | Description |
+|-----|------|---------|-------------|-------------|
+| `enabled` | bool | `true` | Yes | Toggle the agent signal segment. |
+| `hide_below_cols` | int | `60` | Yes | Hide below this terminal width. |
+
+## `[statusline]`
+
+Color thresholds for the daemon-rendered Claude Code statusline
+(`omarchy10k statusline claude-code`, v0.4). The line shows model name,
+context %, cost, and cwd basename; the context % color reuses the
+exit-status green/yellow/red palette logic.
+
+| Key | Type | Default | Implemented | Description |
+|-----|------|---------|-------------|-------------|
+| `context_warning_pct` | int | `60` | Yes | Context % at or above which the statusline turns yellow. |
+| `context_critical_pct` | int | `85` | Yes | Context % at or above which the statusline turns red. |
+
 
 ## `[segments.character]`
 
@@ -316,6 +360,19 @@ format = "{dir}"
 [terminal.progress]
 enabled = true
 ```
+
+### `[terminal.semantic_prompts]`
+
+OSC 133;C/D semantic prompt emission (v0.4). Adapter-gated: the daemon
+reports the flag as `semantic_prompts` in prompt responses and the bash
+adapter decides whether to emit. **Default OFF** pending the Ghostty shell
+integration coexistence result; the adapter additionally gates on
+`GHOSTTY_SHELL_FEATURES` (or the legacy `GHOSTTY_SHELL_INTEGRATION_FEATURES`
+name), `TERM_PROGRAM` in {ghostty, foot}, and never emits under tmux.
+
+| Key | Type | Default | Implemented | Description |
+|-----|------|---------|-------------|-------------|
+| `enabled` | bool | `false` | Yes | Allow the adapter to emit `133;C` in preexec and `133;D;<exit>` in precmd (A/B markers already ship with `shell_integration`). |
 
 ## `[daemon]`
 
@@ -373,6 +430,14 @@ Reload can also be triggered via:
 | `segments.nix.enabled` | Yes | Segments |
 | `segments.k8s.enabled` | Yes | Segments |
 | `segments.time.enabled` | Yes | Segments |
+| `env.watch.keys` | No | — |
+| `notifications.enabled` | No | — |
+| `notifications.threshold_ms` | Yes | Shell ("Notify After" selector) |
+| `notifications.unfocused_only` | No | — |
+| `git.stale_icon` | No | — |
+| `segments.ai.enabled` | Yes | Segments |
+| `statusline.*` | No | — |
+| `terminal.semantic_prompts.enabled` | No | — |
 | `segments.battery.enabled` | Yes | Segments |
 | `segments.time.format` | Yes | Segments (visible when Time enabled) |
 | `segments.k8s.show_namespace` | No | — |

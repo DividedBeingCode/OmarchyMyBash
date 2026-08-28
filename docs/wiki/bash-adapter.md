@@ -25,13 +25,14 @@ After guards pass, the adapter:
 1. Sets up path variables (`__O10K_BIN`, `__O10K_DAEMON_BIN`, `__O10K_SOCKET`)
 2. Disables `promptvars` (`shopt -u promptvars`) so PS1 content — daemon/path/branch text — never undergoes parameter or command expansion
 3. Loads instant prompt cache from `${XDG_CACHE_HOME:-$HOME/.cache}/omarchy10k/last_prompt` (if present)
-4. Detects terminal shell integration and sets `__O10K_EMIT_OSC133`
+4. Detects terminal shell integration and sets `__O10K_EMIT_OSC133`, then computes the `__O10K_EMIT_133CD` gate (see [Semantic Prompts](#osc-133cd-semantic-prompts-14))
 5. Declares hook arrays (`__O10K_HOOKS_precmd`, `preexec`, `chpwd`, `shell_exit`)
 6. Registers `EXIT` trap for `__o10k_cleanup`
 7. Creates cache directory (`__O10K_CACHE_DIR`) if missing
 8. Starts the daemon (`__o10k_start_daemon`)
 9. Starts bridge coprocess (`__o10k_start_bridge`)
 10. Installs hooks based on ble.sh availability (`__o10k_install_hooks`)
+11. Launches the one-time intro in the background when the marker file is absent and `O10K_NO_INTRO` is unset (see [First-Run Intro](#first-run-intro))
 
 ## Instant Prompt Cache
 
@@ -93,13 +94,28 @@ Called at init time alongside daemon startup.
 ### Request (`__o10k_bridge_request`)
 
 1. Writes the JSON request to the coprocess stdin
-2. Reads three NUL-terminated fields from coprocess stdout: `left\0right\0notify_threshold_ms\0` (left: 2s timeout; right/threshold: 0.5s each)
+2. Reads FOUR NUL-terminated fields from coprocess stdout:
+   `left\0right\0notify_threshold_ms\0transient\0` (left: 2s timeout;
+   right/threshold/transient: 0.5s each)
 3. Sets `PS1` from the `left` field
 4. Caches the `right` field in `__O10K_LAST_RIGHT` for ble.sh right prompt
-5. Sets `__O10K_NOTIFY_THRESHOLD` from the third field when non-empty
-6. Writes the instant prompt cache in the background (see [Instant Prompt Cache](#instant-prompt-cache))
+5. Sets `__O10K_NOTIFY_THRESHOLD` via `__o10k_set_notify_threshold` — a value
+   of `0` or empty means notifications are OFF and is stored as `0`, never
+   falling back to the bootstrap default
+6. Sets `__O10K_TRANSIENT` from the fourth field (may be empty)
+7. Refreshes config flags from the bridge side-channel file
+   (`__o10k_read_flags`) — the bridge writes it before its response fields,
+   so the 133;C/D gate is current without a one-render lag
+8. Writes the instant prompt cache in the background (see [Instant Prompt Cache](#instant-prompt-cache))
 
-If the left read fails or times out, the request aborts immediately (worst-case latency ≈ 2s instead of 4s) and the reader best-effort drains late-arriving fields so the stream cannot shift by one; the adapter then falls back to `__o10k_socket_send` + `parse-prompt`.
+#### Config-flags side channel
+
+The bridge relays `semantic_prompts` and `notify_unfocused_only` from the
+daemon response through a side-channel file next to the socket
+(`<socket>.flags`, atomic tmp+rename, written only when a value changes), so
+the hot path keeps its frozen four-field NUL framing. The adapter reads the
+file without forking. Old adapters ignore the file; old bridges simply never
+create it.
 
 ## Shell Integration Detection
 
@@ -121,8 +137,48 @@ Checks for existing terminal shell integrations that already emit OSC 133 marker
 | `auto` (default) | Detect existing integrations; defer OSC 133 when one is found |
 | `force` | Omarchy10k always emits OSC 133 markers |
 | `off` | Omarchy10k never emits OSC 133 markers |
+When an existing integration is detected in `auto` mode, Omarchy10k defers OSC 133 emission to the terminal. The `__O10K_EMIT_OSC133` flag controls the `shell_integration` field of the prompt request (daemon-side OSC 133;A/B markers).
 
-When an existing integration is detected in `auto` mode, Omarchy10k defers OSC 133 emission to the terminal. The `__O10K_EMIT_OSC133` flag controls whether OSC 133 markers are included in prompt output.
+## OSC 133;C/D Semantic Prompts (1.4)
+
+The adapter emits `\e]133;C` in preexec and `\e]133;D;<exit_code>` in precmd,
+gated by `__O10K_EMIT_133CD`. The gate is computed by `__o10k_update_133cd`
+(re-run at init and after every response/flag refresh):
+
+1. `O10K_SHELL_INTEGRATION=off` → never; `force` → always (explicit user override)
+2. In `auto` mode: `[terminal.semantic_prompts].enabled` from the daemon
+   (`semantic_prompts` response field; default **OFF**)
+3. `TMUX` unset (tmux does not forward 133)
+4. `TERM_PROGRAM` is `ghostty` or `foot`
+5. `GHOSTTY_SHELL_INTEGRATION_FEATURES` **and** `GHOSTTY_SHELL_FEATURES` unset
+6. Ghostty's own integration not loaded (`__ghostty_precmd` undefined)
+
+### Ghostty coexistence spike (2026-08, Ghostty 1.3.x)
+
+Verified against Ghostty's `src/shell-integration/bash/ghostty.bash` and the
+1.3.0 release notes:
+
+- The real environment variable is **`GHOSTTY_SHELL_FEATURES`** (a
+  comma-separated feature list such as `cursor,title`); the plan's
+  `GHOSTTY_SHELL_INTEGRATION_FEATURES` does not exist in Ghostty source. The
+  adapter checks both names so a future rename cannot re-enable double
+  emission.
+- Ghostty's auto-injected bash integration emits `133;A`/`P`/`B` in precmd
+  (via PS1 wrapping), `133;D;<ret>` in precmd, and `133;C` in preexec —
+  exactly the sequences we would emit. **Double emission is a real
+  corruption class** (duplicate command-end regions break click-to-prompt
+  and output selection), so our gate yields to Ghostty: unset
+  `GHOSTTY_SHELL_FEATURES` + undefined `__ghostty_precmd` are both required.
+- Under ble.sh, Ghostty switches to `133;P;k=i` instead of `133;A`; we emit
+  only C/D, so no additional coordination is needed.
+- Detection of a manually-sourced Ghostty integration (auto-injection
+  disabled but script present) is covered by the `__ghostty_precmd`
+  function check.
+
+**Chosen default:** `[terminal.semantic_prompts] enabled = false` in
+default.toml until an empirical coexistence test on Ghostty 1.3.x proves the
+suppression heuristic on real installs; the gate stays conservative. Foot has
+no auto-injection, so on Foot the adapter is the sole 133 source once enabled.
 
 ## Hook Broker
 
@@ -198,10 +254,10 @@ Called from `PROMPT_COMMAND` or ble.sh `PRECMD`:
 
 ```
 1. Capture exit_code=$?
-2. Emit OSC 133;D (marks end of previous command output, if __O10K_EMIT_OSC133)
+2. Emit OSC 133;D (marks end of previous command output, if `__O10K_EMIT_133CD`)
 3. __o10k_timer_stop
-4. If cmd_duration_ms > __O10K_NOTIFY_THRESHOLD:
-      emit OSC 777 desktop notification
+4. If `__O10K_NOTIFY_THRESHOLD > 0` and cmd_duration_ms > threshold:
+      desktop notification via `__o10k_notify` (see [OSC 777](#osc-777-desktop-notifications))
 5. Emit DEC 2026 synchronized output ON (\033[?2026h)
 6. __o10k_check_chpwd
 7. __o10k_dispatch precmd
@@ -209,15 +265,24 @@ Called from `PROMPT_COMMAND` or ble.sh `PRECMD`:
 9. If socket exists:
    a. cols=${COLUMNS:-80}
    b. jobs_count=$(jobs -p | wc -l)
-   c. Build JSON: {"cwd","exit_code","cmd_duration_ms","cols","jobs","shell_integration"}
-      (shell_integration reflects __O10K_EMIT_OSC133)
-   d. Try bridge first (no fork/exec):
+   c. Build JSON via `printf -v` (no fork):
+      {"cwd","exit_code","cmd_duration_ms","cols","jobs","shell_integration","env"}
+      — `shell_integration` reflects `__O10K_EMIT_OSC133` (daemon-side 133;A/B);
+      `env` is the frozen allowlist snapshot (12 env keys + the three
+      agent-signal keys `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`,
+      `CODEX_HOME` for the 1.3 ai segment) built with pure parameter
+      expansions by `__o10k_env_json` (only non-empty values, control chars
+      stripped, backslash/quote escaped via `__o10k_json_escape`)
+   d. Refresh config flags (`__o10k_read_flags`) and re-run the 133;C/D gate
+   e. Try bridge first (no fork/exec):
       __o10k_bridge_request "$request" → PS1 set + cache written
-   e. Fallback: response=$(__o10k_socket_send "$request")
+   f. Fallback: response=$(__o10k_socket_send "$request")
       Parse "left" from JSON:
       - Preferred: $__O10K_BIN parse-prompt (Rust, ~1-3ms)
       - Fallback: python3 JSON extraction (~5-10ms)
-      PS1="$left" + cache written
+      PS1="$left" + cache written; also parses `notify_threshold_ms`
+      (0/empty → OFF), `semantic_prompts`, `notify_unfocused_only`, and
+      `transient` from the response
 10. Else: PS1="$__O10K_FALLBACK_PS1"
 11. Emit OSC 7 CWD report (file://hostname/path)
 12. Emit DEC 2026 synchronized output OFF (\033[?2026l)
@@ -252,16 +317,24 @@ printf '\033]7;file://%s%s\033\\' "${HOSTNAME}" "$(__o10k_uri_encode "$PWD")"
 
 ### OSC 777 — Desktop Notifications
 
-When a command's duration exceeds `__O10K_NOTIFY_THRESHOLD` (default 10000 ms), the adapter notifies the terminal:
+Notification routing (`__o10k_notify`), when
+`__O10K_NOTIFY_THRESHOLD > 0 && __O10K_CMD_DURATION > threshold`:
 
-```bash
-printf '\033]777;notify;Command finished;%s took %dms\007' \
-    "$_notify_cmd" "$__O10K_CMD_DURATION"
-```
+1. If `[notifications].unfocused_only` is set (relayed via the bridge flags
+   side channel as `notify_unfocused_only=1`), skip when the terminal is
+   focused (`__o10k_terminal_focused`: Hyprland active-window pid must be in
+   the shell's ancestor chain; undetectable → notify anyway)
+2. Prefer `omarchy-notification-send` (detected once at init via
+   `command -v`; called notify-send-compatibly as `title body`) — Omarchy
+   forbids raw `notify-send`
+3. Fallback: OSC 777 (`\033]777;notify;TITLE;BODY\007`), with the body
+   sanitized (all C0 control characters and semicolons stripped) so it
+   cannot break OSC 777 framing
 
-The command text is sanitized before interpolation: all C0 control characters (CR, LF, VT, FF, BEL, ESC, …) and semicolons are stripped so the text cannot break OSC 777 framing.
-
-Supported by Ghostty, Foot, and WezTerm. Threshold is configurable via the `O10K_NOTIFY_THRESHOLD` environment variable or `segments.notification.threshold_ms` in config (Quattro panel).
+A threshold of `0` (or empty) means the daemon disabled notifications and is
+never replaced by a default — this fixes the verified 0.2 no-op defect where
+`enabled = false` left the adapter's bootstrap default in force. Supported by
+Ghostty, Foot, and WezTerm (OSC 777 path).
 
 ### OSC 9;4 — Progress Bar
 
@@ -299,10 +372,10 @@ Transport priority:
 
 ### Hardening Notes
 
-- **JSON escaping:** The prompt request strips control characters from `$PWD` and JSON-escapes backslashes and double-quotes before embedding it in the request string. Directories with special characters (e.g. `C:\Users`, paths containing `"`, or embedded newlines) no longer produce malformed JSON.
+- **JSON escaping:** The prompt request strips control characters from `$PWD` and JSON-escapes backslashes and double-quotes before embedding it in the request string (shared helper `__o10k_json_escape`); the same treatment is applied to every `env` allowlist value. Directories with special characters (e.g. `C:\Users`, paths containing `"`, or embedded newlines) no longer produce malformed JSON.
 - **Python3 fallback safety:** The Python3 socket snippet accepts socket path and message as `sys.argv[1]` and `sys.argv[2]` instead of interpolating shell variables into the script. This eliminates code injection via crafted socket paths.
 - **Daemon restart detection:** Before each prompt render, when the bridge coprocess is dead the adapter probes a present socket with a `status` command first. A healthy daemon's socket is never removed — only the bridge is restarted. A missing socket or a failed probe removes the stale socket and restarts both daemon and bridge, rate limited to one attempt per 5 seconds.
-- **Bridge fallback NUL framing:** The bridge's `write_fallback()` function emits three NUL-terminated fields (`left\0right\0notify_threshold_ms\0`, with the threshold field empty) matching the normal protocol, so the bash reader never hangs waiting for the next field.
+- **Bridge fallback NUL framing:** The bridge's `write_fallback()` function emits four NUL-terminated fields (`left\0right\0notify_threshold_ms\0transient\0`, with the last three empty) matching the normal protocol, so the bash reader never hangs waiting for the next field.
 
 ## Hook Installation
 
@@ -342,11 +415,19 @@ Registers `__o10k_update_rps1` as an additional `PRECMD+` hook for right prompt 
 
 `__O10K_PREEXEC_READY` prevents double-firing. Set to `1` at end of `PROMPT_COMMAND`. Checked and cleared at start of `__o10k_preexec`. Without this, DEBUG trap or PS0 would fire on every simple command in a pipeline.
 
-### Preexec OSC 133 and Progress
+### Preexec Transient, OSC 133 and Progress
 
-Both vanilla and ble.sh preexec handlers:
+The **vanilla** preexec handler additionally performs the non-ble transient
+overwrite: when the daemon delivered a non-empty `transient` string and the
+current PS1 is single-line (contains no `\n`), it moves the cursor up one
+line, rewrites the previous prompt line as `\r<transient>\033[K`, and returns
+the cursor to the fresh line. Multi-line prompts are left untouched — their
+geometry is unknowable from bash. Under ble.sh the transient is handled
+natively instead (see [Transient Prompt](#transient-prompt)).
 
-1. Emit OSC 133;C at command start (marks beginning of command output, if `__O10K_EMIT_OSC133`)
+Both vanilla and ble.sh preexec handlers then:
+
+1. Emit OSC 133;C at command start (marks beginning of command output, if `__O10K_EMIT_133CD`)
 2. Set `__O10K_LAST_CMD` from the command string
 3. Emit OSC 9;4;3 (indeterminate progress bar)
 4. Start command timer (`__o10k_timer_start`)
@@ -357,6 +438,33 @@ Both vanilla and ble.sh preexec handlers:
 | ble.sh | `__o10k_preexec_blesh` | `$1` (ble.sh PREEXEC argument) |
 | vanilla | `__o10k_preexec` | `$BASH_COMMAND` |
 
+## Transient Prompt
+
+The daemon may deliver a `transient` string (the collapsed form of the
+prompt) as the fourth bridge field / JSON response field:
+
+- **ble.sh:** `__o10k_update_rps1` feeds it to `bleopt prompt_ps1_final`
+  while `bleopt prompt_ps1_transient='always'` stays set. ble.sh replaces the
+  collapsed prompt with `prompt_ps1_final` when non-empty; with an empty
+  string the shipped vanish behavior is kept. (Verified against ble.sh's
+  `blerc.template`: `prompt_ps1_transient` is a colon list
+  `always|same-dir|trim` and `prompt_ps1_final` carries the replacement
+  string.)
+- **Non-ble:** the vanilla preexec overwrite described in
+  [Preexec](#preexec-transient-osc-133-and-progress) — conservative
+  single-line-prompt rewrite only.
+
+## First-Run Intro
+
+At init (after hooks are installed) the adapter launches `omarchy10k intro`
+in a disowned background subshell writing to `/dev/tty` — non-blocking:
+
+- Skipped when the marker file
+  `${XDG_STATE_HOME:-$HOME/.local/state}/omarchy10k/intro_shown` exists
+- Skipped when `O10K_NO_INTRO` is set (CI gate)
+- Daemon down → the CLI exits silently; the marker stays unwritten so the
+  next shell retries
+
 ## Right Prompt
 
 When ble.sh is active, the adapter manages the right-aligned prompt via `__o10k_update_rps1`:
@@ -364,6 +472,7 @@ When ble.sh is active, the adapter manages the right-aligned prompt via `__o10k_
 1. Registered as a ble.sh `PRECMD+` hook (runs after `__o10k_render_prompt`)
 2. Reads `__O10K_LAST_RIGHT` which is populated during the prompt render cycle (from the bridge's `right\0` field or the socket fallback's JSON `right` extraction)
 3. Sets `bleopt prompt_rps1` with the cached value, or an empty string if unavailable
+4. Sets `bleopt prompt_ps1_final` from `__O10K_TRANSIENT` (see [Transient Prompt](#transient-prompt))
 
 Right prompt content typically includes git branch and command duration when `prompt.right_prompt = true`.
 
@@ -374,10 +483,15 @@ Right prompt content typically includes git branch and command duration when `pr
 | `__O10K_CMD_START` | `0` | Command start timestamp |
 | `__O10K_CMD_DURATION` | `0` | Last command duration (ms) |
 | `__O10K_LAST_CMD` | `""` | Last executed command name (for notifications) |
-| `__O10K_NOTIFY_THRESHOLD` | `10000` | Desktop notification threshold (ms) |
+| `__O10K_NOTIFY_THRESHOLD` | `10000` bootstrap | Desktop notification threshold (ms); `0` = OFF |
 | `__O10K_CACHE_DIR` | `$XDG_CACHE_HOME/omarchy10k` | Instant prompt cache directory |
 | `__O10K_CACHE` | `$__O10K_CACHE_DIR/last_prompt` | Cached PS1 file path |
-| `__O10K_EMIT_OSC133` | `0` or `1` | Whether to emit OSC 133 markers |
+| `__O10K_EMIT_OSC133` | `0` or `1` | Whether to request daemon-side OSC 133;A/B markers |
+| `__O10K_EMIT_133CD` | `0` or `1` | Whether to emit OSC 133;C/D markers (semantic gate) |
+| `__O10K_SEMANTIC_PROMPTS` | `0` | Mirrors `[terminal.semantic_prompts].enabled` from the daemon |
+| `__O10K_NOTIFY_UNFOCUSED_ONLY` | `0` | Mirrors `[notifications].unfocused_only` |
+| `__O10K_TRANSIENT` | `""` | Daemon transient string for the prompt collapse |
+| `__O10K_FLAGS` | `<socket>.flags` | Bridge config-flags side-channel file |
 | `__O10K_LAST_RIGHT` | `""` | Last right prompt string (for ble.sh `prompt_rps1`) |
 | `__O10K_BRIDGE_PID` | `0` | Bridge coprocess PID |
 
@@ -411,6 +525,7 @@ Right prompt content typically includes git branch and command duration when `pr
 | `PROMPT_COMMAND` | Existing hooks (preserved) |
 | `O10K_SHELL_INTEGRATION` | OSC 133 emission mode (`auto`, `force`, `off`) |
 | `KITTY_SHELL_INTEGRATION` | Kitty shell integration detection |
+| `O10K_NO_INTRO` | Set to skip the first-run intro launch (CI gate) |
 
 ## Runtime Dependencies
 

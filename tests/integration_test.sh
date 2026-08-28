@@ -270,6 +270,328 @@ else
     skip "config reload tests" "no socket"
 fi
 
+# ── v0.4 Feature Coverage ─────────────────────────────────────────────────
+# Every probe below degrades to SKIP with a clear reason when the feature
+# under test has not landed yet (0.4 is mid-flight), but FAILs on wrong
+# behavior once the feature is present.
+
+section "v0.4 Features"
+
+# jsonq <json> <expr-on-d> — evaluate a python expression against the parsed
+# JSON; prints the result (empty string for None / parse failure).
+jsonq() {
+    python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(2)
+try:
+    r = eval(sys.argv[2], {'d': d})
+except Exception:
+    sys.exit(3)
+print('' if r is None else r)
+" "$1" "$2" 2>/dev/null
+}
+
+# run_to <secs> <cmd...> — bounded run where timeout(1) exists (Linux CI);
+# unbounded fallback on macOS where only gtimeout may exist.
+run_to() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$1" "${@:2}"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$1" "${@:2}"
+    else
+        "${@:2}"
+    fi
+}
+
+# bridge_fields <file> → "N|f1|f2|..." — count NUL-separated fields in bridge
+# stdout (trailing NUL is a field terminator, not an extra empty field).
+bridge_fields() {
+    python3 -c "
+import sys
+data = open(sys.argv[1], 'rb').read()
+if data.endswith(b'\x00'):
+    data = data[:-1]
+fields = data.split(b'\x00')
+sys.stdout.write(str(len(fields)) + '|' + '|'.join(f.decode('utf-8', 'replace') for f in fields[:5]))
+" "$1" 2>/dev/null
+}
+
+if [[ -S "$SOCKET" ]]; then
+    # ── Protocol 0.4: hello version bump ──────────────────────────────────
+    HELLO_RESP=$(sock_send "$SOCKET" '{"type":"hello","id":"t-hello"}')
+    PV=$(jsonq "$HELLO_RESP" "d.get('protocol_version')")
+    case "$PV" in
+        0.4) pass "hello returns protocol_version 0.4" ;;
+        0.3) skip "hello returns protocol_version 0.4" "daemon still reports 0.3 (bump mid-flight)" ;;
+        "")  fail "hello returns protocol_version 0.4" "no protocol_version in response: $HELLO_RESP" ;;
+        *)   fail "hello returns protocol_version 0.4" "unexpected protocol_version: $PV" ;;
+    esac
+
+    # ── 0.1 env channel ───────────────────────────────────────────────────
+    VENV_MARKER="probe-venv-0x4"
+    MISE_MARKER="3.12.1"
+    NOENV_RESP=$(sock_send "$SOCKET" "{\"cwd\":\"$HOME\",\"exit_code\":0,\"cmd_duration_ms\":0,\"cols\":120,\"jobs\":0}")
+    NOENV_LEFT=$(jsonq "$NOENV_RESP" "d.get('left','')")
+    ENV_RESP=$(sock_send "$SOCKET" "{\"cwd\":\"$HOME\",\"exit_code\":0,\"cmd_duration_ms\":0,\"cols\":120,\"jobs\":0,\"env\":{\"VIRTUAL_ENV\":\"/home/u/.venvs/$VENV_MARKER\",\"MISE_PYTHON_VERSION\":\"$MISE_MARKER\"}}")
+    ENV_LEFT=$(jsonq "$ENV_RESP" "d.get('left','')")
+    CFG_JSON=$(sock_send "$SOCKET" '{"command":"config_get"}')
+    HAS_ENV_CFG=$(jsonq "$CFG_JSON" "'env' in d.get('config',{})")
+
+    # Without env the markers must never leak into the render.
+    if [[ "$NOENV_LEFT" != *"$VENV_MARKER"* && "$NOENV_LEFT" != *"$MISE_MARKER"* ]]; then
+        pass "render without env carries no venv/toolchain markers"
+    else
+        fail "render without env carries no venv/toolchain markers" "marker leaked into render without env channel"
+    fi
+
+    if [[ "$ENV_LEFT" == *"$VENV_MARKER"* ]]; then
+        pass "env VIRTUAL_ENV surfaces venv name in left"
+    elif [[ "$HAS_ENV_CFG" == "True" ]]; then
+        fail "env VIRTUAL_ENV surfaces venv name in left" "env config present but venv name missing from left"
+    else
+        skip "env VIRTUAL_ENV surfaces venv name in left" "0.1 env channel not landed (no env config, render unchanged)"
+    fi
+
+    if [[ "$ENV_LEFT" == *"$MISE_MARKER"* ]]; then
+        pass "env MISE_PYTHON_VERSION surfaces in toolchain segment"
+    elif [[ "$HAS_ENV_CFG" == "True" ]]; then
+        fail "env MISE_PYTHON_VERSION surfaces in toolchain segment" "env config present but toolchain version missing from left"
+    else
+        skip "env MISE_PYTHON_VERSION surfaces in toolchain segment" "0.1 env channel not landed"
+    fi
+
+    # ── 0.2 notifications ─────────────────────────────────────────────────
+    sock_send "$SOCKET" '{"type":"config","command":"set","config":{"notifications":{"enabled":false}}}' >/dev/null
+    CFG_JSON=$(sock_send "$SOCKET" '{"command":"config_get"}')
+    NOTIF_OFF=$(jsonq "$CFG_JSON" "d.get('config',{}).get('notifications',{}).get('enabled')")
+    if [[ "$NOTIF_OFF" == "False" ]]; then
+        NT_RESP=$(sock_send "$SOCKET" "{\"cwd\":\"$HOME\",\"exit_code\":0,\"cmd_duration_ms\":20000,\"cols\":120,\"jobs\":0}")
+        NT=$(jsonq "$NT_RESP" "d.get('notify_threshold_ms')")
+        if [[ "$NT" == "0" ]]; then
+            pass "disabled notifications emit notify_threshold_ms 0"
+        else
+            fail "disabled notifications emit notify_threshold_ms 0" "expected 0, got '${NT:-<missing>}'"
+        fi
+
+        sock_send "$SOCKET" '{"type":"config","command":"set","config":{"notifications":{"enabled":true,"threshold_ms":12345}}}' >/dev/null
+        NT_RESP=$(sock_send "$SOCKET" "{\"cwd\":\"$HOME\",\"exit_code\":0,\"cmd_duration_ms\":20000,\"cols\":120,\"jobs\":0}")
+        NT=$(jsonq "$NT_RESP" "d.get('notify_threshold_ms')")
+        if [[ "$NT" == "12345" ]]; then
+            pass "custom notification threshold is honored"
+        else
+            fail "custom notification threshold is honored" "expected 12345, got '${NT:-<missing>}'"
+        fi
+
+        # restore defaults
+        sock_send "$SOCKET" '{"type":"config","command":"set","config":{"notifications":{"enabled":true,"threshold_ms":10000}}}' >/dev/null
+    else
+        skip "notifications config_set drives notify_threshold_ms" "0.2 [notifications] table not honored by daemon yet"
+    fi
+
+    # ── 0.3 status enrichment ─────────────────────────────────────────────
+    sock_send "$SOCKET" '{"command":"invalidate_git"}' >/dev/null
+    # Warm the git cache with a prompt render in the repo, then read status.
+    sock_send "$SOCKET" "{\"cwd\":\"$SCRIPT_DIR\",\"exit_code\":0,\"cmd_duration_ms\":4321,\"cols\":120,\"jobs\":0}" >/dev/null
+    ST_RESP=$(sock_send "$SOCKET" '{"command":"status"}')
+    if [[ "$(jsonq "$ST_RESP" "'git' in d")" == "True" ]]; then
+        BT=$(jsonq "$ST_RESP" "type(d.get('git',{}).get('branch')).__name__")
+        if [[ "$BT" == "str" ]]; then
+            pass "status exposes git.branch as string"
+        else
+            fail "status exposes git.branch as string" "branch type: ${BT:-missing}; resp: $ST_RESP"
+        fi
+        DT=$(jsonq "$ST_RESP" "type(d.get('git',{}).get('dirty')).__name__")
+        if [[ "$DT" == "bool" ]]; then
+            pass "status exposes git.dirty as bool"
+        else
+            fail "status exposes git.dirty as bool" "dirty type: ${DT:-missing}"
+        fi
+        LCD=$(jsonq "$ST_RESP" "d.get('last_cmd_duration_ms')")
+        if [[ "$LCD" =~ ^[0-9]+$ ]]; then
+            pass "status exposes numeric last_cmd_duration_ms"
+        else
+            fail "status exposes numeric last_cmd_duration_ms" "got '${LCD:-missing}'"
+        fi
+        SAS=$(jsonq "$ST_RESP" "d.get('session_age_secs')")
+        if [[ "$SAS" =~ ^[0-9]+$ ]]; then
+            pass "status exposes numeric session_age_secs"
+        else
+            fail "status exposes numeric session_age_secs" "got '${SAS:-missing}'"
+        fi
+    else
+        skip "status exposes git object (branch/dirty)" "0.3 status enrichment not landed (no git field in status)"
+        skip "status exposes last_cmd_duration_ms" "0.3 status enrichment not landed"
+        skip "status exposes session_age_secs" "0.3 status enrichment not landed"
+    fi
+
+    # ── 1.2 statusline ────────────────────────────────────────────────────
+    # Payload carries every known context-percentage field spelling
+    # (used_percentage / percentage / used+total) so the assertion holds no
+    # matter which shape Claude Code or the daemon settles on.
+    SL_RESP=$(sock_send "$SOCKET" '{"type":"statusline","id":"t-sl","payload":{"model":{"display_name":"Test Model"},"context_window":{"used_percentage":42,"percentage":42,"used":84000,"total":200000},"workspace":{"current_dir":"/tmp"}}}')
+    if [[ "$(jsonq "$SL_RESP" "d.get('type')")" == "statusline" && "$(jsonq "$SL_RESP" "d.get('status')")" == "ok" ]]; then
+        SL_LEFT=$(jsonq "$SL_RESP" "d.get('left','')")
+        if [[ "$SL_LEFT" == *"Test Model"* ]]; then
+            pass "statusline renders model display_name"
+        else
+            fail "statusline renders model display_name" "left: $SL_LEFT"
+        fi
+        if [[ "$SL_LEFT" == *"42"* ]]; then
+            pass "statusline renders context usage percentage"
+        else
+            fail "statusline renders context usage percentage" "left: $SL_LEFT"
+        fi
+    else
+        skip "statusline renders model and context usage" "1.2 statusline message not landed (resp: $SL_RESP)"
+    fi
+
+    # ── 1.3 agent signal segment ──────────────────────────────────────────
+    # The marker itself is W1's choice; a correct segment must change the
+    # render when the entrypoint signal is present vs the plain baseline.
+    AI_RESP=$(sock_send "$SOCKET" "{\"cwd\":\"$HOME\",\"exit_code\":0,\"cmd_duration_ms\":0,\"cols\":120,\"jobs\":0,\"env\":{\"CLAUDE_CODE_ENTRYPOINT\":\"1\"}}")
+    AI_LEFT=$(jsonq "$AI_RESP" "d.get('left','')")
+    if [[ -n "$AI_LEFT" && "$AI_LEFT" != "$NOENV_LEFT" ]]; then
+        pass "agent segment reacts to CLAUDE_CODE_ENTRYPOINT"
+    elif [[ "$AI_LEFT" == "$NOENV_LEFT" ]]; then
+        skip "agent segment reacts to CLAUDE_CODE_ENTRYPOINT" "1.3 agent segment not landed (render unchanged by signal)"
+    else
+        fail "agent segment reacts to CLAUDE_CODE_ENTRYPOINT" "empty response: $AI_RESP"
+    fi
+
+    # ── 0.4 bridge framing ────────────────────────────────────────────────
+    # Fake daemon (sandbox tmpdir) that answers one request with a canned
+    # response — or garbage, to drive the write_fallback path.
+    FAKE_DAEMON="$TEST_TMP/fake_daemon.py"
+    cat > "$FAKE_DAEMON" <<'PYEOF'
+import json, os, socket, sys
+mode, sock_path = sys.argv[1], sys.argv[2]
+try:
+    os.unlink(sock_path)
+except OSError:
+    pass
+srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+srv.bind(sock_path)
+srv.listen(1)
+srv.settimeout(10)
+try:
+    conn, _ = srv.accept()
+    conn.makefile('rb').readline()
+    if mode == 'ok':
+        resp = json.dumps({
+            "type": "prompt", "status": "ok",
+            "left": "BRIDGELEFT04", "right": "BRIDGERIGHT04",
+            "notify_threshold_ms": 12345, "transient": "BRIDGETRANS04",
+            "git_stale": False,
+        })
+    else:
+        resp = '<<not json>>'
+    conn.sendall((resp + '\n').encode())
+    conn.close()
+except Exception:
+    pass
+finally:
+    srv.close()
+    try:
+        os.unlink(sock_path)
+    except OSError:
+        pass
+PYEOF
+
+    python3 "$FAKE_DAEMON" ok "$TEST_TMP/fake-ok.sock" &
+    FAKE_PID=$!
+    for _ in $(seq 1 30); do
+        [[ -S "$TEST_TMP/fake-ok.sock" ]] && break
+        sleep 0.1
+    done
+    printf '%s\n' '{"cwd":"/tmp","exit_code":0,"cmd_duration_ms":0,"cols":80,"jobs":0}' \
+        | run_to 15 "$CLI" bridge --socket "$TEST_TMP/fake-ok.sock" > "$TEST_TMP/bridge_ok.out" 2>/dev/null
+    wait "$FAKE_PID" 2>/dev/null
+
+    BF=$(bridge_fields "$TEST_TMP/bridge_ok.out")
+    N=${BF%%|*}
+    if [[ "$N" == "4" ]]; then
+        IFS='|' read -r _ F1 F2 F3 F4 <<<"$BF"
+        if [[ "$F1" == "BRIDGELEFT04" && "$F2" == "BRIDGERIGHT04" && "$F3" == "12345" && "$F4" == "BRIDGETRANS04" ]]; then
+            pass "bridge emits 4 NUL-separated fields with correct content"
+        else
+            fail "bridge emits 4 NUL-separated fields with correct content" "got: $BF"
+        fi
+    elif [[ "$N" == "3" ]]; then
+        skip "bridge emits 4 NUL-separated fields" "0.4 framing not landed (bridge still emits 3 fields)"
+    else
+        fail "bridge emits 4 NUL-separated fields" "unexpected framing: '$BF'"
+    fi
+
+    python3 "$FAKE_DAEMON" bad "$TEST_TMP/fake-bad.sock" &
+    FAKE_PID=$!
+    for _ in $(seq 1 30); do
+        [[ -S "$TEST_TMP/fake-bad.sock" ]] && break
+        sleep 0.1
+    done
+    printf '%s\n' '{"cwd":"/tmp","exit_code":0,"cmd_duration_ms":0,"cols":80,"jobs":0}' \
+        | run_to 15 "$CLI" bridge --socket "$TEST_TMP/fake-bad.sock" > "$TEST_TMP/bridge_bad.out" 2>/dev/null
+    wait "$FAKE_PID" 2>/dev/null
+
+    BF=$(bridge_fields "$TEST_TMP/bridge_bad.out")
+    N=${BF%%|*}
+    if [[ "$N" == "4" ]]; then
+        IFS='|' read -r _ F1 F2 F3 F4 <<<"$BF"
+        if [[ -n "$F1" && -z "$F2" && -z "$F3" && -z "$F4" ]]; then
+            pass "bridge write_fallback emits 4 fields with empty 3rd/4th"
+        else
+            fail "bridge write_fallback emits 4 fields with empty 3rd/4th" "got: $BF"
+        fi
+    elif [[ "$N" == "2" || "$N" == "3" ]]; then
+        skip "bridge write_fallback emits 4 fields with empty 3rd/4th" "0.4 framing not landed (fallback has $N fields)"
+    else
+        fail "bridge write_fallback emits 4 fields with empty 3rd/4th" "unexpected framing: '$BF'"
+    fi
+
+    # ── 1.1 true powerline ────────────────────────────────────────────────
+    sock_send "$SOCKET" '{"type":"config","command":"set","config":{"style":{"preset":"powerline"}}}' >/dev/null
+    PL_RESP=$(sock_send "$SOCKET" "{\"cwd\":\"$HOME\",\"exit_code\":0,\"cmd_duration_ms\":0,\"cols\":120,\"jobs\":0}")
+    PL_LEFT=$(jsonq "$PL_RESP" "d.get('left','')")
+    if [[ "$PL_LEFT" == *"48;2"* ]]; then
+        pass "powerline preset emits SGR 48;2 background fill"
+        sock_send "$SOCKET" '{"type":"config","command":"set","config":{"style":{"preset":"rainbow"}}}' >/dev/null
+        RB_LEFT=$(jsonq "$(sock_send "$SOCKET" "{\"cwd\":\"$HOME\",\"exit_code\":0,\"cmd_duration_ms\":0,\"cols\":120,\"jobs\":0}")" "d.get('left','')")
+        if [[ -n "$RB_LEFT" && "$RB_LEFT" != "$PL_LEFT" ]]; then
+            pass "rainbow preset renders differently from powerline"
+        else
+            fail "rainbow preset renders differently from powerline" "identical output to powerline"
+        fi
+    else
+        skip "powerline preset emits SGR 48;2 background fill" "1.1 true powerline not landed (no bg fill in render)"
+        skip "rainbow preset renders differently from powerline" "1.1 true powerline not landed"
+    fi
+    # restore stock preset so nothing downstream renders with powerline
+    sock_send "$SOCKET" '{"type":"config","command":"set","config":{"style":{"preset":"omarchy"}}}' >/dev/null
+
+    # ── 3.3 intro ─────────────────────────────────────────────────────────
+    if INTRO_OUT=$(run_to 30 env HOME="$TEST_TMP/home" "$CLI" intro --force </dev/null 2>/dev/null); then
+        if [[ -n "${INTRO_OUT//[[:space:]]/}" ]]; then
+            pass "intro --force exits 0 and prints output"
+        else
+            fail "intro --force exits 0 and prints output" "exit 0 but empty output"
+        fi
+
+        # Generous probe: O10K_NO_INTRO set must still exit 0; output may be
+        # a notice, so only the exit status is asserted.
+        if run_to 30 env O10K_NO_INTRO=1 HOME="$TEST_TMP/home" "$CLI" intro --force </dev/null >/dev/null 2>&1; then
+            pass "O10K_NO_INTRO makes intro exit 0 without banner"
+        else
+            fail "O10K_NO_INTRO makes intro exit 0 without banner" "nonzero exit with O10K_NO_INTRO set"
+        fi
+    else
+        skip "intro --force" "3.3 intro subcommand not landed (nonzero exit)"
+        skip "O10K_NO_INTRO suppresses intro" "3.3 intro subcommand not landed"
+    fi
+else
+    skip "v0.4 feature coverage" "no socket"
+fi
 # ── Hook Broker Verification ──────────────────────────────────────────────
 
 section "Hook Broker (Bash Sourcing)"

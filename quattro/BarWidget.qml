@@ -11,6 +11,30 @@ BarWidget {
     property string barDaemonStatus: "unknown"
     property string barSocketPath: ""
 
+    // Service-kind hub (v0.4): when the host loaded our Service.qml (plugin
+    // enabled in shell.json plugins[]), the widget mirrors its state instead
+    // of polling. Feature-detected — absent/old hosts keep today's poll path.
+    readonly property var omarchyService: root.bar && root.bar.shell
+        && typeof root.bar.shell.serviceFor === "function"
+        ? root.bar.shell.serviceFor("community.omarchy10k") : null
+
+    onOmarchyServiceChanged: {
+        if (omarchyService) {
+            barDaemonStatus = omarchyService.daemonStatus
+            // Retire the duplicate poll connection while the service lives.
+            barStatusSocket.connected = false
+        } else {
+            discoverBarSocket()
+        }
+    }
+
+    Connections {
+        target: root.omarchyService
+        function onDaemonStatusChanged() {
+            if (root.omarchyService) root.barDaemonStatus = root.omarchyService.daemonStatus
+        }
+    }
+
     readonly property bool opened: panelLoader.item
         ? panelLoader.item.opened === true
         : false
@@ -111,7 +135,7 @@ BarWidget {
         id: barPollTimer
         interval: 5000
         repeat: true
-        running: !root.opened
+        running: !root.opened && !root.omarchyService
         onTriggered: {
             if (barSocketPath.length > 0 && barStatusSocket.connected) {
                 barStatusSocket.write(Model.buildCommand("status", "bar-poll") + "")

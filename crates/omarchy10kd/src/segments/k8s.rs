@@ -8,7 +8,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         return None;
     }
 
-    let display = parse_kube_context(ctx.home, ctx.config.segments.k8s.show_namespace)?;
+    let display = parse_kube_context(ctx)?;
     let content = format!("⎈ {display}");
     let preferred_width = UnicodeWidthStr::width(content.as_str()) as u16;
 
@@ -27,17 +27,16 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     })
 }
 
-fn kubeconfig_path(home: &str) -> PathBuf {
-    std::env::var("KUBECONFIG")
-        .ok()
+fn kubeconfig_path(ctx: &SegmentContext<'_>) -> PathBuf {
+    ctx.env_get("KUBECONFIG")
         .and_then(|paths| {
             paths
                 .split(':')
-                .map(|p| expand_home(p.trim(), home))
+                .map(|p| expand_home(p.trim(), ctx.home))
                 .find(|p| std::path::Path::new(p).exists())
         })
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(home).join(".kube/config"))
+        .unwrap_or_else(|| PathBuf::from(ctx.home).join(".kube/config"))
 }
 
 fn expand_home(path: &str, home: &str) -> String {
@@ -50,8 +49,9 @@ fn expand_home(path: &str, home: &str) -> String {
     }
 }
 
-fn parse_kube_context(home: &str, show_namespace: bool) -> Option<String> {
-    let path = kubeconfig_path(home);
+fn parse_kube_context(ctx: &SegmentContext<'_>) -> Option<String> {
+    let show_namespace = ctx.config.segments.k8s.show_namespace;
+    let path = kubeconfig_path(ctx);
     let content = std::fs::read_to_string(path).ok()?;
 
     let current_context = content.lines().find_map(|line| {

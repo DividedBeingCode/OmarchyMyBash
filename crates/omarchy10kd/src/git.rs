@@ -27,6 +27,14 @@ pub struct GitStatus {
     pub stale: bool,
 }
 
+impl GitStatus {
+    /// True when the worktree has any staged, unstaged, untracked, or
+    /// conflicted change.
+    pub fn is_dirty(&self) -> bool {
+        self.staged > 0 || self.unstaged > 0 || self.untracked > 0 || self.conflicted > 0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum GitAction {
     Merge,

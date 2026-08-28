@@ -11,7 +11,7 @@ use crate::git::GitCache;
 use crate::render::PromptRenderer;
 use crate::theme::ThemePalette;
 
-pub const PROTOCOL_VERSION: &str = "0.3";
+pub const PROTOCOL_VERSION: &str = "0.4";
 
 #[derive(Debug, serde::Deserialize)]
 pub struct PromptRequest {
@@ -24,6 +24,9 @@ pub struct PromptRequest {
     pub command: Option<String>,
     #[serde(default)]
     pub shell_integration: Option<bool>,
+    /// Environment values carried from the shell (protocol 0.4 env channel).
+    #[serde(default)]
+    pub env: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -46,6 +49,9 @@ pub struct PreviewRequest {
     pub git_staged: u32,
     #[serde(default)]
     pub git_unstaged: u32,
+    /// Per-request preset override (v0.4, used by the Quattro preset gallery).
+    #[serde(default)]
+    pub style_preset: Option<String>,
 }
 
 fn default_preview_cwd() -> String {
@@ -70,12 +76,32 @@ struct TypedMessage {
     rest: serde_json::Value,
 }
 
+/// Ambient snapshot of the most recent prompt render (v0.4 0.3 status
+/// enrichment). Served additively by the `status` control command.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RenderSummary {
+    pub cwd: String,
+    pub branch: String,
+    pub dirty: bool,
+    pub staged: u32,
+    pub unstaged: u32,
+    pub conflicted: u32,
+    pub ahead: u32,
+    pub behind: u32,
+    pub worktree: Option<String>,
+    pub stale: bool,
+    pub cmd_duration_ms: u64,
+    pub exit_code: i32,
+}
+
 pub struct DaemonState {
     pub config: RwLock<Config>,
     pub palette: RwLock<ThemePalette>,
     pub git_cache: GitCache,
     pub config_path: PathBuf,
     pub socket_path: PathBuf,
+    pub last_render: RwLock<Option<RenderSummary>>,
+    pub started_at: std::time::Instant,
 }
 
 impl DaemonState {
@@ -92,6 +118,8 @@ impl DaemonState {
             git_cache: GitCache::new(git_ttl_ms),
             config_path,
             socket_path,
+            last_render: RwLock::new(None),
+            started_at: std::time::Instant::now(),
         }
     }
 
@@ -259,14 +287,40 @@ async fn handle_control(
             let cwd = std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
-            write_response(writer, serde_json::json!({
+
+            // v0.4 0.3 status enrichment: merge the last render summary with
+            // the live git cache entry and a cheap battery sysfs read.
+            let last = state.last_render.read().await.clone();
+            let live_git = match &last {
+                Some(r) => Some(state.git_cache.get_status(Path::new(&r.cwd)).await),
+                None => None,
+            };
+            let session_age_secs = state.started_at.elapsed().as_secs();
+
+            let mut resp = serde_json::json!({
                 "type": "control",
                 "status": "ok",
                 "pid": std::process::id(),
                 "version": env!("CARGO_PKG_VERSION"),
                 "protocol_version": PROTOCOL_VERSION,
                 "cwd": cwd,
-            }), request_id).await?;
+            });
+            let obj = resp.as_object_mut().unwrap();
+            obj.insert(
+                "git".into(),
+                git_summary_json(last.as_ref(), live_git.as_ref()),
+            );
+            obj.insert(
+                "last_cmd_duration_ms".into(),
+                serde_json::json!(last.as_ref().map(|r| r.cmd_duration_ms).unwrap_or(0)),
+            );
+            obj.insert(
+                "last_exit_code".into(),
+                serde_json::json!(last.as_ref().map(|r| r.exit_code).unwrap_or(0)),
+            );
+            obj.insert("session_age_secs".into(), serde_json::json!(session_age_secs));
+            obj.insert("battery".into(), battery_json(battery_status()));
+            write_response(writer, resp, request_id).await?;
         }
         "palette" => {
             let palette = state.palette.read().await;
@@ -335,7 +389,24 @@ async fn handle_prompt(
         req.jobs,
         &git_status,
         req.shell_integration.unwrap_or(true),
+        req.env.as_ref(),
     );
+
+    // Record the ambient snapshot served by `status` (v0.4 0.3).
+    *state.last_render.write().await = Some(RenderSummary {
+        cwd: req.cwd.clone(),
+        branch: if git_status.is_repo { git_status.branch.clone() } else { String::new() },
+        dirty: git_status.is_dirty(),
+        staged: git_status.staged,
+        unstaged: git_status.unstaged,
+        conflicted: git_status.conflicted,
+        ahead: git_status.ahead,
+        behind: git_status.behind,
+        worktree: git_status.worktree.clone(),
+        stale: git_status.stale,
+        cmd_duration_ms: req.cmd_duration_ms,
+        exit_code: req.exit_code,
+    });
 
     debug!("prompt rendered in {:?}", start.elapsed());
 
@@ -350,7 +421,21 @@ async fn handle_preview(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
     request_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    let config = state.config.read().await;
+    let config_guard = state.config.read().await;
+    // Per-request preset override (Quattro preset gallery, v0.4): clone the
+    // config and force the requested preset, clearing the legacy layout
+    // mapping so the override always resolves verbatim.
+    let preset_config;
+    let config: &Config = match &req.style_preset {
+        Some(preset) => {
+            let mut c = config_guard.clone();
+            c.style.preset = preset.clone();
+            c.prompt.layout = String::new();
+            preset_config = c;
+            &preset_config
+        }
+        None => &config_guard,
+    };
     let palette = state.palette.read().await;
 
     let git_status = crate::git::GitStatus {
@@ -365,7 +450,7 @@ async fn handle_preview(
         ..Default::default()
     };
 
-    let renderer = PromptRenderer::new(&config, &palette);
+    let renderer = PromptRenderer::new(config, &palette);
     let prompt = renderer.render_with_ssh(
         &req.cwd,
         req.exit_code,
@@ -375,6 +460,7 @@ async fn handle_preview(
         &git_status,
         false, // no shell integration for preview
         Some(req.in_ssh),
+        None,
     );
 
     write_response(
@@ -390,8 +476,98 @@ async fn handle_preview(
     .await
 }
 
+/// Render the Claude Code statusline payload with the current config+palette
+/// (v0.4 1.2). Left-only line, no OSC 133.
+async fn handle_statusline(
+    payload: &crate::render::StatuslinePayload,
+    state: &Arc<DaemonState>,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    request_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+    let config = state.config.read().await;
+    let palette = state.palette.read().await;
+    let renderer = PromptRenderer::new(&config, &palette);
+    let left = renderer.render_statusline(payload);
+    debug!("statusline rendered in {:?}", start.elapsed());
+    write_response(
+        writer,
+        serde_json::json!({
+            "type": "statusline",
+            "status": "ok",
+            "left": left,
+        }),
+        request_id,
+    )
+    .await
+}
+
 fn strip_np(s: &str) -> String {
     s.replace('\x01', "").replace('\x02', "")
+}
+
+/// Git summary object for the enriched `status` response. Prefers the live
+/// git cache entry; falls back to the recorded render summary. `null` before
+/// the first prompt render.
+fn git_summary_json(
+    last: Option<&RenderSummary>,
+    live: Option<&crate::git::GitStatus>,
+) -> serde_json::Value {
+    let Some(l) = last else {
+        return serde_json::Value::Null;
+    };
+    let (branch, dirty, staged, unstaged, conflicted, ahead, behind, worktree, stale) =
+        match live {
+            Some(g) if g.is_repo => (
+                g.branch.clone(),
+                g.is_dirty(),
+                g.staged,
+                g.unstaged,
+                g.conflicted,
+                g.ahead,
+                g.behind,
+                g.worktree.clone(),
+                g.stale,
+            ),
+            _ => (
+                l.branch.clone(),
+                l.dirty,
+                l.staged,
+                l.unstaged,
+                l.conflicted,
+                l.ahead,
+                l.behind,
+                l.worktree.clone(),
+                l.stale,
+            ),
+        };
+    serde_json::json!({
+        "branch": branch,
+        "dirty": dirty,
+        "staged": staged,
+        "unstaged": unstaged,
+        "conflicted": conflicted,
+        "ahead": ahead,
+        "behind": behind,
+        "worktree": worktree,
+        "stale": stale,
+    })
+}
+
+/// Cheap battery read for the status response; reuse of the battery segment's
+/// sysfs helper. `None` when no battery exists (desktops).
+fn battery_status() -> Option<(u32, bool)> {
+    crate::segments::battery::read_battery()
+}
+
+fn battery_json(battery: Option<(u32, bool)>) -> serde_json::Value {
+    match battery {
+        Some((capacity, charging)) => serde_json::json!({
+            "capacity": capacity,
+            "status": if charging { "Charging" } else { "Discharging" },
+        }),
+        None => serde_json::Value::Null,
+    }
 }
 
 async fn handle_connection(
@@ -457,6 +633,24 @@ async fn handle_connection(
                     Err(e) => {
                         write_response(&mut writer, serde_json::json!({
                             "type": "error",
+                            "error": e.to_string(),
+                        }), request_id).await?;
+                    }
+                }
+            }
+            Some("statusline") => {
+                // Claude Code statusLine JSON arrives verbatim under
+                // `payload`; accept a flat payload too (legacy/test clients).
+                let payload_value = match msg.rest.get("payload") {
+                    Some(p) if p.is_object() => p.clone(),
+                    _ => msg.rest.clone(),
+                };
+                match serde_json::from_value::<crate::render::StatuslinePayload>(payload_value) {
+                    Ok(payload) => handle_statusline(&payload, &state, &mut writer, request_id).await?,
+                    Err(e) => {
+                        write_response(&mut writer, serde_json::json!({
+                            "type": "statusline",
+                            "status": "error",
                             "error": e.to_string(),
                         }), request_id).await?;
                     }
@@ -611,5 +805,76 @@ fn merge_toml_value(target: &mut toml::Value, patch: toml::Value) {
         (target, patch) => {
             *target = patch;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_git_summary_null_before_first_render() {
+        assert_eq!(git_summary_json(None, None), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn test_git_summary_serializes_contract_fields() {
+        let last = RenderSummary {
+            cwd: "/home/u/project".into(),
+            branch: "main".into(),
+            dirty: true,
+            staged: 1,
+            unstaged: 2,
+            conflicted: 0,
+            ahead: 3,
+            behind: 0,
+            worktree: Some("wt".into()),
+            stale: false,
+            cmd_duration_ms: 1500,
+            exit_code: 2,
+        };
+        let v = git_summary_json(Some(&last), None);
+        assert_eq!(v["branch"], "main");
+        assert_eq!(v["dirty"], true);
+        assert_eq!(v["staged"], 1);
+        assert_eq!(v["unstaged"], 2);
+        assert_eq!(v["conflicted"], 0);
+        assert_eq!(v["ahead"], 3);
+        assert_eq!(v["behind"], 0);
+        assert_eq!(v["worktree"], "wt");
+        assert_eq!(v["stale"], false);
+    }
+
+    #[test]
+    fn test_battery_json_contract() {
+        let charging = battery_json(Some((77, true)));
+        assert_eq!(charging["capacity"], 77);
+        assert_eq!(charging["status"], "Charging");
+
+        let discharging = battery_json(Some((12, false)));
+        assert_eq!(discharging["status"], "Discharging");
+
+        assert_eq!(battery_json(None), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn test_render_summary_serializes() {
+        let last = RenderSummary {
+            cwd: "/tmp".into(),
+            branch: String::new(),
+            dirty: false,
+            staged: 0,
+            unstaged: 0,
+            conflicted: 0,
+            ahead: 0,
+            behind: 0,
+            worktree: None,
+            stale: true,
+            cmd_duration_ms: 42,
+            exit_code: 0,
+        };
+        let v = serde_json::to_value(&last).unwrap();
+        assert_eq!(v["cmd_duration_ms"], 42);
+        assert_eq!(v["stale"], true);
     }
 }

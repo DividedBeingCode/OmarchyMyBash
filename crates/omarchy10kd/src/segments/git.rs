@@ -22,7 +22,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         }
         _ => {
             // "adaptive" — expanded when dirty, compact when clean
-            if is_dirty(git) {
+            if git.is_dirty() {
                 let expanded = format_expanded(git, ctx);
                 let compact = format_compact(git, ctx);
                 (expanded, Some(compact))
@@ -33,11 +33,19 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     };
 
     let show_stale = git.stale && ctx.config.git.stale_display;
+    let (content, compact) = if show_stale {
+        // Stale data (large repo / cold cache): honest placeholder instead of
+        // possibly wrong counts — `<stale_icon> branch` in muted style.
+        (format!("{} {}", ctx.config.git.stale_icon, git.branch), None)
+    } else {
+        (content, compact)
+    };
+
     let fg = if show_stale {
         ctx.palette.muted.fg_escape()
     } else if git.conflicted > 0 {
         ctx.palette.red.fg_escape()
-    } else if is_dirty(git) {
+    } else if git.is_dirty() {
         ctx.palette.yellow.fg_escape()
     } else {
         ctx.palette.green.fg_escape()
@@ -64,9 +72,6 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     })
 }
 
-fn is_dirty(git: &GitStatus) -> bool {
-    git.staged > 0 || git.unstaged > 0 || git.untracked > 0 || git.conflicted > 0
-}
 
 fn format_compact(git: &GitStatus, ctx: &SegmentContext<'_>) -> String {
     let mut parts = Vec::new();
@@ -99,7 +104,7 @@ fn format_compact(git: &GitStatus, ctx: &SegmentContext<'_>) -> String {
     // Dirty indicator
     if git.conflicted > 0 {
         parts.push(format!("×{}", git.conflicted));
-    } else if is_dirty(git) {
+    } else if git.is_dirty() {
         let mut dirty_parts = Vec::new();
         if git.staged > 0 {
             dirty_parts.push(format!("+{}", git.staged));
@@ -172,7 +177,7 @@ fn format_expanded(git: &GitStatus, ctx: &SegmentContext<'_>) -> String {
         parts.push(format!("≡{}", git.stashes));
     }
 
-    if !is_dirty(git) && git.ahead == 0 && git.behind == 0 && git.action.is_none() {
+    if !git.is_dirty() && git.ahead == 0 && git.behind == 0 && git.action.is_none() {
         parts.push("✓".into());
     }
 
@@ -240,8 +245,71 @@ mod tests {
             config: &ctx_config,
             palette: &palette,
             term_caps: &term_caps,
+            env: None,
         };
         let result = format_compact(&git, &ctx);
         assert!(result.contains("…"), "empty branch should show ellipsis, got: {result}");
+    }
+
+    #[test]
+    fn test_stale_icon_renders_branch_placeholder() {
+        let git = GitStatus {
+            is_repo: true,
+            branch: "main".into(),
+            stale: true,
+            ..Default::default()
+        };
+        let ctx_config = crate::config::Config::default();
+        let palette = crate::theme::ThemePalette::default();
+        let term_caps = crate::terminal::TermCaps::default();
+        let ctx = SegmentContext {
+            cwd: "/tmp",
+            home: "/home/test",
+            exit_code: 0,
+            cmd_duration_ms: 0,
+            cols: 80,
+            jobs: 0,
+            in_ssh: false,
+            git_status: &git,
+            config: &ctx_config,
+            palette: &palette,
+            term_caps: &term_caps,
+            env: None,
+        };
+        let seg = render(&ctx).expect("stale repo should still render the git segment");
+        assert!(
+            seg.content.starts_with("⟳ main"),
+            "stale segment should render '<stale_icon> branch', got: {}",
+            seg.content
+        );
+        assert_eq!(seg.fg, ctx.palette.muted.fg_escape());
+    }
+
+    #[test]
+    fn test_fresh_repo_has_no_stale_icon() {
+        let git = GitStatus {
+            is_repo: true,
+            branch: "main".into(),
+            ..Default::default()
+        };
+        let ctx_config = crate::config::Config::default();
+        let palette = crate::theme::ThemePalette::default();
+        let term_caps = crate::terminal::TermCaps::default();
+        let ctx = SegmentContext {
+            cwd: "/tmp",
+            home: "/home/test",
+            exit_code: 0,
+            cmd_duration_ms: 0,
+            cols: 80,
+            jobs: 0,
+            in_ssh: false,
+            git_status: &git,
+            config: &ctx_config,
+            palette: &palette,
+            term_caps: &term_caps,
+            env: None,
+        };
+        let seg = render(&ctx).expect("fresh repo should render the git segment");
+        assert!(!seg.content.contains('⟳'), "fresh segment must not carry the stale icon");
     }
 }

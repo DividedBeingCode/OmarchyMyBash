@@ -1,8 +1,3 @@
-// TODO(v0.4): Environment segments (python_env, toolchain, nix, k8s) are computed
-// daemon-side from the daemon's own environment, not the shell's. To fix, the shell
-// adapter needs to send an `env` object in the prompt request with the relevant
-// variables (VIRTUAL_ENV, CONDA_DEFAULT_ENV, NODE_VERSION, IN_NIX_SHELL,
-// KUBECONFIG, etc.). See bug-audit.md Finding 5.
 
 pub mod directory;
 pub mod git;
@@ -19,6 +14,7 @@ pub mod nix;
 pub mod k8s;
 pub mod time;
 pub mod battery;
+pub mod ai;
 
 use crate::config::Config;
 use crate::git::GitStatus;
@@ -38,6 +34,23 @@ pub struct SegmentContext<'a> {
     pub config: &'a Config,
     pub palette: &'a ThemePalette,
     pub term_caps: &'a TermCaps,
+    /// Environment values carried by the prompt request (protocol 0.4).
+    /// `None` for legacy clients and previews.
+    pub env: Option<&'a std::collections::HashMap<String, String>>,
+}
+
+impl SegmentContext<'_> {
+    /// Read an environment variable, preferring the env channel from the
+    /// prompt request over the daemon's own process environment. Falls back
+    /// to `std::env` when the channel is absent or doesn't carry `key`.
+    pub fn env_get(&self, key: &str) -> Option<String> {
+        if let Some(map) = self.env {
+            if let Some(v) = map.get(key) {
+                return Some(v.clone());
+            }
+        }
+        std::env::var(key).ok()
+    }
 }
 
 pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {
@@ -97,6 +110,12 @@ pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {
         }
     }
 
+    if ctx.config.segments.ai.enabled {
+        if let Some(seg) = ai::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
     if ctx.config.segments.command_duration.enabled {
         if let Some(seg) = command_duration::render(ctx) {
             segments.push(seg);
@@ -120,4 +139,75 @@ pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {
     }
 
     segments
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::git::GitStatus;
+    use crate::terminal::TermCaps;
+    use crate::theme::ThemePalette;
+    use std::collections::HashMap;
+
+    fn make_ctx<'a>(
+        env: Option<&'a HashMap<String, String>>,
+        config: &'a Config,
+        git: &'a GitStatus,
+    ) -> SegmentContext<'a> {
+        SegmentContext {
+            cwd: "/tmp",
+            home: "/home/u",
+            exit_code: 0,
+            cmd_duration_ms: 0,
+            cols: 120,
+            jobs: 0,
+            in_ssh: false,
+            git_status: git,
+            config,
+            palette: &THEME,
+            term_caps: &CAPS,
+            env,
+        }
+    }
+
+    static THEME: std::sync::LazyLock<ThemePalette> = std::sync::LazyLock::new(ThemePalette::default);
+    static CAPS: std::sync::LazyLock<TermCaps> = std::sync::LazyLock::new(TermCaps::detect);
+
+    #[test]
+    fn test_env_get_prefers_request_env() {
+        let mut map = HashMap::new();
+        map.insert("VIRTUAL_ENV".to_string(), "/somewhere/venv".to_string());
+        let config = Config::default();
+        let git = GitStatus::default();
+        let ctx = make_ctx(Some(&map), &config, &git);
+        assert_eq!(ctx.env_get("VIRTUAL_ENV").as_deref(), Some("/somewhere/venv"));
+    }
+
+    #[test]
+    fn test_env_get_falls_back_to_process_env() {
+        let map = HashMap::new();
+        let config = Config::default();
+        let git = GitStatus::default();
+        let ctx = make_ctx(Some(&map), &config, &git);
+        // Key missing from the request map: falls back to std::env (present
+        // in the test process since we set it).
+        unsafe { std::env::set_var("O10K_TEST_FALLBACK_VAR", "process-value") };
+        assert_eq!(
+            ctx.env_get("O10K_TEST_FALLBACK_VAR").as_deref(),
+            Some("process-value")
+        );
+    }
+
+    #[test]
+    fn test_env_get_without_channel_reads_process_env() {
+        let config = Config::default();
+        let git = GitStatus::default();
+        let ctx = make_ctx(None, &config, &git);
+        unsafe { std::env::set_var("O10K_TEST_NO_CHANNEL_VAR", "legacy-value") };
+        assert_eq!(
+            ctx.env_get("O10K_TEST_NO_CHANNEL_VAR").as_deref(),
+            Some("legacy-value")
+        );
+    }
 }

@@ -167,7 +167,7 @@ pub async fn benchmark_shell(
     Ok(())
 }
 
-async fn send_request(socket_path: &Path, request: &str) -> anyhow::Result<String> {
+pub(crate) async fn send_request(socket_path: &Path, request: &str) -> anyhow::Result<String> {
     let stream = UnixStream::connect(socket_path).await?;
     let (reader, mut writer) = stream.into_split();
 

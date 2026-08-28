@@ -47,11 +47,8 @@ repo_root_style = "bold"
 
 [git]
 enabled = true
-mode = "adaptive"           # hidden | compact | expanded | adaptive
 stale_display = true        # show stale (grey) state while refreshing
-max_threads = 4
-cache_ttl_ms = 5000         # git status cache lifetime in milliseconds
-branch_icon = "powerline"   # powerline | octicon | nerd | text | none
+stale_icon = "⟳"            # glyph prepended to the branch when git data is stale
 
 [segments.os]
 enabled = true
@@ -106,7 +103,23 @@ show_above = 100            # always show (set lower to hide when charging)
 threshold_warning = 30
 threshold_critical = 10
 
-[segments.notification]
+[segments.ai]
+enabled = true              # agent signal segment (Claude Code / Codex, env-detected)
+hide_below_cols = 60
+
+[notifications]
+enabled = true              # long-command desktop notifications
+threshold_ms = 10000        # notify for commands longer than this (ms); 0-disable emits threshold 0
+unfocused_only = false      # bash-side focus gating hint
+
+[statusline]
+context_warning_pct = 60    # context % at which the statusline turns yellow
+context_critical_pct = 85   # context % at which the statusline turns red
+
+[terminal.semantic_prompts]
+enabled = false             # OSC 133;C/D emission (adapter-gated; v0.4 default OFF)
+
+[segments.notification]    # DEPRECATED alias of [notifications]; kept for old configs
 enabled = true
 threshold_ms = 10000        # desktop notification for commands longer than this
 
@@ -122,3 +135,12 @@ enabled = true              # OSC 9;4 progress bar during command execution
 [daemon]
 socket = "auto"
 log_level = "warn"          # trace | debug | info | warn | error
+
+# ── Environment Channel (v0.4) ───────────────────────────
+# The bash adapter sends these variables in the prompt request's `env`
+# object; daemon segments read them instead of the daemon process env.
+# The default list is the frozen protocol 0.4 allowlist and must match the
+# adapter. Add CLAUDE_CODE_ENTRYPOINT / CODEX_* here to power the agent
+# signal segment.
+[env.watch]
+keys = ["VIRTUAL_ENV", "CONDA_DEFAULT_ENV", "MISE_NODE_VERSION", "MISE_PYTHON_VERSION", "MISE_RUBY_VERSION", "MISE_GO_VERSION", "MISE_RUST_VERSION", "IN_NIX_SHELL", "DISTROBOX_ENTER_PATH", "container", "KUBECONFIG", "DIRENV_DIR", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_HOME"]

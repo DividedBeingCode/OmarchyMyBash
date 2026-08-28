@@ -98,6 +98,58 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
     warn "Add this to your .bashrc:  export PATH=\"\${HOME}/.local/bin:\${PATH}\""
 fi
 
+# Step 2b: Claude Code statusline (merge, never overwrite)
+CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
+STATUSLINE_JSON='{"type":"command","command":"omarchy10k statusline"}'
+
+if [[ ! -d "${HOME}/.claude" ]]; then
+    warn "Claude Code not detected (~/.claude absent) — skipping statusLine setup."
+    warn "To enable later, merge into ~/.claude/settings.json:  \"statusLine\": ${STATUSLINE_JSON}"
+else
+    if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
+        printf '{\n  "statusLine": %s\n}\n' "$STATUSLINE_JSON" > "$CLAUDE_SETTINGS" \
+            && ok "Created Claude Code settings.json with statusLine" \
+            || warn "Could not write ${CLAUDE_SETTINGS}"
+    elif command -v jq &>/dev/null; then
+        if jq -e '.statusLine' "$CLAUDE_SETTINGS" &>/dev/null; then
+            if jq -e '.statusLine.command == "omarchy10k statusline"' "$CLAUDE_SETTINGS" &>/dev/null; then
+                ok "Claude Code statusLine already configured"
+            else
+                warn "Claude Code settings.json already has a different statusLine — left untouched"
+            fi
+        else
+            if jq --argjson sl "$STATUSLINE_JSON" '.statusLine = $sl' \
+                "$CLAUDE_SETTINGS" > "${CLAUDE_SETTINGS}.o10k.tmp" 2>/dev/null; then
+                cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.o10k.bak"
+                mv "${CLAUDE_SETTINGS}.o10k.tmp" "$CLAUDE_SETTINGS"
+                ok "Merged statusLine into Claude Code settings.json (backup: settings.json.o10k.bak)"
+            else
+                warn "settings.json is not valid JSON — left untouched"
+            fi
+        fi
+    else
+        # jq-less best-effort: only append when the file's outermost braces
+        # parse as a bare top-level object and statusLine is absent
+        if grep -q '"statusLine"' "$CLAUDE_SETTINGS"; then
+            ok "Claude Code settings.json already mentions statusLine — left untouched"
+        elif [[ "$(head -c 1 "$CLAUDE_SETTINGS" | tr -d '[:space:]')" == "{" \
+            && "$(tail -c 1 "$CLAUDE_SETTINGS" | tr -d '[:space:]')" == "}" ]]; then
+            cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.o10k.bak"
+            tmp="${CLAUDE_SETTINGS}.o10k.tmp"
+            {
+                printf '{\n  "statusLine": %s,' "$STATUSLINE_JSON"
+                command sed '1s/^[[:space:]]*{//' "$CLAUDE_SETTINGS"
+            } > "$tmp" 2>/dev/null \
+                && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$tmp" &>/dev/null \
+                && mv "$tmp" "$CLAUDE_SETTINGS" \
+                && ok "Merged statusLine into Claude Code settings.json (backup: settings.json.o10k.bak)" \
+                || { rm -f "$tmp"; warn "Could not merge statusLine safely — left untouched"; }
+        else
+            warn "settings.json format unrecognized — left untouched"
+        fi
+    fi
+fi
+
 # Step 3: Shell init (skip on update -- already configured)
 if [[ "$UPDATE_MODE" == false ]]; then
     info "Configuring shell..."

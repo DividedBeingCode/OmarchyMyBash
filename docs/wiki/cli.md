@@ -47,12 +47,17 @@ Runs as a persistent bridge coprocess between Bash and the daemon. Long-running 
 
 1. Reads JSON requests from stdin line-by-line
 2. Forwards each request to the daemon via Unix socket
-3. Extracts the `left` field from the JSON response
-4. Writes the prompt string to stdout terminated by a NUL byte (`0x00`)
+3. Extracts the response into FOUR NUL-terminated stdout fields:
+   `left\0right\0notify_threshold_ms\0transient\0`
+4. Relays `semantic_prompts`/`notify_unfocused_only` via a `<socket>.flags`
+   side-channel file (written only on change)
 
 Supports both JSON input and tab-separated `key=value` format (converted to JSON internally).
 
-**Reconnection:** Retries up to 3 times on socket errors. Falls back to the hardcoded PS1 if reconnection fails.
+3. Extracts the response into FOUR NUL-terminated stdout fields:
+   `left\0right\0notify_threshold_ms\0transient\0`
+4. Relays `semantic_prompts`/`notify_unfocused_only` via a `<socket>.flags`
+   side-channel file (written only on change)
 
 The Bash adapter starts this as a coprocess:
 
@@ -138,13 +143,56 @@ One-command upgrade path. Pulls latest source, rebuilds, replaces binaries, refr
 
 Running daemons auto-restart on the next prompt render via the Bash adapter's existing reconnection logic.
 
-### `omarchy10k debug`
+### `omarchy10k statusline`
 
-Sends `{"command":"status"}` to the daemon and prints the raw JSON response. Shows daemon PID, version, and status.
+Renders the Claude Code statusLine through the daemon with the active theme
+palette (1.2). Reads the full statusLine JSON payload from stdin (the exact
+documented Claude Code contract — no session-file access), wraps it as
+`{"type":"statusline","id":"cli-<pid>","payload":{...}}`, and prints the
+daemon's rendered `left` string raw.
+
+```
+~/.claude/settings.json:
+"statusLine": {"type": "command", "command": "omarchy10k statusline"}
+```
+
+| Condition | Behavior |
+|-----------|----------|
+| Daemon reachable, `status:"ok"` | Print daemon `left` (ANSI, no OSC 133) |
+| Daemon down / timeout (300 ms) / non-ok response | Builtin fallback render in pure Rust: bold model display name + context % colored by conventional thresholds (green < 70 %, yellow < 90 %, red ≥ 90 %) |
+| stdin is not a JSON object | stderr message, exit code 2 |
+
+The fallback tolerates Claude Code schema drift: context % is probed at
+`context_window`/`context` keys (`used_percent`/`used_pct`/`percentage`),
+falling back to token counts against a 200k window; absent signals are
+omitted. The whole daemon round trip is wrapped in a 300 ms timeout so the
+statusline can never hang Claude Code. Warm latency budget: < 50 ms.
+
+install.sh merges (never overwrites) the snippet into
+`~/.claude/settings.json` idempotently — an existing third-party `statusLine`
+is left untouched; ours is detected by its exact command string. A backup is
+written to `settings.json.o10k.bak` before the first merge, and a hint is
+printed when `~/.claude` is absent.
+
+### `omarchy10k intro`
+
+One-time themed welcome (3.3). Renders a rich simulated prompt through the
+daemon `preview` path, framed in a rounded box, followed by palette swatches
+(hex + truecolor blocks from the `palette` control message), a terminal
+capabilities line (TERM_PROGRAM/COLORTERM/BASH_VERSION), and the measured
+render round-trip latency.
+
+| Flag / Gate | Behavior |
+|-------------|----------|
+| `--force` | Render even if the marker file exists (still writes it) |
+| marker `${XDG_STATE_HOME:-$HOME/.local/state}/omarchy10k/intro_shown` | Suppresses render when present |
+| `O10K_NO_INTRO` | Hard gate — always silent (CI) |
+| daemon down | Exits silently; marker stays unwritten so the next shell retries |
+
+The marker is written only after a successful render. The Bash adapter calls
+`intro` in the background at init when the marker is absent (non-blocking).
 
 ### `omarchy10k parse-prompt` (hidden)
-
-Hidden subcommand used by the Bash adapter. Reads JSON from stdin, extracts the `left` field, prints it to stdout. Avoids requiring `jq` as a runtime dependency.
 
 ## Socket Path Resolution
 
@@ -177,6 +225,27 @@ Timed loop of prompt requests with percentile computation.
 ### `send_request(socket_path, request) -> String`
 
 Core transport: `UnixStream::connect` → write request + `\n` → read one line response.
+
+## Module: `statusline.rs`
+
+### `run(socket_path)`
+
+Reads the Claude Code statusLine JSON from stdin, sends
+`{"type":"statusline","id",...,"payload"}` to the daemon, prints the rendered
+`left`. Falls back to `fallback_render` (pure Rust, model + context % with
+threshold colors) on any daemon failure; the round trip is wrapped in a
+300 ms `tokio::time::timeout`. Non-JSON stdin exits with code 2.
+
+## Module: `intro.rs`
+
+### `run(socket_path, force)`
+
+First-run welcome: sends a `preview` request with rich simulated context
+(`~/projects/my-app`, `cmd_duration_ms: 2345`, `jobs: 1`), a `palette`
+control request, and renders a rounded frame + palette swatches + TermCaps
+line + measured latency. Writes the `intro_shown` marker only after a
+successful render. Respects `O10K_NO_INTRO` and the marker file; skips
+silently when the daemon is down.
 
 ## Module: `doctor.rs`
 

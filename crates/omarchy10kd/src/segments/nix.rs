@@ -7,7 +7,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
         return None;
     }
 
-    let shell_type = std::env::var("IN_NIX_SHELL").ok()?;
+    let shell_type = ctx.env_get("IN_NIX_SHELL")?;
     let label = match shell_type.as_str() {
         "pure" | "impure" => shell_type,
         _ => return None,

@@ -12,6 +12,11 @@ pub struct ResolvedStyle {
     pub right_cap_end: String,
     pub segment_order: &'static [&'static str],
     pub force_single_line: bool,
+    /// True powerline rendering: fill each segment with a background color.
+    pub filled: bool,
+    /// Rainbow flavor of `filled`: bg colors rotate accent/red/green/yellow/blue
+    /// instead of using each segment's own color.
+    pub rainbow: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +56,7 @@ const FRAME_ENABLED: FrameStyle = FrameStyle {
 
 const ALL_SEGMENTS: &[&str] = &[
     "os", "ssh", "container", "directory", "git", "python_env", "toolchain", "nix",
-    "k8s", "exit_status", "command_duration", "jobs", "time", "battery",
+    "ai", "k8s", "exit_status", "command_duration", "jobs", "time", "battery",
 ];
 
 const CLASSIC_SEGMENTS: &[&str] = &["ssh", "directory", "git", "exit_status"];
@@ -68,7 +73,11 @@ struct PresetDefaults {
     gap_char: Option<char>,
     segment_order: &'static [&'static str],
     force_single_line: bool,
+    filled: bool,
+    rainbow: bool,
 }
+
+const PLAIN: (bool, bool) = (false, false);
 
 fn preset_defaults(name: &str) -> PresetDefaults {
     match name {
@@ -79,6 +88,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: None,
             segment_order: ALL_SEGMENTS,
             force_single_line: false,
+            filled: true,
+            rainbow: false,
         },
         "rainbow" => PresetDefaults {
             left_separator: " \u{e0b0} ",
@@ -87,6 +98,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: None,
             segment_order: ALL_SEGMENTS,
             force_single_line: false,
+            filled: true,
+            rainbow: true,
         },
         "framed" => PresetDefaults {
             left_separator: " ",
@@ -95,6 +108,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: Some('\u{2500}'),
             segment_order: ALL_SEGMENTS,
             force_single_line: false,
+            filled: PLAIN.0,
+            rainbow: PLAIN.1,
         },
         "classic" => PresetDefaults {
             left_separator: " \u{2502} ",
@@ -103,6 +118,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: None,
             segment_order: CLASSIC_SEGMENTS,
             force_single_line: false,
+            filled: PLAIN.0,
+            rainbow: PLAIN.1,
         },
         "lean" => PresetDefaults {
             left_separator: " ",
@@ -111,6 +128,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: None,
             segment_order: ALL_SEGMENTS,
             force_single_line: false,
+            filled: PLAIN.0,
+            rainbow: PLAIN.1,
         },
         "dense" => PresetDefaults {
             left_separator: " ",
@@ -119,6 +138,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: None,
             segment_order: DENSE_SEGMENTS,
             force_single_line: true,
+            filled: PLAIN.0,
+            rainbow: PLAIN.1,
         },
         "minimal" => PresetDefaults {
             left_separator: " ",
@@ -127,6 +148,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: None,
             segment_order: MINIMAL_SEGMENTS,
             force_single_line: true,
+            filled: PLAIN.0,
+            rainbow: PLAIN.1,
         },
         "pure" => PresetDefaults {
             left_separator: " ",
@@ -135,6 +158,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: None,
             segment_order: PURE_SEGMENTS,
             force_single_line: false,
+            filled: PLAIN.0,
+            rainbow: PLAIN.1,
         },
         "slanted" => PresetDefaults {
             left_separator: " \u{e0bc} ",
@@ -143,6 +168,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: None,
             segment_order: ALL_SEGMENTS,
             force_single_line: false,
+            filled: PLAIN.0,
+            rainbow: PLAIN.1,
         },
         _ => PresetDefaults {
             left_separator: " ",
@@ -151,6 +178,8 @@ fn preset_defaults(name: &str) -> PresetDefaults {
             gap_char: None,
             segment_order: ALL_SEGMENTS,
             force_single_line: false,
+            filled: PLAIN.0,
+            rainbow: PLAIN.1,
         },
     }
 }
@@ -209,6 +238,8 @@ impl StyleResolver {
             right_cap_end,
             segment_order: defaults.segment_order,
             force_single_line: force_single,
+            filled: defaults.filled,
+            rainbow: defaults.rainbow,
         }
     }
 

@@ -4,6 +4,8 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 
 **v0.3** adds terminal capability detection (`TermCaps`), layout presets, git worktree support, instant prompt caching, live Quattro preview via the `preview` protocol message, theme color swatches via the `palette` control command, extended terminal integration (OSC 7/8/777, OSC 9;4 progress, DEC 2026 sync output, undercurl error styling), a one-script installer (`install.sh`), first-run diagnostics hints, notification threshold wiring from daemon config to bash, title format placeholder expansion (`{dir}`, `{user}`, `{host}`, `{branch}`), and TermCaps-gated OSC 8 hyperlinks.
 
+**v0.4** adds the env channel (live env-derived segments — python/nix/mise/k8s/agent now respond to `activate`, `mise use`, `nix develop`), real notifications routed through `omarchy-notification-send`, an enriched `status` ambient snapshot, transient prompt wiring via the bridge's 4-field NUL framing, stale-aware git placeholder, true powerline/rainbow background-fill rendering, the `omarchy10k statusline` subcommand for Claude Code, the agent-signal segment, optional OSC 133;C/D semantic prompt emission, Quattro plugin IPC (`omarchy-shell call community.omarchy10k <method>`), a service-kind connection hub, a session-picker overlay, ANSI-colored live panel preview, and the `omarchy10k intro` first-run render. Protocol version is now **0.4**.
+
 ## Wiki Pages
 
 | Page | Description |
@@ -14,12 +16,13 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 | [Bash Adapter](bash-adapter.md) | Shell integration: hook broker, daemon lifecycle, instant prompt cache, timing, ble.sh mode |
 | [Quattro Plugin](quattro.md) | Desktop Control Center: manifest, QML components, daemon IPC, live preview, theme swatches, config UI |
 | [Configuration](config.md) | Full config key reference with types, defaults, and valid values |
-| [Protocol](protocol.md) | Daemon IPC specification (protocol v0.3): NDJSON over Unix socket, prompt/preview/config/control messages |
+| [Protocol](protocol.md) | Daemon IPC specification (protocol v0.4): NDJSON over Unix socket, prompt/preview/config/control/statusline messages, env channel, enriched status |
 | [Theme Integration](theme.md) | Omarchy theme bridge: template, hook, palette loading, Palette API for Quattro swatches |
 | [Glossary](glossary.md) | Terms, concepts, environment variables, file paths (includes v0.3 terminal and API terms) |
 | [v0.3 Feature Intel](v03-feature-intel.md) | Research-backed feature catalog that informed v0.3: 30 features, compatibility matrix, priority tiers |
 | [Quattro QoL Intel](quattro-qol-intel.md) | Quality-of-life improvements for Quattro integration: live preview, bar intelligence, notifications |
 | [Bug Audit](bug-audit.md) | Correctness audit of v0.3.0: 20 findings ranked by severity, with reproductions and fix directions |
+| [v0.4 Feature Intel](v04-feature-intel.md) | Next-release feature catalog: foundations, headliners, Omarchy desktop integration, onboarding — plus a ratified kill list and watch list |
 
 > **Current known issues:** a full correctness audit of v0.3.0 is recorded in
 > [Bug Audit](bug-audit.md). Four findings are rated critical — unwrapped prompt
