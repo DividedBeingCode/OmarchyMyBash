@@ -771,7 +771,6 @@ Panel {
                 id: scrollArea
                 anchors.fill: parent
                 clip: true
-                Component.onCompleted: contentY = 1150 // TEMP-VERIFY
                 contentWidth: content.implicitWidth
                 contentHeight: content.implicitHeight
                 boundsBehavior: Flickable.StopAtBounds
@@ -958,7 +957,7 @@ Panel {
                    Row {
                        id: tabBar
                        spacing: Style.space(4)
-                       property int currentTab: 1
+                       property int currentTab: 0
 
                        Repeater {
                             model: ["Looks", "Style", "Behavior", "System"]
