@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Omarchy10k Integration Test Suite
 # Run: bash tests/integration_test.sh
 set -uo pipefail

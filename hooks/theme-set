@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Omarchy theme-set hook for Omarchy10k
 # Installed to: ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 # Called by Omarchy after a theme switch with theme name as $1
