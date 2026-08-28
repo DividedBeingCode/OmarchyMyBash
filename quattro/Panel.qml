@@ -957,7 +957,7 @@ Panel {
                    Row {
                        id: tabBar
                        spacing: Style.space(4)
-                       property int currentTab: 0
+                       property int currentTab: 1
 
                        Repeater {
                             model: ["Looks", "Style", "Behavior", "System"]
