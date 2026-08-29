@@ -6,13 +6,15 @@
 //! SECURITY: `.o10k.toml` comes from cloned repositories — untrusted input.
 //! `load_profile_patch` enforces a strict display-key allowlist; state keys
 //! (daemon, env, notifications, git, ...) are rejected with an error naming
-//! the offending key. Every profile failure is warn-once and swallowed: a
-//! broken repo profile must never fail the prompt.
+//! the offending key, as is enabling any exec-tier segment (see
+//! [`EXEC_SEGMENTS`] — those spawn a command in the repo's own directory,
+//! which is not a display choice). Every profile failure is warn-once and
+//! swallowed: a broken repo profile must never fail the prompt.
 use crate::config::Config;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context as _, Result};
@@ -22,9 +24,28 @@ use tracing::warn;
 pub const PROFILE_FILE: &str = ".o10k.toml";
 
 /// Top-level keys a project profile may set. Display/render keys only —
-/// `segments` sub-keys stay display-shaped (enabled flags, icons, glyph
-/// names resolved via the standard glyph catalog at render time).
+/// `segments` sub-keys stay display-shaped (icons, glyph names resolved via
+/// the standard glyph catalog at render time).
 const ALLOWED_KEYS: &[&str] = &["style", "prompt", "segments", "theme", "frame"];
+
+/// Segments whose render path spawns an external process. A profile may not
+/// touch their `enabled` flag.
+///
+/// SECURITY: these ship default-off, and turning one on makes the daemon run
+/// that binary with `current_dir` set to the repo on every prompt — with the
+/// repo's own `.terraform/`, kubeconfig fragments and the like in scope. A
+/// cloned repo deciding to execute `terraform`/`kubectl`/`gcloud`/`docker`
+/// on the user's machine is not a display choice, so it stays outside the
+/// display-key allowlist even though the rest of `[segments.*]` is inside it.
+const EXEC_SEGMENTS: &[&str] = &[
+    "kubectl_context",
+    "terraform_workspace",
+    "gcloud_project",
+    "docker_context",
+];
+
+/// The one key within an exec segment a profile may not set.
+const EXEC_GATE_KEY: &str = "enabled";
 
 #[derive(Clone)]
 struct CachedDetection {
@@ -205,6 +226,31 @@ pub fn load_profile_patch(path: &Path) -> Result<toml::Value> {
             );
         }
     }
+
+    // `segments` is an allowed top-level key, but it is not uniformly
+    // display-only: the exec-tier segments below turn into subprocess spawns
+    // in the repo's own directory. Enabling those is the one thing inside
+    // `[segments.*]` an untrusted repo may not do.
+    // Turning one *off* is harmless, so only an enable is refused: a repo
+    // may quiet the prompt, never make it execute something.
+    if let Some(segments) = patch_table.get("segments").and_then(|s| s.as_table()) {
+        for name in EXEC_SEGMENTS {
+            let enables = segments
+                .get(*name)
+                .and_then(|s| s.as_table())
+                .and_then(|t| t.get(EXEC_GATE_KEY))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if enables {
+                bail!(
+                    "project profiles may not enable `segments.{name}` — \
+                     that segment runs an external command in the repo directory, and \
+                     .o10k.toml comes from an untrusted repo"
+                );
+            }
+        }
+    }
+
     Ok(toml::Value::Table(patch_table.clone()))
 }
 
@@ -248,6 +294,114 @@ pub fn apply_profile(base: &Config, patch: &toml::Value) -> Result<Config> {
         }
     }
     Ok(doc.try_into()?)
+}
+
+/// Identity of a profile file: changing either field means the patch on disk
+/// may differ. Length is carried alongside the mtime because a same-second
+/// rewrite can leave the mtime unchanged on coarse-granularity filesystems.
+#[derive(Clone, PartialEq, Eq)]
+struct FileStamp {
+    mtime: Option<std::time::SystemTime>,
+    len: u64,
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some(FileStamp {
+        mtime: meta.modified().ok(),
+        len: meta.len(),
+    })
+}
+
+struct MergedProfile {
+    generation: u64,
+    stamp: FileStamp,
+    merged: Arc<Config>,
+}
+
+/// Memoized profile merges, keyed by profile file path. Bounded — a session
+/// visits few profiled repos.
+static MERGE_CACHE: LazyLock<Mutex<HashMap<PathBuf, MergedProfile>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const MAX_MERGE_ENTRIES: usize = 64;
+
+/// The effective config for a prompt in `cwd`: `base` with the project
+/// profile merged over it, or `None` when no profile applies.
+///
+/// This is the hot path — it runs on **every** render inside a profiled
+/// repo. Reading and parsing `.o10k.toml` and, far worse, round-tripping the
+/// entire config through TOML (`apply_profile` serializes the base config,
+/// merges, then deserializes it back) costs more than the rest of the render
+/// put together, against a project whose budget is 5 ms. So the merged
+/// result is memoized and only recomputed when the profile file changes on
+/// disk or the base config does — `generation` is [`DaemonState`]'s config
+/// counter, bumped on every reload and transient-Look apply.
+///
+/// A broken profile is warn-once and swallowed: the caller renders with the
+/// base config rather than failing the prompt.
+///
+/// [`DaemonState`]: crate::server::DaemonState
+pub fn effective_config_for(
+    base: &Config,
+    generation: u64,
+    cwd: &Path,
+    home: &Path,
+) -> Option<Arc<Config>> {
+    let dir = detect_profile(cwd, home)?;
+    let path = dir.join(PROFILE_FILE);
+    let stamp = file_stamp(&path)?;
+
+    let mut cache = MERGE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(entry) = cache.get(&path) {
+        if entry.generation == generation && entry.stamp == stamp {
+            return Some(Arc::clone(&entry.merged));
+        }
+    }
+
+    let patch = match load_profile_patch(&path) {
+        Ok(patch) => patch,
+        Err(e) => {
+            warn_once(&path, format!("ignoring project profile: {e}"));
+            return None;
+        }
+    };
+    if patch.as_table().is_some_and(|t| t.is_empty()) {
+        return None;
+    }
+    let merged = match apply_profile(base, &patch) {
+        Ok(config) => Arc::new(config),
+        Err(e) => {
+            warn_once(
+                &path,
+                format!("project profile merge failed, using base config: {e}"),
+            );
+            return None;
+        }
+    };
+
+    if cache.len() >= MAX_MERGE_ENTRIES {
+        cache.clear();
+    }
+    cache.insert(
+        path,
+        MergedProfile {
+            generation,
+            stamp,
+            merged: Arc::clone(&merged),
+        },
+    );
+    Some(merged)
+}
+
+/// Drop every memoized merge — used by tests that mutate profiles in place.
+#[cfg(test)]
+fn clear_merge_cache() {
+    MERGE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
 }
 
 fn warn_once(path: &Path, message: String) {
@@ -564,6 +718,111 @@ enabled = false
         // top level regardless of nesting.
         write_profile(&root, "[env]\nwatch = true\n");
         assert!(load_profile_patch(&root.join(PROFILE_FILE)).is_err());
+    }
+
+    /// `MERGE_CACHE` is process-global, so the two tests that clear it and
+    /// assert on cached identity must not interleave under the test
+    /// harness's thread pool.
+    static MERGE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn effective_config_memoizes_and_invalidates() {
+        let _serial = MERGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = temp_root("merge-cache");
+        let nowhere = root.join("nowhere-home");
+        clear_merge_cache();
+        write_profile(&root, "[style]\npreset = \"lean\"\n");
+
+        let base = Config::default();
+        let first = effective_config_for(&base, 0, &root, &nowhere).expect("profile applies");
+        assert_eq!(first.style.preset, "lean");
+
+        // Same file, same config generation → the very same Arc, i.e. the
+        // TOML round-trip did not run again.
+        let second = effective_config_for(&base, 0, &root, &nowhere).expect("cached");
+        assert!(Arc::ptr_eq(&first, &second), "warm merge must be memoized");
+
+        // A different base config generation must invalidate: otherwise a
+        // `reload_config` or a transient Look would keep rendering through
+        // the stale merge.
+        let third = effective_config_for(&base, 1, &root, &nowhere).expect("recomputed");
+        assert!(!Arc::ptr_eq(&first, &third), "generation bump must invalidate");
+
+        // ...and so must an edit to the profile file itself.
+        clear_detection_cache();
+        write_profile(&root, "[style]\npreset = \"classic\"\n");
+        let fourth = effective_config_for(&base, 1, &root, &nowhere).expect("reloaded");
+        assert_eq!(fourth.style.preset, "classic", "file edit must invalidate");
+    }
+
+    #[test]
+    fn effective_config_is_none_without_profile_or_on_error() {
+        let _serial = MERGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = temp_root("merge-cache-none");
+        let nowhere = root.join("nowhere-home");
+        clear_merge_cache();
+        let base = Config::default();
+
+        // No profile at all.
+        assert!(effective_config_for(&base, 0, &root, &nowhere).is_none());
+
+        // A rejected profile is swallowed — the caller renders with base.
+        clear_detection_cache();
+        write_profile(&root, "[daemon]\nlog_level = \"trace\"\n");
+        assert!(
+            effective_config_for(&base, 0, &root, &nowhere).is_none(),
+            "a rejected profile must not fail the prompt"
+        );
+    }
+
+    #[test]
+    fn rejects_enabling_exec_tier_segments() {
+        let root = temp_root("exec-segments");
+
+        // An untrusted repo must not be able to make the daemon spawn
+        // terraform/kubectl/gcloud/docker in the repo's own directory.
+        for name in EXEC_SEGMENTS {
+            write_profile(&root, &format!("[segments.{name}]\nenabled = true\n"));
+            let err = load_profile_patch(&root.join(PROFILE_FILE))
+                .expect_err("exec-tier enable must be rejected");
+            assert!(
+                err.to_string().contains(name),
+                "error must name `{name}`, got: {err}"
+            );
+
+            // Turning one off is harmless and stays allowed.
+            write_profile(&root, &format!("[segments.{name}]\nenabled = false\n"));
+            assert!(
+                load_profile_patch(&root.join(PROFILE_FILE)).is_ok(),
+                "disabling `{name}` must be allowed"
+            );
+
+            // Rejection applies inside the wrapper form too.
+            write_profile(&root, &format!("[patch.segments.{name}]\nenabled = true\n"));
+            assert!(
+                load_profile_patch(&root.join(PROFILE_FILE)).is_err(),
+                "wrapper form must be rejected for `{name}`"
+            );
+        }
+
+        // Display keys on the same segments stay allowed — the gate is the
+        // execution switch, not the whole table.
+        write_profile(&root, "[segments.kubectl_context]\nicon = \"K\"\n");
+        assert!(
+            load_profile_patch(&root.join(PROFILE_FILE)).is_ok(),
+            "icons on exec segments are still display keys"
+        );
+
+        // Non-exec segments keep their enable flag.
+        write_profile(&root, "[segments.git]\nenabled = false\n");
+        assert!(
+            load_profile_patch(&root.join(PROFILE_FILE)).is_ok(),
+            "non-exec segments may still be toggled"
+        );
     }
 
     #[test]

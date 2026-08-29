@@ -195,8 +195,21 @@ pub async fn install_from_repo(source: &str, root: &Path, force: bool) -> Result
     std::fs::create_dir_all(root)
         .with_context(|| format!("failed to create plugins dir {}", root.display()))?;
 
-    let staging = root.join(format!(".staging-add-{}", std::process::id()));
+    // Stage *beside* the plugins dir, not inside it. A staging directory
+    // under `root` is enumerated by the daemon's `load_plugins` (warning on
+    // every reload if it is left behind) and, because the plugins dir is
+    // watched recursively, the clone's own file traffic churns
+    // `reload_config` while it runs. The parent is the same filesystem, so
+    // the final rename stays atomic.
+    let staging_parent = root.parent().unwrap_or(root);
+    std::fs::create_dir_all(staging_parent).with_context(|| {
+        format!("failed to create staging parent {}", staging_parent.display())
+    })?;
+    let staging = staging_parent.join(format!(".o10k-staging-add-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
+    // Every error path below must clean up, not just the ones that bail
+    // explicitly — a leaked staging directory is otherwise permanent.
+    let mut staging_guard = StagingGuard(Some(staging.clone()));
 
     git(&["clone", "--depth", "1", "--", source, &staging.display().to_string()])
         .await
@@ -207,7 +220,6 @@ pub async fn install_from_repo(source: &str, root: &Path, force: bool) -> Result
     let manifest: CliManifest = toml::from_str(&manifest_text)
         .context("plugin.toml is not valid TOML")?;
     if !valid_plugin_name(&manifest.name) {
-        let _ = std::fs::remove_dir_all(&staging);
         bail!(
             "plugin.toml declares invalid plugin name {:?}: use only ASCII letters, digits, '-' and '_'",
             manifest.name
@@ -217,7 +229,6 @@ pub async fn install_from_repo(source: &str, root: &Path, force: bool) -> Result
     let target = root.join(&manifest.name);
     if target.exists() {
         if !force {
-            let _ = std::fs::remove_dir_all(&staging);
             bail!(
                 "plugin '{}' is already installed at {}; pass --force to replace it",
                 manifest.name,
@@ -228,10 +239,31 @@ pub async fn install_from_repo(source: &str, root: &Path, force: bool) -> Result
             .with_context(|| format!("failed to replace {}", target.display()))?;
     }
 
-    // Same filesystem (staging lives under root), so rename is atomic.
     std::fs::rename(&staging, &target)
         .with_context(|| format!("failed to move clone into {}", target.display()))?;
+    // The staging path is now the installed plugin — do not remove it.
+    staging_guard.disarm();
     Ok(manifest)
+}
+
+/// Removes the staging directory on drop unless disarmed, so that every
+/// early return from [`install_from_repo`] — including the `?` on a failed
+/// clone, an unreadable manifest, or a failed rename — cleans up after
+/// itself.
+struct StagingGuard(Option<PathBuf>);
+
+impl StagingGuard {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for StagingGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
 }
 
 async fn git(args: &[&str]) -> Result<String> {
@@ -392,10 +424,19 @@ pub fn read_enabled(config_file: &Path) -> Result<Vec<String>> {
 /// Write the full `[plugins].enabled` list locally (atomic tmp+rename).
 /// Local fallback when the daemon is unreachable.
 fn set_enabled_local(config_file: &Path, enabled: &[String]) -> Result<()> {
+    // Only a genuinely absent file may be treated as an empty document.
+    // Swallowing *every* read error here meant a permission problem, an
+    // EISDIR, or a transient I/O failure produced a document containing just
+    // `[plugins].enabled` — which the rename below then moved over the
+    // user's real config, destroying everything else in it.
     let mut doc: toml::Table = match std::fs::read_to_string(config_file) {
         Ok(text) => toml::from_str(&text)
             .with_context(|| format!("config.toml has syntax errors: {}", config_file.display()))?,
-        Err(_) => toml::Table::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("failed to read {}", config_file.display()))
+        }
     };
     let values: Vec<toml::Value> = enabled
         .iter()

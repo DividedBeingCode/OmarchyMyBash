@@ -146,6 +146,11 @@ pub struct DaemonState {
     pub socket_path: PathBuf,
     pub last_render: RwLock<Option<RenderSummary>>,
     pub started_at: std::time::Instant,
+    /// Bumped on every mutation of the in-memory `config`. Consumers that
+    /// memoize work derived from it (the project-profile merge cache) key on
+    /// this so a reload or transient Look invalidates them. Every write to
+    /// `config` must go through [`Self::set_config`].
+    config_generation: std::sync::atomic::AtomicU64,
 }
 
 impl DaemonState {
@@ -168,7 +173,24 @@ impl DaemonState {
             socket_path,
             last_render: RwLock::new(None),
             started_at: std::time::Instant::now(),
+            config_generation: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Current in-memory config generation — see [`Self::config_generation`].
+    pub fn config_generation(&self) -> u64 {
+        self.config_generation
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Replace the in-memory config and bump the generation. The single
+    /// choke point for config mutation: anything that writes `self.config`
+    /// directly would leave derived caches serving stale values.
+    pub async fn set_config(&self, new_config: Config) {
+        let mut config = self.config.write().await;
+        *config = new_config;
+        self.config_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub async fn reload_config(&self) -> anyhow::Result<()> {
@@ -181,8 +203,7 @@ impl DaemonState {
         ));
         *self.plugins.write().await = new_plugins;
         self.plugin_cache.invalidate_all().await;
-        let mut config = self.config.write().await;
-        *config = new_config;
+        self.set_config(new_config).await;
         info!("config reloaded");
         Ok(())
     }
@@ -398,9 +419,7 @@ async fn handle_control(
                             let current = state.config.read().await.clone();
                             match crate::looks::apply_transient(&current, &l.patch) {
                                 Ok(new_config) => {
-                                    let mut cfg = state.config.write().await;
-                                    *cfg = new_config;
-                                    drop(cfg);
+                                    state.set_config(new_config).await;
                                     state.reload_theme().await;
                                     write_response(writer, serde_json::json!({
                                         "type": "control", "status": "ok", "transient": true,
@@ -627,17 +646,17 @@ async fn handle_prompt(
     // Merge contract (Tier C project profiles): base config (with any
     // transient Look already applied in-memory) → project profile → …
     // A profile failure is warn-once and swallowed — never fails the prompt.
-    let profile_patch =
-        crate::profiles::profile_patch_for(&cwd, &crate::profiles::home_dir());
-    let profiled;
-    let config: &Config = match &profile_patch {
-        Some(patch) => {
-            profiled = crate::profiles::apply_profile(&base, patch).unwrap_or_else(|e| {
-                warn!("project profile merge failed, rendering with base config: {e}");
-                base.clone()
-            });
-            &profiled
-        }
+    // The merge is memoized on (profile file stamp, config generation); this
+    // runs on every render, and the TOML round-trip inside it is the most
+    // expensive thing on the path.
+    let profiled = crate::profiles::effective_config_for(
+        &base,
+        state.config_generation(),
+        &cwd,
+        &crate::profiles::home_dir(),
+    );
+    let config: &Config = match &profiled {
+        Some(merged) => merged,
         None => &base,
     };
     let home = std::env::var("HOME").unwrap_or_default();

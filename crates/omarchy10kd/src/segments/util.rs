@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Process-local TTL cache keyed by an arbitrary string (usually the cwd).
@@ -101,6 +101,11 @@ pub fn on_path(bin: &str) -> bool {
     })
 }
 
+/// How often the timeout loop re-checks a still-running child. Small enough
+/// that a fast command is not noticeably delayed, large enough that a full
+/// timeout budget costs a few hundred wakeups at most.
+const POLL_INTERVAL: Duration = Duration::from_millis(2);
+
 /// Run `bin args` synchronously, trimmed stdout on success, `None` on spawn
 /// failure, non-zero exit, or timeout. The child is killed on timeout so a
 /// hung CLI cannot stall the prompt renderer.
@@ -109,7 +114,7 @@ pub fn run_command(bin: &str, args: &[&str], timeout_ms: u64) -> Option<String> 
         return None;
     }
     use std::process::{Command, Stdio};
-    let child = Command::new(bin)
+    let mut child = Command::new(bin)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -117,16 +122,10 @@ pub fn run_command(bin: &str, args: &[&str], timeout_ms: u64) -> Option<String> 
         .spawn()
         .ok()?;
 
-    let mut child = Arc::new(Mutex::new(child));
-    let (done_tx, done_rx) = mpsc::channel::<()>();
-
-    // stdout reader: takes the pipe handle before the waiter thread locks
-    // the child, so both can proceed concurrently.
-    let mut stdout_pipe = child
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .stdout
-        .take();
+    // Drain stdout on a helper thread: a command that writes more than the
+    // pipe buffer blocks until someone reads, so reading only after the wait
+    // would deadlock a chatty child against its own timeout.
+    let mut stdout_pipe = child.stdout.take();
     let (out_tx, out_rx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         let mut buf = String::new();
@@ -136,21 +135,34 @@ pub fn run_command(bin: &str, args: &[&str], timeout_ms: u64) -> Option<String> 
         let _ = out_tx.send(buf);
     });
 
-    let waiter = child.clone();
-    std::thread::spawn(move || {
-        let mut guard = waiter.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _ = guard.wait();
-        let _ = done_tx.send(());
-    });
+    // The child stays owned by this thread and is polled with `try_wait`, so
+    // `kill` is always reachable. Parking it behind a mutex that a waiter
+    // thread holds across a blocking `wait()` makes the timeout
+    // unenforceable: the kill then blocks on that same mutex until the child
+    // exits on its own, which is exactly the stall this bound exists to
+    // prevent.
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    // Reap the zombie, then let the reader observe the pipe
+                    // close so its thread does not leak.
+                    let _ = child.wait();
+                    let _ = out_rx.recv_timeout(Duration::from_millis(250));
+                    return None;
+                }
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            Err(_) => return None,
+        }
+    };
 
-    let within = done_rx.recv_timeout(Duration::from_millis(timeout_ms));
-    if within.is_err() {
-        // Timed out: kill the child, then drain the reader so its thread
-        // does not leak blocked on a still-open pipe (kill closes it).
-        let _ = child
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .kill();
+    // A failing CLI often writes its error or usage text to stdout. Without
+    // this check that text renders verbatim as the segment value.
+    if !status.success() {
         let _ = out_rx.recv_timeout(Duration::from_millis(250));
         return None;
     }
@@ -198,7 +210,24 @@ mod tests {
 
     #[test]
     fn test_run_command_timeout_kills_child() {
+        let started = Instant::now();
         let out = run_command("sleep", &["5"], 200);
+        let elapsed = started.elapsed();
         assert!(out.is_none(), "sleep must be killed at the 200ms timeout");
+        // The bound must be enforced, not merely observed after the child
+        // exits on its own: a regression that makes `kill` unreachable still
+        // returns `None`, just five seconds late.
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "timeout must kill the child, not wait it out (took {elapsed:?})"
+        );
+    }
+
+    #[test]
+    fn test_run_command_rejects_nonzero_exit() {
+        // Writes to stdout *and* fails: the output must not be adopted as a
+        // segment value.
+        let out = run_command("sh", &["-c", "echo broken-context; exit 1"], 2000);
+        assert!(out.is_none(), "non-zero exit must not yield stdout");
     }
 }

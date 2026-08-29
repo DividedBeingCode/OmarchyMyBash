@@ -13,7 +13,14 @@ use unicode_width::UnicodeWidthStr;
 const PROJECT_TTL: Duration = Duration::from_secs(30);
 const CMD_TIMEOUT_MS: u64 = 1500;
 
-static PROJECT_CACHE: LazyLock<TtlCache<Option<String>>> = LazyLock::new(|| TtlCache::new(64));
+/// The active gcloud project is process-global, not per-directory, so the
+/// cache holds exactly one entry under a fixed key. Keying on the cwd made
+/// every first prompt in a new directory pay a fresh blocking spawn, and more
+/// than `max_entries` directories inside one TTL window evicted the cache
+/// into permanent misses.
+const CACHE_KEY: &str = "project";
+
+static PROJECT_CACHE: LazyLock<TtlCache<Option<String>>> = LazyLock::new(|| TtlCache::new(4));
 
 pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     if !ctx.config.segments.gcloud_project.enabled {
@@ -23,7 +30,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let project = match ctx.env_get("GOOGLE_CLOUD_PROJECT") {
         Some(p) if is_sane(&p) => p.trim().to_string(),
         _ => PROJECT_CACHE
-            .get_or(ctx.cwd, PROJECT_TTL, || {
+            .get_or(CACHE_KEY, PROJECT_TTL, || {
                 run_command("gcloud", &["config", "get-value", "project"], CMD_TIMEOUT_MS)
                     .filter(|v| is_sane(v))
             })?,

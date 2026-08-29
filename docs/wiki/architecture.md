@@ -422,7 +422,7 @@ All modules are private to the daemon binary (no `lib.rs`). This is intentional 
 
 ## Project Profiles (v0.4.1)
 
-Render merge order: base config → transient Look → **project profile** (`.o10k.toml`, display-keys allowlisted: style/prompt/segments/theme/frame; `.git`-boundary-stopped detection; 30s TTL / 512-entry cache) → the Looks Studio's ephemeral `preview.patch` override (config_set-shaped; last layer wins, never persisted). `theme.source = "terminal"` resolves the palette from the rendered ghostty palette file (accent=4, muted=8, red..cyan=1–6, orange=11) with default fallback. The configure wizard gained context previews, per-segment toggles, and three finish paths (apply / Look / profile).
+Render merge order: base config → transient Look → **project profile** (`.o10k.toml`, display-keys allowlisted: style/prompt/segments/theme/frame, minus the exec-tier segments' `enabled` flag — an untrusted repo may not make the daemon spawn `kubectl`/`terraform`/`gcloud`/`docker` in its own directory; `.git`-boundary-stopped detection; 30s TTL / 512-entry detection cache, plus a 64-entry cache of the *merged* config keyed on the profile's mtime+length and the daemon's config generation, since the merge is a full TOML round-trip of the whole config on every render) → the Looks Studio's ephemeral `preview.patch` override (config_set-shaped; last layer wins, never persisted). `theme.source = "terminal"` resolves the palette from the rendered ghostty palette file (accent=4, muted=8, red..cyan=1–6, orange=11) with default fallback. The configure wizard gained context previews, per-segment toggles, and three finish paths (apply / Look / profile).
 
 ## Plugin Economy (v0.4.0 Tier D)
 

@@ -64,20 +64,36 @@ fn is_executable(p: &Path) -> bool {
 fn run_hook_dir(event: &str, args: &[String], hook_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let dir = hook_root.join(format!("{event}.d"));
     let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("omarchy10k: no hooks installed for event '{event}' ({})", dir.display());
-            return Ok(Vec::new());
-        }
+        Ok(e) => Some(e),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => return Err(anyhow::anyhow!("cannot read {}: {err}", dir.display())),
     };
 
     let mut hooks: Vec<PathBuf> = entries
+        .into_iter()
+        .flatten()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| is_executable(p))
         .collect();
     hooks.sort();
+
+    // Omarchy's own runner executes a flat `hooks/<event>` file before the
+    // `<event>.d/` directory. Mirroring that ordering keeps this fallback
+    // behaviourally identical to `omarchy-hook`, so a user script installed
+    // the flat way is not silently skipped when the dispatcher is absent.
+    let flat = hook_root.join(event);
+    if is_executable(&flat) {
+        hooks.insert(0, flat);
+    }
+
+    if hooks.is_empty() {
+        eprintln!(
+            "omarchy10k: no hooks installed for event '{event}' ({})",
+            dir.display()
+        );
+        return Ok(Vec::new());
+    }
 
     let mut executed = Vec::new();
     for hook in hooks {

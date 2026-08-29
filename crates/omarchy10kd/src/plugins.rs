@@ -254,7 +254,10 @@ pub fn plugins_dir_for(config_dir: &Path) -> PathBuf {
 
 #[derive(Debug, Clone)]
 struct CachedOutput {
-    value: String,
+    /// `None` records a *negative* result — the command failed, timed out,
+    /// or produced nothing. Caching that alongside successes is what keeps a
+    /// broken plugin from re-forking on every single prompt.
+    value: Option<String>,
     computed_at: Instant,
 }
 
@@ -274,20 +277,22 @@ impl PluginCache {
         Self::default()
     }
 
-    /// Fresh entry → `Some(value)` immediately. Stale entry → recompute in
-    /// the background and return the stale value (the `git_stale` trade:
+    /// Fresh entry → its value immediately, **including a cached negative**
+    /// (no reschedule: that is what bounds a failing command to one run per
+    /// TTL rather than one per prompt). Stale entry → recompute in the
+    /// background and return the stale value (the `git_stale` trade:
     /// blank-on-first-appearance in a directory, correct after).
     /// Missing → schedule and return `None`.
     pub async fn get(&self, key: (String, PathBuf), ttl: Duration, cwd: PathBuf, command: String) -> Option<String> {
         let cache = self.cache.read().await;
         if let Some(entry) = cache.get(&key) {
             if entry.computed_at.elapsed() < ttl {
-                return Some(entry.value.clone());
+                return entry.value.clone();
             }
             let stale = entry.value.clone();
             drop(cache);
             self.schedule(key, ttl, cwd, command);
-            return Some(stale);
+            return stale;
         }
         drop(cache);
         self.schedule(key, ttl, cwd, command);
@@ -312,15 +317,17 @@ impl PluginCache {
             let output = run_command(&cwd, &command).await;
 
             if generation.load(std::sync::atomic::Ordering::SeqCst) == gen_at_start {
-                if let Some(value) = output {
-                    cache.write().await.insert(
-                        key.clone(),
-                        CachedOutput { value, computed_at: Instant::now() },
-                    );
-                }
+                // Record the outcome either way. Writing only on success
+                // left a failing command permanently absent from the cache,
+                // so every subsequent prompt saw a miss and scheduled again
+                // — one subprocess per prompt, forever, with no backoff
+                // (`in_flight` only dedupes *concurrent* runs). A cached
+                // negative retries once per TTL instead.
+                cache.write().await.insert(
+                    key.clone(),
+                    CachedOutput { value: output, computed_at: Instant::now() },
+                );
             }
-            // A failed/empty command keeps any previous entry in place (it
-            // will simply age out of its TTL) and stays absent otherwise.
 
             // Bound memory: evict entries that are well past their TTL.
             {

@@ -191,9 +191,9 @@ The marker is written only after a successful render. The Bash adapter calls
 ### `omarchy10k configure`
 
 Interactive setup wizard (full-screen alt-buffer TUI via crossterm). One
-question per screen — style preset, separators, frame mode, icons, and
-one-line vs two-line prompt — each with a **live prompt preview rendered by
-the real daemon renderer**:
+question per screen — style preset, separators, one-line vs two-line prompt,
+frame mode, transient prompt, prompt character, and OS icon — each with a
+**live prompt preview rendered by the real daemon renderer**:
 
 - Reuses a live daemon if a probe `preview` request succeeds (700 ms timeout, sockets scanned in sorted order)
 - Otherwise spawns a transient `omarchy10kd` next to the CLI binary with `O10K_PARENT_PID=<wizard pid>`, which dies with the wizard
@@ -202,6 +202,16 @@ the real daemon renderer**:
 On completion the chosen keys are written to `~/.config/omarchy10k/config.toml` (any existing file is backed up first); the daemon's fs watcher picks the change up immediately — no restart needed.
 
 **v0.4.1 depth additions**: new steps after appearance — context preview (cycle Clean / Failed / Dirty repo / SSH with live daemon previews), per-segment enable toggles (arrows + space, live preview via the patch payload), and three finish paths: apply now (config.toml), save as Look (config_set on the looks table), or save as project profile (`.o10k.toml` in cwd). Every wizard preview carries a config_set-shaped patch so prompt char, transient, OS icon, and segment toggles render live.
+
+Wizard invariants worth keeping (each was broken once and is now covered by a unit test):
+
+| Invariant | Why |
+|-----------|-----|
+| Segment toggles write the config path that actually gates the segment | `git` and `directory` are **top-level** tables and `python_env` is spelled `segments.python`. `SegmentsConfig` has no `deny_unknown_fields`, so `segments.git.enabled` deserialized into nothing and those three toggles were silent no-ops |
+| All three finish paths serialize from one source (`full_patch_value`) | `render_config` used to hand-write only style/separators/frame/prompt/character, so the *default* finish path discarded every segment toggle and the OS icon |
+| Segment defaults mirror the daemon's `Config::default()` | Pre-checking everything turned on `k8s`/`time`/`battery`/`load` and the whole default-off Tier D catalog — including four segments that spawn a subprocess per TTL window |
+| The project-profile path strips exec-tier `enabled` flags | The daemon rejects such a profile *wholesale*, which would silently discard every other choice in it |
+| `q` quits, and the prompt-character step runs | Both regressed to dead code: nothing produced `Key::Quit` while every screen advertised "[q] quit", and `step_prompt_char` had been dropped from the step chain, pinning the glyph to `chevron` |
 
 
 ### `omarchy10k update`
@@ -271,7 +281,7 @@ omarchy10k hook-event post-update
 Two delivery paths, tried in order (hook_event.rs):
 
 1. **`omarchy-hook <event> [args…]`** — Omarchy's own dispatcher, when present on `PATH`. It fans out to every registered `<event>.d/` consumer and handles logging itself. Its exit code is propagated (non-zero → CLI error).
-2. **Fallback** — run every executable in `~/.config/omarchy/hooks/<event>.d/` directly with the same arguments (hook root honors `XDG_CONFIG_HOME`). Individual hook failures are logged to stderr but do not abort the remaining hooks — a desktop event must never be dropped because one consumer is broken. Non-executable files are ignored.
+2. **Fallback** — run the flat `~/.config/omarchy/hooks/<event>` file first (if executable), then every executable in `~/.config/omarchy/hooks/<event>.d/`, all with the same arguments (hook root honors `XDG_CONFIG_HOME`). The flat-file-then-directory ordering mirrors Omarchy's own runner, so a hook installed the flat way is not silently skipped when `omarchy-hook` is absent. Individual hook failures are logged to stderr but do not abort the remaining hooks — a desktop event must never be dropped because one consumer is broken. Non-executable files are ignored.
 
 ### `omarchy10k parse-prompt` (hidden)
 
@@ -301,7 +311,7 @@ omarchy10k layer --json     # machine-readable claim table
 
 ## `plugin`
 
-Segment-plugin economy (v0.4.1). Plugins live in `~/.config/omarchy10k/plugins/<name>/` with a `plugin.toml` (name, description, version, author, [[segments]] with tier env|command). `plugin add <git-url>` shallow-clones (https/git/git@ remotes only — local paths refused), installs DISABLED, and prints what it adds; `plugin list`; `plugin enable|disable <name>` (config `[plugins].enabled`, daemon registry reloads live); `plugin remove` (refuses while enabled); `plugin update` (git pull + commit summary). Enabled plugin segments join the render pipeline as `plugin.<plugin>.<segment>`.
+Segment-plugin economy (v0.4.1). Plugins live in `~/.config/omarchy10k/plugins/<name>/` with a `plugin.toml` (name, description, version, author, [[segments]] with tier env|command). `plugin add <git-url>` shallow-clones (https/git/git@ remotes only — local paths refused), installs DISABLED, and prints what it adds. The clone is staged *beside* the plugins directory, not inside it, and removed by a drop guard on every error path — a staging dir under the plugins root is enumerated by the daemon's `load_plugins` (warned about on every reload if leaked) and, since that directory is watched recursively, the clone's own file traffic churns `reload_config` while it runs; `plugin list`; `plugin enable|disable <name>` (config `[plugins].enabled`, daemon registry reloads live); `plugin remove` (refuses while enabled); `plugin update` (git pull + commit summary). Enabled plugin segments join the render pipeline as `plugin.<plugin>.<segment>`.
 
 Convert a starship.toml into an o10k Look: `omarchy10k migrate <starship.toml> [--yes]`. Dry-run by default — prints the mapping table (directory, git, cmd_duration, character, time, battery, jobs, aws, gcloud, kubernetes, terraform, package, docker_context, hostname/username→ssh, python/conda→python_env, nodejs/rust/golang/ruby/java→toolchain; collapsed rows like git_branch+git_status→git) and an honest unmapped list ($fill, $memory_usage, $custom…). `--yes` saves Look `migrated-starship` via the daemon (local atomic fallback). Style/symbol formatting inside starship modules is not translated — segments land with o10k defaults.
 

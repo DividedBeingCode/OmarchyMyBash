@@ -179,7 +179,18 @@ async fn run_watchers(
         }
         // Plugin registry: watch plugins/ so drop-in add/update/remove and
         // manifest edits trigger a registry reload like a config change.
+        //
+        // Create it if absent rather than skipping the watch. `plugin add`
+        // creates the directory on first use, and a watch can only be
+        // registered on a path that exists — so skipping here left a daemon
+        // that started before the first install with no plugins watch for
+        // the rest of its life (the non-recursive config-dir watch sees the
+        // directory appear but cannot arm a watch on it). An empty
+        // directory inside the daemon's own config dir is harmless.
         let plugins_dir = plugins::plugins_dir_for(config_dir);
+        if let Err(e) = std::fs::create_dir_all(&plugins_dir) {
+            warn!("cannot create plugins dir {}: {e}", plugins_dir.display());
+        }
         if plugins_dir.exists() {
             watcher.watch(&plugins_dir, notify::RecursiveMode::Recursive)?;
             info!("watching plugins dir: {}", plugins_dir.display());

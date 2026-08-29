@@ -12,15 +12,22 @@ use unicode_width::UnicodeWidthStr;
 const CONTEXT_TTL: Duration = Duration::from_secs(15);
 const CMD_TIMEOUT_MS: u64 = 500;
 
-static CONTEXT_CACHE: LazyLock<TtlCache<Option<String>>> = LazyLock::new(|| TtlCache::new(64));
+static CONTEXT_CACHE: LazyLock<TtlCache<Option<String>>> = LazyLock::new(|| TtlCache::new(8));
 
 pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     if !ctx.config.segments.kubectl_context.enabled {
         return None;
     }
 
+    // The current context is not a property of the cwd — it depends only on
+    // the active kubeconfig. Keying on the cwd made every first prompt in a
+    // new directory pay a fresh blocking spawn, and more than `max_entries`
+    // directories inside one TTL window evicted the cache into permanent
+    // misses. `KUBECONFIG` rides the env channel and can change mid-session,
+    // so it is the key.
+    let cache_key = ctx.env_get("KUBECONFIG").unwrap_or_default();
     let context = CONTEXT_CACHE
-        .get_or(ctx.cwd, CONTEXT_TTL, || {
+        .get_or(&cache_key, CONTEXT_TTL, || {
             run_command("kubectl", &["config", "current-context"], CMD_TIMEOUT_MS)
         })?;
     if context.is_empty() {

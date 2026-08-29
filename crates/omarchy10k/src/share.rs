@@ -383,11 +383,12 @@ async fn fetch_bundle(source: &str) -> Result<String> {
 /// Replace `[looks.<name>]` in the config file (exact table replacement,
 /// atomic tmp+rename). Local fallback when the daemon is unreachable.
 pub(crate) fn write_look_local(config_path: &Path, name: &str, entry: &toml::Table) -> Result<()> {
-    let mut doc = match std::fs::read_to_string(config_path) {
-        Ok(text) => toml::from_str::<toml::Table>(&text)
-            .with_context(|| format!("config.toml has syntax errors: {}", config_path.display()))?,
-        Err(_) => toml::Table::new(),
-    };
+    // Only a genuinely absent file may be treated as an empty document.
+    // Swallowing *every* read error here meant a permission problem, an
+    // EISDIR, or a transient I/O failure produced a document containing just
+    // this one entry — which the rename below then moved over the user's
+    // real config, destroying everything else in it.
+    let mut doc = load_config_doc(config_path)?.unwrap_or_default();
     let looks = doc
         .entry("looks")
         .or_insert(toml::Value::Table(toml::Table::new()));

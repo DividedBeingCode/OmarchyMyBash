@@ -12,7 +12,14 @@ use unicode_width::UnicodeWidthStr;
 const CONTEXT_TTL: Duration = Duration::from_secs(15);
 const CMD_TIMEOUT_MS: u64 = 1000;
 
-static CONTEXT_CACHE: LazyLock<TtlCache<Option<String>>> = LazyLock::new(|| TtlCache::new(64));
+/// The active docker context is process-global, not per-directory, so the
+/// cache holds exactly one entry under a fixed key. Keying on the cwd made
+/// every first prompt in a new directory pay a fresh blocking spawn, and more
+/// than `max_entries` directories inside one TTL window evicted the cache
+/// into permanent misses.
+const CACHE_KEY: &str = "context";
+
+static CONTEXT_CACHE: LazyLock<TtlCache<Option<String>>> = LazyLock::new(|| TtlCache::new(4));
 
 pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     if !ctx.config.segments.docker_context.enabled {
@@ -22,7 +29,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let target = match ctx.env_get("DOCKER_HOST") {
         Some(host) if !host.trim().is_empty() => host_shortname(&host),
         _ => CONTEXT_CACHE
-            .get_or(ctx.cwd, CONTEXT_TTL, || {
+            .get_or(CACHE_KEY, CONTEXT_TTL, || {
                 run_command("docker", &["context", "show"], CMD_TIMEOUT_MS)
             })?,
     };

@@ -43,7 +43,10 @@ impl Default for Choices {
             transient: true,
             prompt_char: "chevron",
             os_icon: "auto",
-            segments: WIZARD_SEGMENTS.iter().map(|s| (*s, true)).collect(),
+            segments: WIZARD_SEGMENTS
+                .iter()
+                .map(|s| (*s, WIZARD_SEGMENTS_DEFAULT_ON.contains(s)))
+                .collect(),
         }
     }
 }
@@ -62,6 +65,7 @@ pub async fn run() -> Result<()> {
                 || !step_height(&daemon, &mut c).await?
                 || !step_frame(&daemon, &mut c).await?
                 || !step_transient(&daemon, &mut c).await?
+                || !step_prompt_char(&daemon, &mut c).await?
                 || !step_os_icon(&daemon, &mut c).await?
                 || !step_contexts(&daemon, &mut c).await?
                 || !step_segments(&daemon, &mut c).await?
@@ -269,18 +273,45 @@ fn choices_patch(c: &Choices) -> serde_json::Value {
             "success": char_glyph, "error": char_glyph, "transient": char_glyph,
         }),
     );
+    let mut root = serde_json::Map::new();
+
     for (name, enabled) in &c.segments {
-        let mut entry = serde_json::Map::new();
-        entry.insert("enabled".into(), serde_json::json!(enabled));
-        if *name == "os" {
-            entry.insert("icon".into(), serde_json::json!(c.os_icon));
+        match *name {
+            // NOT under `[segments]` — `git` and `directory` are top-level
+            // config tables. Writing `segments.git.enabled` deserialized
+            // into nothing at all (`SegmentsConfig` has no
+            // `deny_unknown_fields`), so these two toggles silently did
+            // nothing to the preview or the saved config.
+            "git" | "directory" => {
+                root.entry((*name).to_string())
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()
+                    .expect("just inserted an object")
+                    .insert("enabled".into(), serde_json::json!(enabled));
+            }
+            other => {
+                // `python_env` is the wizard's display name; the config
+                // field is `segments.python`.
+                let key = if other == "python_env" { "python" } else { other };
+                let entry = segments
+                    .entry(key.to_string())
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()
+                    .expect("just inserted an object");
+                entry.insert("enabled".into(), serde_json::json!(enabled));
+                if key == "os" {
+                    entry.insert("icon".into(), serde_json::json!(c.os_icon));
+                }
+            }
         }
-        segments.insert((*name).into(), serde_json::Value::Object(entry));
     }
-    serde_json::json!({
-        "prompt": { "transient": c.transient },
-        "segments": segments,
-    })
+
+    root.insert(
+        "prompt".into(),
+        serde_json::json!({ "transient": c.transient }),
+    );
+    root.insert("segments".into(), serde_json::Value::Object(segments));
+    serde_json::Value::Object(root)
 }
 
 fn prompt_glyph(key: &str) -> &'static str {
@@ -458,6 +489,10 @@ async fn read_key() -> Result<Key> {
                 }
                 return Ok(match k.code {
                     KeyCode::Char('r') | KeyCode::Char('R') => Key::Restart,
+                    // Every screen prints "[q] quit"; without this arm all
+                    // five `Key::Quit` handlers were dead code and the key
+                    // did nothing.
+                    KeyCode::Char('q') | KeyCode::Char('Q') => Key::Quit,
                     KeyCode::Char('b') | KeyCode::Char('B') => Key::Back,
                     KeyCode::Char(' ') => Key::Space,
                     KeyCode::Enter => Key::Enter,
@@ -527,6 +562,29 @@ const WIZARD_SEGMENTS: &[&str] = &[
     "exit_status", "command_duration", "jobs", "time", "battery", "load",
     "package_version", "dir_writable", "aws_profile", "docker_context",
     "kubectl_context", "terraform_workspace", "vpn", "gcloud_project",
+];
+
+/// Segments the wizard pre-checks, mirroring the daemon's `Config::default()`
+/// (`crates/omarchy10kd/src/config.rs`).
+///
+/// Pre-checking *everything* was wrong: `k8s`, `time`, `battery`, `load` and
+/// the whole Tier D catalog ship disabled on purpose ("upgrading users see
+/// zero behavior change"), and four of the Tier D segments spawn a
+/// subprocess per TTL window. A wizard run that saved its answers would
+/// silently switch all of that on.
+const WIZARD_SEGMENTS_DEFAULT_ON: &[&str] = &[
+    "os", "ssh", "container", "directory", "git", "python_env", "toolchain", "nix", "ai",
+    "exit_status", "command_duration", "jobs",
+];
+
+/// Segments whose render path spawns an external command. A project profile
+/// may not enable these (the daemon's `profiles.rs` rejects a `.o10k.toml`
+/// that tries), so the profile writer drops them.
+const EXEC_SEGMENTS: &[&str] = &[
+    "kubectl_context",
+    "terraform_workspace",
+    "gcloud_project",
+    "docker_context",
 ];
 
 async fn step_style(daemon: &DaemonHandle, c: &mut Choices) -> Result<bool> {
@@ -892,28 +950,20 @@ fn config_path() -> Result<PathBuf> {
     Ok(base.join("omarchy10k").join("config.toml"))
 }
 
-fn render_config(c: &Choices) -> String {
-    let char_glyph = prompt_glyph(c.prompt_char);
-    let mut s = String::new();
-    s.push_str("# Generated by `omarchy10k configure`\n");
-    s.push_str("[style]\n");
-    s.push_str(&format!("preset = \"{}\"\n\n", c.preset));
-    s.push_str("[style.separators]\n");
-    s.push_str(&format!("left = \"{}\"\n", c.separator));
-    s.push_str(&format!("right = \"{}\"\n\n", c.separator));
-    s.push_str("[style.frame]\n");
-    s.push_str(&format!("enabled = {}\n", c.frame != "none"));
-    if c.frame != "none" {
-        s.push_str(&format!("gap_char = \"{}\"\n", c.gap_char));
-    }
-    s.push_str("\n[prompt]\n");
-    s.push_str(&format!("newline = {}\n", c.newline));
-    s.push_str(&format!("transient = {}\n\n", c.transient));
-    s.push_str("[segments.character]\n");
-    s.push_str(&format!("success = \"{}\"\n", char_glyph));
-    s.push_str(&format!("error = \"{}\"\n", char_glyph));
-    s.push_str(&format!("transient = \"{}\"\n", char_glyph));
-    s
+/// The wizard answer as config.toml text.
+///
+/// Serialized from [`full_patch_value`] rather than hand-written section by
+/// section. The hand-written version emitted only style/separators/frame/
+/// prompt/character, so "save to config.toml" — the *default* finish path —
+/// silently discarded every segment toggle and the OS icon the user had just
+/// chosen; only the Look and profile paths kept them. Sharing one source
+/// makes the three finish paths agree by construction.
+fn render_config(c: &Choices) -> Result<String> {
+    let table = toml::Value::try_from(full_patch_value(c))
+        .context("wizard answers are not TOML-representable")?;
+    let mut s = String::from("# Generated by `omarchy10k configure`\n");
+    s.push_str(&toml::to_string(&table).context("wizard answers failed to serialize as TOML")?);
+    Ok(s)
 }
 
 fn write_config(c: &Choices) -> Result<PathBuf> {
@@ -924,7 +974,7 @@ fn write_config(c: &Choices) -> Result<PathBuf> {
     if path.exists() {
         std::fs::copy(&path, path.with_extension("toml.bak"))?;
     }
-    std::fs::write(&path, render_config(c))?;
+    std::fs::write(&path, render_config(c)?)?;
     Ok(path)
 }
 
@@ -937,20 +987,23 @@ fn full_patch_value(c: &Choices) -> serde_json::Value {
     } else {
         serde_json::json!({ "enabled": true, "gap_char": c.gap_char })
     };
-    let mut segments = choices_patch(c)["segments"].as_object().cloned().unwrap_or_default();
-    segments.insert("character".into(), {
-        let g = prompt_glyph(c.prompt_char);
-        serde_json::json!({ "success": g, "error": g, "transient": g })
-    });
-    serde_json::json!({
-        "style": {
+    // Build on choices_patch so the two never drift: it already carries the
+    // segment toggles (at their real config paths), the character glyphs and
+    // the OS icon.
+    let mut root = choices_patch(c).as_object().cloned().unwrap_or_default();
+    root.insert(
+        "style".into(),
+        serde_json::json!({
             "preset": c.preset,
             "separators": { "left": c.separator, "right": c.separator },
             "frame": frame,
-        },
-        "prompt": { "newline": c.newline, "transient": c.transient },
-        "segments": segments,
-    })
+        }),
+    );
+    root.insert(
+        "prompt".into(),
+        serde_json::json!({ "newline": c.newline, "transient": c.transient }),
+    );
+    serde_json::Value::Object(root)
 }
 
 /// Serializes the wizard answer as a bare `config_set`-shaped patch table —
@@ -964,8 +1017,28 @@ fn profile_toml(patch: &serde_json::Value) -> Result<String> {
 
 fn write_profile_toml(c: &Choices) -> Result<PathBuf> {
     let path = std::env::current_dir()?.join(".o10k.toml");
-    std::fs::write(&path, profile_toml(&full_patch_value(c))?)?;
+    std::fs::write(&path, profile_toml(&profile_patch_value(c))?)?;
     Ok(path)
+}
+
+/// [`full_patch_value`] minus the keys a project profile may not carry.
+///
+/// `.o10k.toml` is untrusted input to the daemon, which rejects a profile
+/// that enables an exec-tier segment — and rejects the *whole* profile, so
+/// writing one here would silently disable everything else the user chose.
+fn profile_patch_value(c: &Choices) -> serde_json::Value {
+    let mut root = full_patch_value(c).as_object().cloned().unwrap_or_default();
+    if let Some(segments) = root.get_mut("segments").and_then(|s| s.as_object_mut()) {
+        for name in EXEC_SEGMENTS {
+            if let Some(entry) = segments.get_mut(*name).and_then(|e| e.as_object_mut()) {
+                entry.remove("enabled");
+                if entry.is_empty() {
+                    segments.remove(*name);
+                }
+            }
+        }
+    }
+    serde_json::Value::Object(root)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -1008,17 +1081,61 @@ mod tests {
         let mut c = Choices::default();
         c.frame = "left";
         c.separator = "fade";
-        let text = render_config(&c);
+        c.segments.insert("battery", true);
+        let text = render_config(&c).unwrap();
         assert!(text.contains("preset = \"rainbow\""));
         assert!(text.contains("left = \"fade\""));
         assert!(text.contains("right = \"fade\""));
-        assert!(text.contains("enabled = true"));
         assert!(text.contains("gap_char = \"\u{2500}\""));
         assert!(text.contains("[segments.character]"));
         assert!(text.contains("transient = true"));
         // No-frame configs must not carry a gap char.
         c.frame = "none";
-        assert!(!render_config(&c).contains("gap_char"));
+        assert!(!render_config(&c).unwrap().contains("gap_char"));
+
+        // The default finish path must carry the segments step and the OS
+        // icon, not just the style keys — and it must round-trip as TOML.
+        let parsed: toml::Value = toml::from_str(&render_config(&c).unwrap()).unwrap();
+        assert_eq!(parsed["segments"]["battery"]["enabled"], toml::Value::Boolean(true));
+        assert_eq!(parsed["git"]["enabled"], toml::Value::Boolean(true));
+        assert!(parsed["segments"]["os"].get("icon").is_some());
+    }
+
+    #[test]
+    fn test_segment_toggles_use_real_config_paths() {
+        let mut c = Choices::default();
+        c.segments.insert("git", false);
+        c.segments.insert("directory", false);
+        c.segments.insert("python_env", false);
+        let v = choices_patch(&c);
+
+        // git and directory are top-level tables, and python_env is spelled
+        // `python` — writing them under `segments` deserialized into nothing.
+        assert_eq!(v["git"]["enabled"], false);
+        assert_eq!(v["directory"]["enabled"], false);
+        assert_eq!(v["segments"]["python"]["enabled"], false);
+        assert!(v["segments"].get("git").is_none());
+        assert!(v["segments"].get("directory").is_none());
+        assert!(v["segments"].get("python_env").is_none());
+    }
+
+    #[test]
+    fn test_profile_patch_drops_exec_segments() {
+        let mut c = Choices::default();
+        for name in EXEC_SEGMENTS {
+            c.segments.insert(name, true);
+        }
+        let patch = profile_patch_value(&c);
+        for name in EXEC_SEGMENTS {
+            let entry = patch["segments"].get(*name);
+            assert!(
+                entry.is_none_or(|e| e.get("enabled").is_none()),
+                "`{name}` must not carry an enable flag into a project profile"
+            );
+        }
+        // Ordinary segments survive the strip.
+        assert_eq!(patch["segments"]["battery"]["enabled"], false);
+        assert_eq!(patch["style"]["preset"], "rainbow");
     }
 
     #[test]
@@ -1068,7 +1185,7 @@ mod tests {
         assert_eq!(v["segments"]["os"]["icon"], "arch");
         assert_eq!(v["segments"]["character"]["success"], "\u{3bb}");
         assert_eq!(v["segments"]["battery"]["enabled"], false);
-        assert_eq!(v["segments"]["git"]["enabled"], true);
+        assert_eq!(v["git"]["enabled"], true);
     }
 
     #[test]
@@ -1103,9 +1220,26 @@ mod tests {
     }
 
     #[test]
-    fn test_wizard_segments_default_all_enabled() {
+    fn test_wizard_segment_defaults_match_daemon_defaults() {
         let c = Choices::default();
         assert_eq!(c.segments.len(), WIZARD_SEGMENTS.len());
-        assert!(c.segments.values().all(|&on| on));
+
+        // Default-off in the daemon must be default-off in the wizard, or a
+        // saved wizard run silently changes behavior on upgrade — and turns
+        // on per-prompt subprocess spawns for the exec-tier segments.
+        for name in ["k8s", "time", "battery", "load"] {
+            assert_eq!(c.segments[name], false, "`{name}` ships disabled");
+        }
+        for name in EXEC_SEGMENTS {
+            assert_eq!(c.segments[*name], false, "`{name}` ships disabled");
+        }
+        for name in ["package_version", "dir_writable", "aws_profile", "vpn"] {
+            assert_eq!(c.segments[name], false, "`{name}` ships disabled");
+        }
+
+        // ...and the core prompt is still on.
+        for name in WIZARD_SEGMENTS_DEFAULT_ON {
+            assert_eq!(c.segments[*name], true, "`{name}` ships enabled");
+        }
     }
 }

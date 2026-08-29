@@ -54,6 +54,7 @@ Uses `notify` crate (v8) with a raw `mpsc` channel in `spawn_blocking`:
 
 - **Config watcher**: monitors `config.toml` → calls `state.reload_config()`
 - **Theme watcher**: monitors `colors.toml` → calls `state.reload_theme()`
+- **Plugins watcher**: monitors `<config dir>/plugins/` recursively → registry reload. The directory is **created if absent** before the watch is registered: `omarchy10k plugin add` creates it on first use, and a watch can only be armed on an existing path, so the previous `if plugins_dir.exists()` guard left every daemon started before the first plugin install with no plugins watch for the rest of its life (the non-recursive config-dir watch sees the directory appear but cannot arm a watch on it). Manifest edits, updates, and removals then needed a daemon restart to be noticed.
 
 The `notify-debouncer-full` crate is declared as a dependency but not imported or used. Debouncing happens implicitly through the watcher's event batching.
 
@@ -93,6 +94,7 @@ pub struct DaemonState {
     pub socket_path: PathBuf,
     pub last_render: RwLock<Option<RenderSummary>>,  // cwd/branch/dirty/counts/duration/exit/agent of the last prompt render (status enrichment)
     pub started_at: std::time::Instant,              // feeds status.session_age_secs
+    config_generation: AtomicU64,                    // bumped by set_config; invalidates the profile merge cache
 }
 ```
 
@@ -325,6 +327,8 @@ Added in the Tier C wave (2026-08-29). A repository can carry its own prompt app
 
 `.o10k.toml` comes from cloned repositories, so it is treated as untrusted. The loader enforces a strict **display-key allowlist**: top-level `style`, `prompt`, `segments`, `theme`, `frame` only. State keys (`daemon`, `env`, `notifications`, `git`, …) and unknown keys are rejected with an error naming the offending key. Both a bare `config_set`-shaped patch and the wrapper form `{ patch = { ... }, name = "..." }` are accepted; an empty file is a no-op.
 
+**Exec-tier segments are carved out of the `segments` allowance** (`EXEC_SEGMENTS`: `kubectl_context`, `terraform_workspace`, `gcloud_project`, `docker_context`). Those four ship default-off and their render path spawns the corresponding binary with `current_dir` set to the repo, so a cloned repo that set `[segments.terraform_workspace] enabled = true` could make the daemon execute `terraform` against attacker-controlled `.terraform/` contents on every `cd` into the tree. `segments.<exec>.enabled = true` is refused by name; `= false` is allowed (quieting the prompt is harmless), as are display keys like `icon` on the same tables. The `configure` wizard's project-profile finish path strips these flags before writing, so it never emits a profile the daemon would reject.
+
 Every profile failure is **warn-once per profile path** (`WARNED_PROFILES` set) and swallowed: a broken repo profile must never fail the prompt (the render falls back to the base config).
 
 ### Merge order (`apply_profile`)
@@ -336,6 +340,8 @@ base config (incl. any in-memory transient Look) → project profile → per-req
 ```
 
 In the preview path (`effective_preview_config` in `server.rs`), a broken profile patch falls back to the pre-profile config for that render.
+
+**The prompt path memoizes the merge** (`profiles::effective_config_for`, `MERGE_CACHE`, 64 entries). `apply_profile` serializes the entire config to TOML, merges, and deserializes it back — more work than the rest of the render put together, and it ran on *every* render inside a profiled repo (only path *detection* was cached). The merged `Arc<Config>` is now keyed on the profile file's (mtime, length) plus `DaemonState::config_generation()`, an `AtomicU64` bumped by the single config-mutation choke point `DaemonState::set_config` — so `reload_config` and a transient `looks_apply` both invalidate it, and nothing else can mutate the config without bumping it.
 
 ## Segment Plugins (`src/plugins.rs`)
 
@@ -359,6 +365,8 @@ Command output is capped to its first line, 256 bytes (`MAX_OUTPUT_BYTES`). The 
 
 TTL cache for command-tier segments, modelled on `GitCache`: keyed by (segment registry name, cwd), in-flight deduped so a fast prompt loop cannot spawn a process storm, generation-guarded against resurrecting pre-invalidation snapshots. Invalidated on every `reload_config`.
 
+**Negative results are cached too** (`CachedOutput.value: Option<String>`). Writing an entry only on success left a failing, timing-out, or silent command permanently absent from the map, so every subsequent prompt saw a miss and scheduled again — one subprocess per prompt, forever, with no backoff (`in_flight` only dedupes *concurrent* runs, so it did not bound this). A cached negative retries once per TTL and is returned without rescheduling.
+
 ## Segment Utilities (`src/segments/util.rs`)
 
 Added in the Tier D wave. Shared helpers for the cloud/ops segment catalog (and the same patterns reused elsewhere):
@@ -367,7 +375,7 @@ Added in the Tier D wave. Shared helpers for the cloud/ops segment catalog (and 
 |--------|----------|
 | `TtlCache<V>` | Process-local TTL cache keyed by an arbitrary string (usually the cwd). Negative results are cached alongside positives so a miss is not retried every prompt; bounded by `max_entries`, expired entries recomputed on access |
 | `on_path(bin)` | True when `bin` resolves to an existing executable file on `PATH` — a missing tool costs one stat walk, not a spawn |
-| `run_command(bin, args, timeout_ms)` | Synchronous trimmed-stdout run; `None` on spawn failure, non-zero exit, or timeout. The child is **killed on timeout** so a hung CLI cannot stall the synchronous render path |
+| `run_command(bin, args, timeout_ms)` | Synchronous trimmed-stdout run; `None` on spawn failure, non-zero exit, or timeout. The child is **killed on timeout** so a hung CLI cannot stall the synchronous render path. The child is owned by the calling thread and polled with `try_wait` (2 ms) — it must never be parked behind a mutex a waiter thread holds across `wait()`, which makes the kill unreachable and the timeout unenforceable (fixed 2026-08-29; `sleep 5` under a 200 ms budget took the full 5 s). Exit status **is** checked: a CLI that writes an error or usage line to stdout and then fails must not have that text adopted as the segment value |
 
 ## Script Execution (`src/script_exec.rs`)
 
@@ -819,14 +827,16 @@ The full catalog (`ALL_SEGMENTS` in `style.rs`) is **24 names** — 16 pre-Tier 
 
 | Segment (`segments/*.rs`) | Signal | Mechanism | TTL / timeout |
 |---------------------------|--------|-----------|---------------|
-| `package_version` | Version from `package.json`, `Cargo.toml`, or `pyproject.toml` in cwd (first match wins) | Manifest scan, regex-free; cached per cwd, negative results included | 10 s |
+| `package_version` | Version from `package.json`, `Cargo.toml`, or `pyproject.toml` in cwd (first match wins) | Manifest scan, regex-free, scoped to the `[package]`/`[project]` table so a workspace-inheriting manifest does not report a dependency's version requirement; cached per cwd, negative results included | 10 s |
 | `dir_writable` | Lock glyph when cwd is NOT writable | Real create/delete probe (catches ACLs/RO mounts); cached per cwd | 10 s |
 | `aws_profile` | Active AWS identity; precedence `AWS_PROFILE` > `AWS_VAULT` > `AWS_DEFAULT_PROFILE` | Pure env-tier via the 0.4 env channel — zero forks | — |
-| `docker_context` | Docker target | `DOCKER_HOST` from env channel wins; else `docker context show` | 15 s / bounded |
-| `kubectl_context` | Current kubeconfig context | `kubectl config current-context`; hidden when kubectl absent/hangs | 15 s / bounded |
+| `docker_context` | Docker target | `DOCKER_HOST` from env channel wins; else `docker context show`, cached under a **fixed key** | 15 s / bounded |
+| `kubectl_context` | Current kubeconfig context | `kubectl config current-context`, cached under the **`KUBECONFIG` value**; hidden when kubectl absent/hangs | 15 s / bounded |
 | `terraform_workspace` | Workspace name | Stat-gated on `.terraform` in cwd, then `terraform workspace show` | 15 s / 1 s |
 | `vpn` | Active VPN | `/sys/class/net` directory listing — tun/tap/wg interface names | 15 s |
-| `gcloud_project` | GCP project | `GOOGLE_CLOUD_PROJECT` env wins; else `gcloud config get-value project` (artifacts like `() (empty)` treated as unset) | 30 s / bounded |
+| `gcloud_project` | GCP project | `GOOGLE_CLOUD_PROJECT` env wins; else `gcloud config get-value project` (artifacts like `() (empty)` treated as unset), cached under a **fixed key** | 30 s / bounded |
+
+*Cache keys:* `kubectl_context`, `docker_context` and `gcloud_project` report **process-global** state, not a property of the cwd. Keying them on `ctx.cwd` (as they originally were) made every first prompt in a new directory pay a fresh blocking spawn, and visiting more than the cache's `max_entries` directories inside one TTL window evicted the table into permanent misses. They now use a fixed key — `vpn` already did (`"net"`) — except `kubectl_context`, which keys on the `KUBECONFIG` value from the env channel, since that is what its output actually depends on. `package_version` and `dir_writable` remain correctly per-cwd.
 
 Command-tier segments share `segments/util.rs` (`TtlCache`, `on_path`, `run_command` — see [Segment Utilities](#segment-utilities-srcsegmentsutilrs) above).
 
