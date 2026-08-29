@@ -16,6 +16,15 @@ pub mod time;
 pub mod battery;
 pub mod load;
 pub mod ai;
+pub mod package_version;
+pub mod dir_writable;
+pub mod aws_profile;
+pub mod docker_context;
+pub mod kubectl_context;
+pub mod terraform_workspace;
+pub mod vpn;
+pub mod gcloud_project;
+pub mod util;
 
 use crate::config::Config;
 use crate::git::GitStatus;
@@ -75,6 +84,12 @@ pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {
         segments.push(seg);
     }
 
+    if ctx.config.segments.dir_writable.enabled {
+        if let Some(seg) = dir_writable::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
     if ctx.config.git.enabled {
         if let Some(seg) = git::render(ctx) {
             segments.push(seg);
@@ -101,6 +116,48 @@ pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {
 
     if ctx.config.segments.k8s.enabled {
         if let Some(seg) = k8s::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
+    if ctx.config.segments.package_version.enabled {
+        if let Some(seg) = package_version::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
+    if ctx.config.segments.docker_context.enabled {
+        if let Some(seg) = docker_context::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
+    if ctx.config.segments.kubectl_context.enabled {
+        if let Some(seg) = kubectl_context::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
+    if ctx.config.segments.terraform_workspace.enabled {
+        if let Some(seg) = terraform_workspace::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
+    if ctx.config.segments.gcloud_project.enabled {
+        if let Some(seg) = gcloud_project::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
+    if ctx.config.segments.aws_profile.enabled {
+        if let Some(seg) = aws_profile::render(ctx) {
+            segments.push(seg);
+        }
+    }
+
+    if ctx.config.segments.vpn.enabled {
+        if let Some(seg) = vpn::render(ctx) {
             segments.push(seg);
         }
     }

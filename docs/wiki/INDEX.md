@@ -8,6 +8,8 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 
 **v0.5** adds Looks — atomic appearance bundles in `[looks.<name>]` with 8 curated Looks compiled in (user entries shadow curated names) — exposed through the `looks`, `looks_apply` (persistent, or transient in-memory "Try"), `looks_save`, and `palettes` control verbs plus a `look` override on `preview` for dry-run renders; the enriched `status` snapshot (live git summary, battery, last command duration, session age); a configurable right prompt rail (`[prompt].right_segments`); the vi-mode prompt character delivered over the env channel (`KEYMAP` → `vi_mode`); the quick-action scripts CLI (`omarchy10k script list|run` via the daemon's `script_exec` module) and desktop hook dispatch (`omarchy10k hook-event`); the Quattro Looks Gallery overlay and the 4-bucket Control Center rail; session workspace labels; bar badges; and daemon hardening (64 KiB socket frame cap, LRU-bounded caches, `PR_SET_PDEATHSIG`). Protocol version is now **0.5**, crate version **0.4.0**.
 
+Since the 0.5 doc sync, the crate gained seven more waves (all shipped as v0.4.0): **C1 stabilization** — daemon `status` gains an `agent` field ("claude"|"codex"|null, detected from the env channel), the BarWidget gains a robot-glyph agents badge, the git branch becomes an OSC 8 hyperlink to the normalized remote URL when the terminal supports it, the hook-event ETXTBSY race was fixed with write-then-rename, and 12 new integration assertions landed; **C2 platform coexistence** — `[shell.layer]` claim policy (extend/defer/own/off) resolved at `omarchy10k init bash` and baked into the adapter prelude, prompt handoff unhooks starship/Ghostty precmd hooks at init (reversible, recorded in `__O10K_DISPLACED[]`), `omarchy10k layer [--json]` prints the claim map, terminal include templates (o10k-ghostty.conf.tpl, o10k-foot.ini.tpl) plus o10k-blesh.bash.tpl and o10k-delta.gitconfig.tpl join the rice templates, and tools.sh keeps only uncontested aliases; **C3 Looks Studio** — the Gallery detail sheet became an editor (palette hex rows, cycle rows, Gradient Ramp Designer) rendering every edit through the `preview.patch` override (merge base → look → patch) with a new `looks_delete` verb; **C4 Panel decomposition** — Panel.qml shrank 2701→1277 lines into PanelLooks/PanelStyle/PanelBehavior/PanelSystem.qml + shared PanelKit.qml; **C5 parity + share** — vanilla-bash (non-ble.sh) gains an escape-aware right prompt rail and a rewritten transient prompt, and Looks export/install as portable TOML bundles (`look export` / `look install`, https-only, dry-run by default); **Tier C** — per-repo `.o10k.toml` project profiles (display-keys allowlist, `.git`-boundary detection), p10k-grade wizard depth (context previews, per-segment toggles, apply/Look/profile finish paths), and `theme.source = "terminal"` index-palette mode; **Tier D** — 8 new catalog segments with layered detection tiers, a plugin economy (`plugin add|list|enable|disable|remove|update` over `~/.config/omarchy10k/plugins/<name>/plugin.toml`), and `omarchy10k migrate <starship.toml>` mapping Starship config into a `migrated-starship` Look.
+
 ## Wiki Pages
 
 | Page | Description |
@@ -52,15 +54,16 @@ omarchy10k/
 ├── .github/workflows/benchmark.yml  # CI benchmark workflow
 ├── config/
 │   ├── default.toml                 # Default configuration (embedded in daemon)
-│   └── tools.sh                     # Modern CLI alias layer (eza/bat/rg/zoxide/fzf/...), sourced by the adapter
+│   └── tools.sh                     # Modern CLI alias layer (uncontested eza/bat/rg/zoxide/fzf/... aliases, policy-honoring)
 ├── crates/
 │   ├── omarchy10k/                  # CLI client binary
-│   │   └── src/{main,prompt,bridge,doctor,configure,intro,script,hook_event,statusline,update}.rs
+│   │   └── src/{main,prompt,bridge,doctor,configure,intro,script,hook_event,statusline,update,layer,share,migrate,plugins_cli}.rs
 │   └── omarchy10kd/                 # Persistent daemon binary
-│       └── src/{main,server,config,git,layout,looks,style,render,script_exec,terminal,theme}.rs
-│       └── src/segments/{mod,ai,battery,character,command_duration,container,directory,exit_status,git,jobs,
-│           k8s,load,nix,os,python_env,ssh,time,toolchain}.rs
-├── shell/omarchy10k.bash            # Bash adapter + hook broker
+│       └── src/{main,server,config,git,layout,looks,style,render,script_exec,terminal,theme,profiles,plugins}.rs
+│       └── src/segments/{mod,util,ai,battery,character,command_duration,container,directory,exit_status,git,jobs,
+│           k8s,load,nix,os,python_env,ssh,time,toolchain,package_version,dir_writable,aws_profile,docker_context,
+│           kubectl_context,terraform_workspace,vpn,gcloud_project}.rs
+├── shell/omarchy10k.bash            # Bash adapter + hook broker (baked layer-policy prelude, prompt handoff)
 ├── hooks/                           # Omarchy hook drop-ins (installed to ~/.config/omarchy/hooks/<event>.d/omarchy10k)
 │   ├── theme-set                    # Theme switch → reload_theme fan-out
 │   ├── battery-low                  # Low battery → desktop notification toast
@@ -68,20 +71,29 @@ omarchy10k/
 │   └── font-set                     # Font switch → reload_theme fan-out
 ├── templates/
 │   ├── omarchy10k.toml.tpl          # Theme bridge template
-│   └── themed/                      # Rice-layer templates (o10k-env.sh, lazygit, yazi, cava) for ~/.config/omarchy/themed/
+│   └── themed/                      # Rice-layer templates for ~/.config/omarchy/themed/:
+│                                    #   o10k-env.sh, o10k-blesh.bash, o10k-delta.gitconfig,
+│                                    #   o10k-ghostty.conf, o10k-foot.ini, lazygit, yazi, cava
 ├── quattro/                         # Quattro bar plugin
 │   ├── manifest.json
-│   ├── BarWidget.qml                # Bar glyph + badges (daemon status, git dirty, long-cmd chip)
+│   ├── BarWidget.qml                # Bar glyph + badges (daemon status, git dirty, long-cmd chip, agent badge)
 │   ├── Panel.qml                    # Control Center — 4-bucket rail (LOOKS · STYLE · BEHAVIOR · SYSTEM)
+│   ├── PanelLooks.qml               # Looks bucket: cards, Looks Studio editor, delete
+│   ├── PanelStyle.qml               # Style bucket
+│   ├── PanelBehavior.qml            # Behavior bucket
+│   ├── PanelSystem.qml              # System bucket
+│   ├── PanelKit.qml                 # Shared QML controls (intentionally unbound components)
 │   ├── Gallery.qml                  # Full-screen Looks gallery overlay (live dry-run renders)
 │   ├── SessionPicker.qml            # Live session picker overlay
 │   ├── Service.qml                  # Persistent connection hub (service-kind plugin)
 │   └── Model.js                     # TOML parser, CONFIG_MAP, protocol helpers
 ├── tests/
 │   ├── integration_test.sh          # Integration test suite
-│   └── model_parity_test.js         # Model.js CONFIG_MAP round-trip parity harness
+│   ├── model_parity_test.js         # Model.js CONFIG_MAP round-trip parity harness
+│   └── vanilla_transient_test.sh    # Vanilla-bash transient + right-rail fixture
 ├── docs/wiki/                       # This wiki
-├── README.md
+├── docs/img/                        # Screenshots (panel.png, gallery.png)
+├── README.md                        # Quick start, controls table, screenshots
 └── LICENSE
 ```
 
@@ -99,7 +111,22 @@ omarchy10k look list
 omarchy10k look apply tokyo-rainbow
 omarchy10k look apply omnarchy --transient
 
+# Shell layer: see which claims are extended/deferred/owned, then init
+omarchy10k layer --json
+
+# Plugins: install from a remote git URL (installs DISABLED — review, then enable)
+omarchy10k plugin add https://github.com/user/o10k-plugin-example
+omarchy10k plugin enable o10k-plugin-example
+
+# Migrate a Starship config into a Look (dry-run first, --yes to save)
+omarchy10k migrate ~/.config/starship.toml
+
+# Share a Look: export to a portable TOML bundle, install from a file or URL
+omarchy10k look export omnarchy --clipboard
+omarchy10k look install ~/Downloads/omarch.look.toml --yes
+
 # Quick actions and desktop hook events
+
 omarchy10k script list
 omarchy10k hook-event battery-low 15
 
@@ -120,6 +147,19 @@ for event in theme-set battery-low post-update font-set; do
   chmod +x ~/.config/omarchy/hooks/$event.d/omarchy10k
 done
 ```
+
+## Sibling Projects
+
+Omarchy10k coexists with the **Omarchy Spatial UX** project (`~/syncthing/OMPSpacialUX`, wiki: `docs/wiki/INDEX.md` there) on the same Omarchy machine. Integration surfaces:
+
+| Shared surface | Omarchy10k side | Spatial UX side | Coordination rule |
+|---|---|---|---|
+| Unix sockets | `$XDG_RUNTIME_DIR/omarchy10k-<pid>.sock` (per-shell) | `$XDG_RUNTIME_DIR/omarchy-uxd/{control,events}.sock` | Distinct namespaces; never collide them |
+| Theme state | Theme bridge reads `~/.local/state/omarchy/current/theme/colors.toml` read-only | Theme reactor reads the same file read-only | Neither writes theme files; only the Omarchy theme engine does |
+| Hooks | `<event>.d/omarchy10k` drop-ins (theme-set, battery-low, post-update, font-set) | `hooks/theme-set.d/spatial-ux-theme.sh`, `hooks/battery-low.d/spatial-ux-battery.sh` | Same `.d` dirs, distinct basenames; both fire per event |
+| Quattro surfaces | `community.omarchy10k` (bar-widget/service/overlay) | `ijohnst.spatial-ux` (service/overlay/panel/menu) | Both may hold exclusive keyboard grabs when summoned — avoid simultaneous summon |
+
+The two daemons are independent (`omarchy10kd` per bash session, `omarchy-uxd` single exec-once) with disjoint config/state dirs.
 
 ## Maintenance
 

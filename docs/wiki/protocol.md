@@ -102,6 +102,7 @@ Render a prompt with simulated context for live UI preview. Added in v0.3. Unlik
 | `git_unstaged` | int | No | `0` | Simulated unstaged file count |
 | `style_preset` | string | No | `""` | **v0.4 (additive).** Per-request preset override for the Quattro preset gallery: renders this preview with the named preset regardless of `style.preset`. Absent/empty = current config. |
 | `look` | string | No | `""` | **v0.5.** Dry-run render a Look: resolves the named Look (user entries from `[looks.<name>]` shadow curated ones), applies its patch via the transient in-memory merge, and renders the result. Nothing is persisted; an unknown look name silently falls back to the current config. |
+| `patch` | object | No | — | **v0.4.1 (Looks Studio).** `config_set`-shaped patch merged over the effective config for this render only — RAW config-tree keys, no glyph shortcut expansion. Merge order: base config → `look` → project profile of the previewed `cwd` → `patch` → wizard style knobs (later wins); see [Preview `patch` Override](#preview-patch-override-v041-looks-studio). |
 | `style_separators` | string | No | `""` | **v0.5 (configure wizard).** Catalog key applied to both separators for this render only. |
 | `style_frame` | string | No | `""` | **v0.5 (configure wizard).** Frame mode for this render: `none` \| `left` \| `right` \| `full`. |
 | `prompt_newline` | bool | No | `""` | **v0.5 (configure wizard).** Two-line prompt toggle for this render. |
@@ -123,7 +124,11 @@ Render a prompt with simulated context for live UI preview. Added in v0.3. Unlik
 | `left` | string | Rendered left prompt with ANSI color codes (no OSC 133 markers) |
 | `right` | string? | Rendered right prompt (duration + branch). `null` when `prompt.right_prompt = false` or nothing to show. |
 
-Git state is synthesized from the request fields rather than queried from disk. The daemon uses current in-memory config and theme palette.
+Git state is synthesized from the request fields rather than queried from disk. The daemon uses current in-memory config and theme palette; since Tier C, a preview also honors the project profile (`.o10k.toml`) of the previewed `cwd`.
+
+### Preview `patch` Override (v0.4.1, Looks Studio)
+
+The `preview` message also accepts an optional `patch` object (config_set-shaped, RAW config-tree keys — no glyph shortcut expansion). Tier C inserts a PROFILE layer between the Look and the client patch: the effective config builds as **base config → `look` → project profile of the previewed cwd → `patch` → wizard style knobs** (later wins), so Studio edits compose on top of a Look and the repo's `.o10k.toml`. Merge reuses the transient in-memory machinery — no file writes, no daemon state mutation. An unrepresentable patch (e.g. JSON `null`) → `{"type":"preview","status":"error","error":...}` (clients keep their last good render).
 
 **Used by:** Quattro panel (live preview on Appearance tab, re-rendered on config or context toggle changes).
 
@@ -244,7 +249,8 @@ Health check. Returns daemon metadata.
   "last_cmd_duration_ms": 1200,
   "last_exit_code": 0,
   "session_age_secs": 300,
-  "battery": {"capacity": 77, "status": "Discharging"}
+  "battery": {"capacity": 77, "status": "Discharging"},
+  "agent": "claude"
 }
 ```
 
@@ -259,8 +265,9 @@ Health check. Returns daemon metadata.
 | `last_exit_code` | int | Exit code at the last render; `0` before the first render. |
 | `session_age_secs` | int | Seconds since the daemon (shell session) started. |
 | `battery` | object? | `null` on batteryless machines; otherwise `{capacity: int, status: "Charging" \| "Discharging"}` from the same sysfs read the battery segment uses. |
+| `agent` | string \| null | AI coding agent active at the last prompt render: `"claude"` when `CLAUDE_CODE_ENTRYPOINT` was in the prompt request's `env` channel, `"codex"` when `CODEX_SANDBOX` or `CODEX_HOME` was (added in the C1 Agents MVP wave). `null` when no agent env key was present or before the first prompt render. Latched from the `env` channel at render time and mirrored in `RenderSummary.agent` — it always agrees with the `ai` segment's detection (`segments/ai.rs`). Never updated by `preview` renders. |
 
-All v0.4 fields are **additive** — older clients ignore them safely.
+All enrichment fields (v0.4 ambient set and the later `agent`) are **additive** — older clients ignore them safely.
 
 **Used by:** Bash adapter (health check), CLI `debug`, `doctor`, Quattro panel (on connect).
 
@@ -484,6 +491,10 @@ The look patch is merged into the current **in-memory** config only (via `looks:
 The look patch goes through `write_config_patch` — the same code path as `config_set`: recursive JSON→TOML merge into `config.toml`, atomic tmp+rename write, in-memory `reload_config`. Persistent across restarts. Response: `{"type":"control","status":"ok"}`. Errors (TOML syntax in the existing file, unrepresentable patch values, I/O failure) return `{"status":"error","error":...}` and nothing is written.
 
 **Used by:** CLI `look apply <name> [--transient]`, Quattro panel LOOKS cards (Try vs Apply), gallery overlay detail sheet.
+
+### `looks_delete`
+
+Delete a USER look. `{type:"control",command:"looks_delete",name}` → `{status:"ok"}`; errors: `cannot delete curated look: <name>`, `unknown look: <name>`. Rewrites config.toml atomically (tmp+rename) and reloads. A user look shadowing a curated name deletes only the override. Added in v0.4.1 (Studio).
 
 ### `looks_save` (v0.5)
 

@@ -34,8 +34,9 @@ After guards pass, the adapter:
 10. Creates cache directory (`__O10K_CACHE_DIR`) if missing
 11. Starts the daemon (`__o10k_start_daemon`)
 12. Starts bridge coprocess (`__o10k_start_bridge`)
-13. Installs hooks based on ble.sh availability (`__o10k_install_hooks`)
-14. Launches the one-time intro in the background when the marker file is absent and `O10K_NO_INTRO` is unset (see [First-Run Intro](#first-run-intro))
+13. Runs the prompt handoff (`__o10k_prompt_handoff`): unhooks starship/Ghostty prompt hooks from `PROMPT_COMMAND` (array and string shapes) into `__O10K_DISPLACED[]`, clears the injected `PS0`, and applies the baked Shell-layer policy (see [Shell Layer](#shell-layer-baked-policy)). Nothing is unset — reversible by removing the `eval "$(omarchy10k init bash)"` line from `.bashrc`
+14. Installs hooks based on ble.sh availability (`__o10k_install_hooks`)
+15. Launches the one-time intro in the background when the marker file is absent and `O10K_NO_INTRO` is unset (see [First-Run Intro](#first-run-intro))
 
 ## Instant Prompt Cache
 
@@ -111,19 +112,22 @@ Called at init time alongside daemon startup.
 ### Request (`__o10k_bridge_request`)
 
 1. Writes the JSON request to the coprocess stdin
+   Signature: `__o10k_bridge_request <request> [cols]` — `cols` defaults to
+   `${COLUMNS:-80}` when omitted (shell/omarchy10k.bash `__o10k_bridge_request`).
 2. Reads FOUR NUL-terminated fields from coprocess stdout:
    `left\0right\0notify_threshold_ms\0transient\0` (left: 2s timeout;
    right/threshold/transient: 0.5s each)
 3. Sets `PS1` from the `left` field
 4. Caches the `right` field in `__O10K_LAST_RIGHT` for ble.sh right prompt
-5. Sets `__O10K_NOTIFY_THRESHOLD` via `__o10k_set_notify_threshold` — a value
+5. Bakes the vanilla poor-man right rail into `PS1` via `__o10k_apply_right_rail "$cols"` **before** the instant-prompt cache write, so the cached prompt and the live PS1 agree (see [Poor-Man Right Rail](#poor-man-right-rail-vanilla-bash))
+6. Sets `__O10K_NOTIFY_THRESHOLD` via `__o10k_set_notify_threshold` — a value
    of `0` or empty means notifications are OFF and is stored as `0`, never
    falling back to the bootstrap default
-6. Sets `__O10K_TRANSIENT` from the fourth field (may be empty)
-7. Refreshes config flags from the bridge side-channel file
+7. Sets `__O10K_TRANSIENT` from the fourth field (may be empty)
+8. Refreshes config flags from the bridge side-channel file
    (`__o10k_read_flags`) — the bridge writes it before its response fields,
    so the 133;C/D gate is current without a one-render lag
-8. Writes the instant prompt cache in the background (see [Instant Prompt Cache](#instant-prompt-cache))
+9. Writes the instant prompt cache in the background (see [Instant Prompt Cache](#instant-prompt-cache))
 
 **Stream integrity (`__o10k_bridge_drain`):** a failed field read must not
 shift the request/response stream by one on the next request. If the `left`
@@ -213,7 +217,7 @@ The adapter provides a unified hook system that eliminates `PROMPT_COMMAND` conf
 | Event | When | Arguments |
 |-------|------|-----------|
 | `precmd` | Before each prompt render | None |
-| `preexec` | After user enters command, before execution | `$BASH_COMMAND` |
+| `preexec` | After user enters command, before execution | Command string as `$1` (vanilla: from the DEBUG trap; ble.sh: PREEXEC argument) |
 | `chpwd` | When `$PWD` changes | None |
 | `shell_exit` | On shell EXIT trap | None |
 
@@ -267,7 +271,7 @@ The adapter captures the current command name in both preexec paths for use by d
 
 | Hook | Assignment |
 |------|------------|
-| Vanilla (`__o10k_preexec`) | `__O10K_LAST_CMD="$BASH_COMMAND"` |
+| Vanilla (`__o10k_preexec`) | `__O10K_LAST_CMD="$1"` (the DEBUG trap passes `"$BASH_COMMAND"` as an argument — see below) |
 | ble.sh (`__o10k_preexec_blesh`) | `__O10K_LAST_CMD="$1"` |
 
 Set before timer start and preexec hook dispatch.
@@ -298,7 +302,7 @@ Called from `PROMPT_COMMAND` or ble.sh `PRECMD`:
       [Env Channel](#env-channel-__o10k_env_json))
    d. Refresh config flags (`__o10k_read_flags`) and re-run the 133;C/D gate
    e. Try bridge first (no fork/exec):
-      __o10k_bridge_request "$request" → PS1 set + cache written
+      __o10k_bridge_request "$request" "$cols" → PS1 (+right rail) set + cache written
    f. Fallback: response=$(__o10k_socket_send "$request")
       Parse "left" from JSON:
       - Preferred: $__O10K_BIN parse-prompt (Rust, ~1-3ms)
@@ -423,6 +427,39 @@ Transport priority:
 - **Daemon restart detection:** Before each prompt render, when the bridge coprocess is dead the adapter probes a present socket with a `status` command first. A healthy daemon's socket is never removed — only the bridge is restarted. A missing socket or a failed probe removes the stale socket and restarts both daemon and bridge, rate limited to one attempt per 5 seconds.
 - **Bridge fallback NUL framing:** The bridge's `write_fallback()` function emits four NUL-terminated fields (`left\0right\0notify_threshold_ms\0transient\0`, with the last three empty) matching the normal protocol, so the bash reader never hangs waiting for the next field.
 
+## Shell Layer (baked policy)
+
+The shell layer lets Omarchy10k coexist with the platform (Omarchy) and the
+user's own shell customizations. Policy is resolved **once, in Rust**, by
+`omarchy10k init bash` from `[shell.layer]` in `config.toml`
+(`extend | defer | own | off`, plus per-claim overrides) and printed as
+prelude lines ahead of the adapter body:
+
+| Variable | Content |
+|----------|---------|
+| `__O10K_LAYER_POLICY` | Default action for every claim |
+| `__O10K_LAYER_OVERRIDES_<name>` | Per-claim override (`ls`, `lt`, `cd`, `fzf_keys`, `manpager`, `bat_theme`), beats the policy |
+
+The adapter itself does ~4-line per-item detection only — no dynamic broker.
+For each claim it resolves
+`__O10K_LAYER_OVERRIDES_<name>` → `__O10K_LAYER_POLICY` → `extend`
+(shell/omarchy10k.bash "Shell Layer" section):
+
+- **Contested claims** (`ls`, `lt`, `cd`, `fzf_keys`, `manpager`, `bat_theme`):
+  a matching platform signature → `defer` (the platform owns it, o10k stays
+  out); the item undefined → define o10k's version; a non-matching **user**
+  definition is always left untouched, under any policy
+- Nothing is unset or unaliased — only unhooked; `omarchy10k layer` prints
+  the full claim map (see [CLI](cli.md#layer))
+
+The prompt handoff (`__o10k_prompt_handoff`, startup step 13) runs on the
+same principle: starship's `starship_precmd` and Ghostty's `__ghostty_hook`
+are unhooked from `PROMPT_COMMAND` (both array and string shapes) with the
+displacements recorded in `__O10K_DISPLACED[]`, and Ghostty's injected
+`PS0` expression is cleared before Bash expands it as literal text (the
+adapter's own `__o10k_preexec` also resets `PS0=''`). Nothing is unset —
+removing the init line from `.bashrc` restores starship/Ghostty.
+
 ## Hook Installation
 
 ### Detection
@@ -463,13 +500,12 @@ Registers `__o10k_update_rps1` as an additional `PRECMD+` hook for right prompt 
 
 ### Preexec Transient, OSC 133 and Progress
 
-The **vanilla** preexec handler additionally performs the non-ble transient
-overwrite: when the daemon delivered a non-empty `transient` string and the
-current PS1 is single-line (contains no `\n`), it moves the cursor up one
-line, rewrites the previous prompt line as `\r<transient>\033[K`, and returns
-the cursor to the fresh line. Multi-line prompts are left untouched — their
-geometry is unknowable from bash. Under ble.sh the transient is handled
-natively instead (see [Transient Prompt](#transient-prompt)).
+The **vanilla** preexec handler performs the non-ble transient overwrite
+via `__o10k_emit_transient "$1"` (see
+[Transient Prompt](#transient-prompt)): multiline- and frame-aware cursor
+rewrites that keep the executed command visible, with no escape leakage
+into the output stream. Under ble.sh the transient is handled natively
+instead.
 
 Both vanilla and ble.sh preexec handlers then:
 
@@ -482,7 +518,7 @@ Both vanilla and ble.sh preexec handlers then:
 | Mode | Handler | Command source |
 |------|---------|----------------|
 | ble.sh | `__o10k_preexec_blesh` | `$1` (ble.sh PREEXEC argument) |
-| vanilla | `__o10k_preexec` | `$BASH_COMMAND` |
+| vanilla | `__o10k_preexec` | `$1` — the DEBUG trap string passes `"$BASH_COMMAND"` as an argument; by the time the handler body runs, `$BASH_COMMAND` already reflects the handler's own commands (shell/omarchy10k.bash DEBUG-trap install) |
 
 ## Transient Prompt
 
@@ -496,9 +532,17 @@ prompt) as the fourth bridge field / JSON response field:
   `blerc.template`: `prompt_ps1_transient` is a colon list
   `always|same-dir|trim` and `prompt_ps1_final` carries the replacement
   string.)
-- **Non-ble:** the vanilla preexec overwrite described in
-  [Preexec](#preexec-transient-osc-133-and-progress) — conservative
-  single-line-prompt rewrite only.
+- **Non-ble:** the vanilla preexec rewrite via `__o10k_emit_transient` —
+  multiline-aware: the cursor moves up one line per PS1 line (frames
+  collapse too, since each frame edge is a line), intermediate lines are
+  cleared, and the transient character lands on the last one. p10k/ble.sh
+  parity: the executed command stays visible after the transient character
+  when it fits on one line (`${#cmd} + ${#t} + 1 < COLUMNS`, printable
+  single-line commands only — otherwise a clean erase). `\x01/\x02`
+  readline markers are stripped before emission and the daemon's trailing
+  space inside the transient OSC is honored (a separator space is added
+  only when the visible text does not already end with one). Cursor-up +
+  overwrite only, so the collapsed prompt survives scrollback.
 
 ## First-Run Intro
 
@@ -521,6 +565,30 @@ When ble.sh is active, the adapter manages the right-aligned prompt via `__o10k_
 4. Sets `bleopt prompt_ps1_final` from `__O10K_TRANSIENT` (see [Transient Prompt](#transient-prompt))
 
 Right prompt content typically includes git branch and command duration when `prompt.right_prompt = true`.
+
+### Poor-Man Right Rail (vanilla bash)
+
+Plain Bash has no native right prompt, so on non-ble.sh shells the adapter
+bakes one into `PS1` at request time (`__o10k_apply_right_rail`, called from
+`__o10k_bridge_request` with the request's `cols`):
+
+1. Returns immediately under ble.sh (which owns `prompt_rps1` natively), when
+   `__O10K_LAST_RIGHT` is empty, or `cols` is 0 — the daemon already gates
+   `right` on `[prompt].right_prompt` and non-frame mode
+2. Measures the visible width of the right content with
+   `__o10k_prompt_visible_width` (mirrors the daemon's `strip_ansi_width`:
+   `\x01/\x02` readline markers and raw SGR/OSC sequences count as zero;
+   codepoints, not bytes — double-width CJK glyphs are the known miscount)
+3. Appends right-aligned padding to the last line of the prompt: a one-line
+   prompt gains a dedicated rail line **above** the input line (the input
+   position must stay after the left prompt); a multiline prompt pads the
+   line above the input line
+4. Drops the rail for that render when it cannot fit (gap < 1 column)
+
+Limitation: the rail is positioned once per render from that render's
+`cols` — no SIGWINCH re-render, so it drifts on resize until the next
+prompt; the instant-prompt cache carries the cols of the render that
+produced it.
 
 ## Runtime Globals
 
@@ -545,6 +613,10 @@ Right prompt content typically includes git branch and command duration when `pr
 | `__O10K_ENV_JSON` | `{}` | Last env-channel snapshot (rebuilt per render) |
 | `__O10K_FALLBACK_PS1` | blue dir + green `❯` | Static prompt when the daemon is unreachable |
 | `__O10K_LAST_PWD` | `$PWD` at init | Chpwd emulation state |
+| `__O10K_WIDTH` | — | Scratch: visible width computed by `__o10k_prompt_visible_width` |
+| `__O10K_LAYER_POLICY` | baked by `init bash` | Resolved `[shell.layer]` policy (extend/defer/own/off) — see [Shell Layer](#shell-layer-baked-policy) |
+| `__O10K_LAYER_OVERRIDES_<name>` | baked by `init bash` | Per-claim policy override, beats `__O10K_LAYER_POLICY` |
+| `__O10K_DISPLACED` | `()` | PROMPT_COMMAND entries the prompt handoff unhooked (starship/Ghostty) |
 | `__O10K_LAST_RESTART_ATTEMPT` | `0` | Epoch timestamp of the last daemon+bridge restart (5 s rate limit) |
 
 ## Path Variables
@@ -584,6 +656,7 @@ Right prompt content typically includes git branch and command duration when `pr
 | `KEYMAP` | Vi-mode signal — read per render, emitted as `vi_mode` in the env channel when non-empty |
 | `O10K_NO_TOOLS` | Set to skip sourcing `tools.sh` |
 | `FZF_DEFAULT_OPTS` | Sanity check after sourcing the theme env (truncated source → stamp not committed) |
+| `O10K_HARNESS_ONLY` | `=1` stops init after the function definitions — no daemon/bridge/watchdog, no hooks, no EXIT trap; test seam used by `tests/vanilla_transient_test.sh` (also bypasses the interactive-only guard) |
 
 ## Runtime Dependencies
 

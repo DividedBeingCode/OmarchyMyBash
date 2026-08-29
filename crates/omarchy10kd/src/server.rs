@@ -8,6 +8,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::git::GitCache;
+use crate::plugins::{self, Plugin, PluginCache};
 use crate::render::PromptRenderer;
 use crate::theme::ThemePalette;
 
@@ -68,6 +69,10 @@ pub struct PreviewRequest {
     /// Two-line prompt toggle (configure wizard live preview).
     #[serde(default)]
     pub prompt_newline: Option<bool>,
+    /// Looks Studio / ramp designer: `config_set`-shaped patch merged over
+    /// the effective config (base → Look → patch; patch wins) before render.
+    #[serde(default)]
+    pub patch: Option<serde_json::Value>,
 }
 
 fn default_preview_cwd() -> String {
@@ -132,6 +137,11 @@ pub struct DaemonState {
     pub config: RwLock<Config>,
     pub palette: RwLock<ThemePalette>,
     pub git_cache: GitCache,
+    /// Plugin registry (declarative segment plugins). Rebuilt on startup
+    /// and every reload_config so add/update/remove on disk takes effect.
+    pub plugins: RwLock<Vec<Plugin>>,
+    /// TTL cache for command-tier plugin segments (never blocks render).
+    pub plugin_cache: PluginCache,
     pub config_path: PathBuf,
     pub socket_path: PathBuf,
     pub last_render: RwLock<Option<RenderSummary>>,
@@ -150,6 +160,10 @@ impl DaemonState {
             config: RwLock::new(config),
             palette: RwLock::new(palette),
             git_cache: GitCache::new(git_ttl_ms),
+            plugins: RwLock::new(plugins::load_plugins(&plugins::plugins_dir_for(
+                config_path.parent().unwrap_or_else(|| Path::new(".")),
+            ))),
+            plugin_cache: PluginCache::new(),
             config_path,
             socket_path,
             last_render: RwLock::new(None),
@@ -160,6 +174,13 @@ impl DaemonState {
     pub async fn reload_config(&self) -> anyhow::Result<()> {
         let new_config = Config::load(&self.config_path)?;
         self.git_cache.set_ttl(new_config.git.cache_ttl_ms);
+        // Re-read the plugin registry so plugin add/remove/update on disk
+        // and [plugins].enabled changes all land on one reload path.
+        let new_plugins = plugins::load_plugins(&plugins::plugins_dir_for(
+            self.config_path.parent().unwrap_or_else(|| Path::new(".")),
+        ));
+        *self.plugins.write().await = new_plugins;
+        self.plugin_cache.invalidate_all().await;
         let mut config = self.config.write().await;
         *config = new_config;
         info!("config reloaded");
@@ -459,6 +480,41 @@ async fn handle_control(
                 }
             }
         }
+        "looks_delete" => {
+            let name = rest.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if name.is_empty() {
+                write_response(writer, serde_json::json!({
+                    "type": "control", "status": "error", "error": "looks_delete requires 'name'",
+                }), request_id).await?;
+            } else {
+                // Scope the read guard: delete_user_look takes the write
+                // lock in reload_config below — holding the read guard
+                // across it deadlocks the daemon.
+                let verdict = {
+                    let cfg_guard = state.config.read().await;
+                    validate_look_deletion(&name, &cfg_guard)
+                };
+                match verdict {
+                    Ok(()) => match delete_user_look(state, &name).await {
+                        Ok(()) => {
+                            write_response(writer, serde_json::json!({
+                                "type": "control", "status": "ok",
+                            }), request_id).await?;
+                        }
+                        Err(e) => {
+                            write_response(writer, serde_json::json!({
+                                "type": "control", "status": "error", "error": e,
+                            }), request_id).await?;
+                        }
+                    },
+                    Err(e) => {
+                        write_response(writer, serde_json::json!({
+                            "type": "control", "status": "error", "error": e,
+                        }), request_id).await?;
+                    }
+                }
+            }
+        }
         "script_list" | "script_run" => {
                 write_response(
                     writer,
@@ -562,13 +618,59 @@ async fn handle_prompt(
 ) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
-    let config = state.config.read().await;
+    let base = state.config.read().await;
     let palette = state.palette.read().await;
 
     let cwd = PathBuf::from(&req.cwd);
     let git_status = state.git_cache.get_status(&cwd).await;
 
-    let renderer = PromptRenderer::new(&config, &palette);
+    // Merge contract (Tier C project profiles): base config (with any
+    // transient Look already applied in-memory) → project profile → …
+    // A profile failure is warn-once and swallowed — never fails the prompt.
+    let profile_patch =
+        crate::profiles::profile_patch_for(&cwd, &crate::profiles::home_dir());
+    let profiled;
+    let config: &Config = match &profile_patch {
+        Some(patch) => {
+            profiled = crate::profiles::apply_profile(&base, patch).unwrap_or_else(|e| {
+                warn!("project profile merge failed, rendering with base config: {e}");
+                base.clone()
+            });
+            &profiled
+        }
+        None => &base,
+    };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let in_ssh = std::env::var("SSH_TTY").is_ok() || std::env::var("SSH_CONNECTION").is_ok();
+    let term_caps = crate::terminal::TermCaps::detect();
+    let renderer = PromptRenderer::new(config, &palette);
+
+    // Plugin segments: rendered against the effective (profile-merged)
+    // config's [plugins].enabled list; command-tier refreshes spawn in the
+    // background and never block this render.
+    let plugin_segments = {
+        let registry = state.plugins.read().await;
+        plugins::render_plugin_segments(
+            &crate::segments::SegmentContext {
+                cwd: &req.cwd,
+                home: &home,
+                exit_code: req.exit_code,
+                cmd_duration_ms: req.cmd_duration_ms,
+                cols: req.cols,
+                jobs: req.jobs,
+                in_ssh,
+                git_status: &git_status,
+                config,
+                palette: &palette,
+                term_caps: &term_caps,
+                env: req.env.as_ref(),
+            },
+            &state.plugin_cache,
+            &registry,
+        )
+        .await
+    };
+
     let prompt = renderer.render(
         &req.cwd,
         req.exit_code,
@@ -578,6 +680,7 @@ async fn handle_prompt(
         &git_status,
         req.shell_integration.unwrap_or(true),
         req.env.as_ref(),
+        plugin_segments,
     );
 
     // Record the ambient snapshot served by `status` (v0.4 0.3).
@@ -613,22 +716,36 @@ async fn handle_preview(
     request_id: Option<&str>,
 ) -> anyhow::Result<()> {
     let config_guard = state.config.read().await;
-    // Per-request overrides (Quattro preset gallery, v0.4; configure wizard):
-    // clone the config and force the requested style knobs so the override
-    // always resolves verbatim.
+    // Tier C project profiles: the Studio/wizard preview honors the profile
+    // of the previewed cwd, so what you see includes the repo's own
+    // `.o10k.toml` patch. Per-request overrides (Quattro preset gallery,
+    // configure wizard, Looks Studio) build the effective config as
+    // base → Look → profile → patch (later wins), then style-knob overrides.
+    let profile_patch = crate::profiles::profile_patch_for(
+        Path::new(&req.cwd),
+        &crate::profiles::home_dir(),
+    );
     let preset_config;
     let look_config;
-    let config: &Config = if let Some(look_name) = &req.look {
-        let current = config_guard.clone();
-        let look = crate::looks::resolve(look_name, &current);
-        match look {
-            Some(l) => {
-                look_config = crate::looks::apply_transient(&current, &l.patch)
-                    .unwrap_or(current);
-                &look_config
+    let config: &Config =
+        if req.look.is_some() || req.patch.is_some() || profile_patch.is_some() {
+            // Unknown look names fall back to the base config (gallery
+            // behavior); an unrepresentable patch is a preview error.
+            match effective_preview_config(req, &config_guard, profile_patch.as_ref()) {
+                Ok(c) => {
+                    look_config = c;
+                    &look_config
+                }
+                Err(e) => {
+                    write_response(
+                        writer,
+                        serde_json::json!({"type": "preview", "status": "error", "error": e}),
+                        request_id,
+                    )
+                    .await?;
+                    return Ok(());
+                }
             }
-            None => &config_guard,
-        }
     } else if req.style_preset.is_some()
         || req.style_separators.is_some()
         || req.style_frame.is_some()
@@ -687,6 +804,7 @@ async fn handle_preview(
         false, // no shell integration for preview
         Some(req.in_ssh),
         None,
+        Vec::new(),
     );
 
     write_response(
@@ -700,6 +818,63 @@ async fn handle_preview(
         request_id,
     )
     .await
+}
+
+/// Build the effective config for a preview render: base config, then the
+/// requested Look (if any), then the cwd's project profile (Tier C; wins
+/// over the Look), then the client's `config_set`-shaped `patch` (patch
+/// wins, so Studio edits compose on top of a Look and profile). Style-knob
+/// overrides (configure wizard) apply last. Reuses the transient-merge
+/// machinery — no file writes, no daemon state mutation.
+fn effective_preview_config(
+    req: &PreviewRequest,
+    current: &Config,
+    profile: Option<&toml::Value>,
+) -> Result<Config, String> {
+    let mut effective = current.clone();
+    if let Some(look_name) = &req.look {
+        if let Some(l) = crate::looks::resolve(look_name, &effective) {
+            effective = crate::looks::apply_transient(&effective, &l.patch)?;
+        }
+    }
+    // Project profile (Tier C): wins over the Look, loses to the client
+    // patch. A broken profile patch falls back to the pre-profile config.
+    if let Some(profile) = profile {
+        effective = crate::profiles::apply_profile(&effective, profile)
+            .map_err(|e| format!("project profile merge failed: {e}"))?;
+    }
+    if let Some(patch) = &req.patch {
+        effective = crate::looks::apply_transient(&effective, patch)?;
+    }
+    if req.style_preset.is_some()
+        || req.style_separators.is_some()
+        || req.style_frame.is_some()
+        || req.prompt_newline.is_some()
+    {
+        if let Some(preset) = &req.style_preset {
+            effective.style.preset = preset.clone();
+            effective.prompt.layout = String::new();
+        }
+        if let Some(sep) = &req.style_separators {
+            effective.style.separators.left = Some(sep.clone());
+            effective.style.separators.right = Some(sep.clone());
+        }
+        if let Some(frame) = &req.style_frame {
+            let (enabled, left, right) = match frame.as_str() {
+                "left" => (true, Some(true), Some(false)),
+                "right" => (true, Some(false), Some(true)),
+                "full" => (true, Some(true), Some(true)),
+                _ => (false, None, None),
+            };
+            effective.style.frame.enabled = Some(enabled);
+            effective.style.frame.left = left;
+            effective.style.frame.right = right;
+        }
+        if let Some(newline) = req.prompt_newline {
+            effective.prompt.newline = newline;
+        }
+    }
+    Ok(effective)
 }
 
 /// Render the Claude Code statusline payload with the current config+palette
@@ -1041,6 +1216,62 @@ async fn write_config_patch(
         ));
     }
 
+    persist_config_doc(state, doc).await
+}
+
+/// Validate a `looks_delete` target: curated Looks are compiled-in and
+/// cannot be deleted, but a user entry shadowing a curated name is
+/// deletable; anything else is unknown.
+fn validate_look_deletion(name: &str, config: &Config) -> Result<(), String> {
+    if config.looks.contains_key(name) {
+        return Ok(());
+    }
+    if crate::looks::curated().iter().any(|l| l.name == name) {
+        Err(format!("cannot delete curated look: {name}"))
+    } else {
+        Err(format!("unknown look: {name}"))
+    }
+}
+
+/// Remove one user Look (`[looks.<name>]`) from config.toml by rewriting
+/// the file without the entry (the merge in write_config_patch cannot
+/// delete keys). Same atomic tmp+rename path, then reload.
+async fn delete_user_look(state: &Arc<DaemonState>, name: &str) -> Result<(), String> {
+    let config_path = state.config_path.clone();
+    let mut doc: toml::Table = match std::fs::read_to_string(&config_path) {
+        Ok(existing) => match toml::from_str(&existing) {
+            Ok(t) => t,
+            Err(e) => return Err(format!("config.toml has syntax errors: {e}")),
+        },
+        Err(_) => return Err(format!("unknown look: {name}")),
+    };
+    let removed = doc
+        .get_mut("looks")
+        .and_then(|v| v.as_table_mut())
+        .map(|looks| looks.remove(name).is_some())
+        .unwrap_or(false);
+    if !removed {
+        return Err(format!("unknown look: {name}"));
+    }
+    // Drop an emptied looks table so the file stays clean.
+    let looks_empty = doc
+        .get("looks")
+        .and_then(|v| v.as_table())
+        .map(|t| t.is_empty())
+        .unwrap_or(false);
+    if looks_empty {
+        doc.remove("looks");
+    }
+    persist_config_doc(state, doc).await
+}
+
+/// Atomically persist a merged config doc (tmp+rename) and reload the
+/// in-memory config. Shared by write_config_patch and delete_user_look.
+async fn persist_config_doc(
+    state: &Arc<DaemonState>,
+    doc: toml::Table,
+) -> Result<(), String> {
+    let config_path = state.config_path.clone();
     if let Some(parent) = config_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -1173,5 +1404,334 @@ mod tests {
         assert_eq!(v["cmd_duration_ms"], 42);
         assert_eq!(v["stale"], true);
         assert_eq!(v["agent"], "claude");
+    }
+
+    /// Minimal fully-specified PreviewRequest for override tests.
+    fn preview_req(patch: Option<serde_json::Value>, look: Option<&str>) -> PreviewRequest {
+        PreviewRequest {
+            cwd: "~/projects/my-app".into(),
+            exit_code: 0,
+            cmd_duration_ms: 0,
+            cols: 120,
+            jobs: 0,
+            in_ssh: false,
+            git_branch: String::new(),
+            git_staged: 0,
+            git_unstaged: 0,
+            look: look.map(|s| s.to_string()),
+            style_preset: None,
+            style_separators: None,
+            style_frame: None,
+            prompt_newline: None,
+            patch,
+        }
+    }
+
+    /// Render the preview left line the way handle_preview does.
+    fn render_preview_left(config: &Config) -> String {
+        let palette = ThemePalette::default();
+        let renderer = PromptRenderer::new(config, &palette);
+        let git_status = crate::git::GitStatus {
+            is_repo: false,
+            branch: "main".into(),
+            ..Default::default()
+        };
+        let prompt = renderer.render_with_ssh(
+            "/home/u/project",
+            0,
+            0,
+            120,
+            0,
+            &git_status,
+            false,
+            Some(false),
+            None,
+            Vec::new(),
+        );
+        strip_np(&prompt.left)
+    }
+
+    fn temp_config_dir(label: &str) -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "o10kd-server-test-{label}-{n}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn preview_patch_changes_render() {
+        let base = render_preview_left(&Config::default());
+        let req = preview_req(
+            Some(serde_json::json!({"segments": {"character": {"success": "⇉"}}})),
+            None,
+        );
+        let cfg =
+            effective_preview_config(&req, &Config::default(), None).expect("patch applies");
+        let patched = render_preview_left(&cfg);
+        assert_ne!(base, patched, "patch must flip the rendered prompt");
+        assert!(patched.contains("⇉"), "patched glyph must reach the output");
+    }
+
+    #[test]
+    fn preview_patch_composes_over_look() {
+        let look =
+            crate::looks::resolve("gruvbox-drift", &Config::default()).expect("curated look");
+        let req = preview_req(
+            Some(serde_json::json!({"segments": {"character": {"success": "★"}}})),
+            Some("gruvbox-drift"),
+        );
+        let cfg =
+            effective_preview_config(&req, &Config::default(), None).expect("compose applies");
+        assert_eq!(
+            look.patch["style"]["preset"].as_str(),
+            Some(cfg.style.preset.as_str()),
+            "look must be applied under the patch"
+        );
+        assert_ne!(
+            cfg.style.preset,
+            Config::default().style.preset,
+            "look actually changed the preset"
+        );
+        assert_eq!(cfg.segments.character.success, "★", "patch wins over look");
+    }
+
+    #[test]
+    fn preview_invalid_patch_is_error() {
+        // JSON null is not TOML-representable, so the merge must fail loudly.
+        let req = preview_req(Some(serde_json::json!({"style": {"preset": null}})), None);
+        assert!(effective_preview_config(&req, &Config::default(), None).is_err());
+    }
+
+    // ---- Tier C project profiles ----
+
+    fn profile_patch(src: &str) -> toml::Value {
+        toml::from_str(src).expect("profile patch parses")
+    }
+
+    #[test]
+    fn profile_wins_over_look_loses_to_patch() {
+        let look_preset = crate::looks::resolve("gruvbox-drift", &Config::default())
+            .expect("curated look")
+            .patch["style"]["preset"]
+            .as_str()
+            .expect("look sets a preset")
+            .to_string();
+        let profile = profile_patch(
+            "[style]\npreset = \"classic\"\n\n[prompt]\nblank_line = false\n",
+        );
+        assert_ne!(look_preset, "classic", "sanity: look and profile differ");
+
+        // base → look → profile: the profile wins over the Look.
+        let req = preview_req(None, Some("gruvbox-drift"));
+        let cfg = effective_preview_config(&req, &Config::default(), Some(&profile))
+            .expect("merge ok");
+        assert_eq!(cfg.style.preset, "classic", "profile beats look");
+        assert!(!cfg.prompt.blank_line, "profile display keys apply");
+
+        // base → look → profile → patch: the client patch wins over both.
+        let req = preview_req(
+            Some(serde_json::json!({"style": {"preset": "lean"}})),
+            Some("gruvbox-drift"),
+        );
+        let cfg = effective_preview_config(&req, &Config::default(), Some(&profile))
+            .expect("merge ok");
+        assert_eq!(cfg.style.preset, "lean", "patch beats profile");
+        assert!(
+            !cfg.prompt.blank_line,
+            "profile keys untouched by the patch survive"
+        );
+    }
+
+    async fn read_response(
+        reader: &mut (impl tokio::io::AsyncRead + Unpin),
+    ) -> serde_json::Value {
+        let mut line = String::new();
+        tokio::io::BufReader::new(reader)
+            .read_line(&mut line)
+            .await
+            .expect("response line");
+        serde_json::from_str(line.trim()).expect("response JSON")
+    }
+
+    #[tokio::test]
+    async fn preview_honors_profile_of_preview_cwd() {
+        let dir = temp_config_dir("profile-preview");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join(".o10k.toml"), "[segments.character]\nsuccess = \"λ\"\n")
+            .unwrap();
+
+        let state = std::sync::Arc::new(DaemonState::new(
+            Config::default(),
+            ThemePalette::default(),
+            dir.join("config.toml"),
+            dir.join("d.sock"),
+        ));
+        let (client, server_sock) = tokio::net::UnixStream::pair().unwrap();
+        let (mut reader, _client_writer) = client.into_split();
+        let (_server_reader, mut writer) = server_sock.into_split();
+
+        // No look, no patch — the profile of the previewed cwd alone must
+        // drive the render.
+        let mut req = preview_req(None, None);
+        req.cwd = repo.display().to_string();
+        handle_preview(&req, &state, &mut writer, None)
+            .await
+            .expect("preview ok");
+
+        let resp = read_response(&mut reader).await;
+        assert_eq!(resp["status"], "ok");
+        let left = resp["left"].as_str().expect("left prompt");
+        let base = render_preview_left(&Config::default());
+        assert!(!base.contains('λ'), "baseline prompt has the default glyph");
+        assert!(left.contains('λ'), "profile glyph must reach the preview: {left}");
+    }
+
+    #[tokio::test]
+    async fn prompt_with_broken_profile_still_renders() {
+        let dir = temp_config_dir("profile-broken");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        // Malformed TOML: parse fails, warn-once, prompt renders with base.
+        std::fs::write(repo.join(".o10k.toml"), "[style\npreset = \"lean\"\n").unwrap();
+
+        let state = std::sync::Arc::new(DaemonState::new(
+            Config::default(),
+            ThemePalette::default(),
+            dir.join("config.toml"),
+            dir.join("d.sock"),
+        ));
+        let (client, server_sock) = tokio::net::UnixStream::pair().unwrap();
+        let (mut reader, _client_writer) = client.into_split();
+        let (_server_reader, mut writer) = server_sock.into_split();
+
+        let req = PromptRequest {
+            cwd: repo.display().to_string(),
+            exit_code: 0,
+            cmd_duration_ms: 0,
+            cols: 120,
+            jobs: 0,
+            command: None,
+            shell_integration: Some(false),
+            env: None,
+        };
+        handle_prompt(&req, &state, &mut writer, None)
+            .await
+            .expect("a broken repo profile must never fail the prompt");
+
+        let resp = read_response(&mut reader).await;
+        assert_eq!(resp["type"], "prompt");
+        assert!(resp["left"].as_str().is_some(), "left prompt rendered");
+    }
+
+    #[tokio::test]
+    async fn prompt_renders_with_project_profile() {
+        let dir = temp_config_dir("profile-prompt");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join(".o10k.toml"), "[segments.character]\nsuccess = \"λ\"\n")
+            .unwrap();
+
+        let state = std::sync::Arc::new(DaemonState::new(
+            Config::default(),
+            ThemePalette::default(),
+            dir.join("config.toml"),
+            dir.join("d.sock"),
+        ));
+        let (client, server_sock) = tokio::net::UnixStream::pair().unwrap();
+        let (mut reader, _client_writer) = client.into_split();
+        let (_server_reader, mut writer) = server_sock.into_split();
+
+        let req = PromptRequest {
+            cwd: repo.display().to_string(),
+            exit_code: 0,
+            cmd_duration_ms: 0,
+            cols: 120,
+            jobs: 0,
+            command: None,
+            shell_integration: Some(false),
+            env: None,
+        };
+        handle_prompt(&req, &state, &mut writer, None)
+            .await
+            .expect("prompt ok");
+
+        let resp = read_response(&mut reader).await;
+        assert_eq!(resp["type"], "prompt");
+        let left = resp["left"].as_str().expect("left prompt");
+        assert!(left.contains('λ'), "profile glyph must reach the prompt: {left}");
+    }
+
+    #[test]
+    fn looks_delete_rejects_curated_and_unknown() {
+        let cfg = Config::default();
+        assert_eq!(
+            validate_look_deletion("tokyo-rainbow", &cfg),
+            Err("cannot delete curated look: tokyo-rainbow".to_string())
+        );
+        assert_eq!(
+            validate_look_deletion("no-such-look", &cfg),
+            Err("unknown look: no-such-look".to_string())
+        );
+    }
+
+    #[test]
+    fn looks_delete_allows_user_shadowing_curated_name() {
+        let mut cfg = Config::default();
+        cfg.looks
+            .insert("tokyo-rainbow".into(), crate::config::LookEntry::default());
+        assert_eq!(validate_look_deletion("tokyo-rainbow", &cfg), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn looks_delete_removes_user_entry_and_reloads() {
+        let dir = temp_config_dir("delete");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[style]\npreset = \"classic\"\n\n[looks.mine]\nlabel = \"Mine\"\npalette = \"keep\"\n\n[looks.mine.patch.style]\npreset = \"lean\"\n",
+        )
+        .unwrap();
+        let state = std::sync::Arc::new(DaemonState::new(
+            Config::load(&path).expect("load config"),
+            ThemePalette::default(),
+            path.clone(),
+            dir.join("d.sock"),
+        ));
+
+        delete_user_look(&state, "mine").await.expect("delete ok");
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("[looks.mine]"), "entry gone from file");
+        assert!(on_disk.contains("[style]"), "unrelated sections survive");
+        assert!(
+            !state.config.read().await.looks.contains_key("mine"),
+            "in-memory config reloaded without the entry"
+        );
+        assert_eq!(
+            state.config.read().await.style.preset, "classic",
+            "reload preserved the rest of the config"
+        );
+    }
+
+    #[tokio::test]
+    async fn looks_delete_unknown_reports_error() {
+        let dir = temp_config_dir("delete-unknown");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[style]\npreset = \"classic\"\n").unwrap();
+        let state = std::sync::Arc::new(DaemonState::new(
+            Config::load(&path).expect("load config"),
+            ThemePalette::default(),
+            path.clone(),
+            dir.join("d.sock"),
+        ));
+
+        let err = delete_user_look(&state, "mine").await.unwrap_err();
+        assert!(err.contains("unknown look"), "got: {err}");
     }
 }

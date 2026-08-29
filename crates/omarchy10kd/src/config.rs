@@ -29,6 +29,8 @@ pub struct Config {
     #[serde(default)]
     pub notifications: NotificationsConfig,
     #[serde(default)]
+    pub plugins: PluginsConfig,
+    #[serde(default)]
     pub statusline: StatuslineConfig,
     #[serde(default)]
     pub terminal: TerminalConfig,
@@ -182,6 +184,7 @@ pub struct CustomPalette {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DirectoryConfig {
+    pub enabled: bool,
     pub strategy: String,
     pub max_length: usize,
     pub repo_root_style: String,
@@ -195,6 +198,7 @@ pub struct DirectoryConfig {
 impl Default for DirectoryConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             strategy: "smart".into(),
             max_length: 40,
             repo_root_style: "bold".into(),
@@ -255,6 +259,14 @@ pub struct SegmentsConfig {
     pub ai: AiSegmentConfig,
     pub notification: NotificationConfig,
     pub load: LoadConfig,
+    pub package_version: IconSegmentConfig,
+    pub dir_writable: IconSegmentConfig,
+    pub aws_profile: IconSegmentConfig,
+    pub docker_context: IconSegmentConfig,
+    pub kubectl_context: IconSegmentConfig,
+    pub terraform_workspace: IconSegmentConfig,
+    pub vpn: IconSegmentConfig,
+    pub gcloud_project: IconSegmentConfig,
 }
 
 impl Default for SegmentsConfig {
@@ -276,6 +288,14 @@ impl Default for SegmentsConfig {
             ai: AiSegmentConfig::default(),
             notification: NotificationConfig::default(),
             load: LoadConfig::default(),
+            package_version: IconSegmentConfig::with_icon("\u{f492}"),
+            dir_writable: IconSegmentConfig::with_icon("\u{f023}"),
+            aws_profile: IconSegmentConfig::with_icon("\u{f270}"),
+            docker_context: IconSegmentConfig::with_icon("\u{f308}"),
+            kubectl_context: IconSegmentConfig::with_icon("\u{fd31}"),
+            terraform_workspace: IconSegmentConfig::with_icon("\u{f1bc}"),
+            vpn: IconSegmentConfig::with_icon("\u{f6ff}"),
+            gcloud_project: IconSegmentConfig::with_icon("\u{f7b9}"),
         }
     }
 }
@@ -297,6 +317,34 @@ impl Default for LoadConfig {
     }
 }
 
+/// Shared shape for the default-off catalog segments: an `enabled` gate and
+/// a Nerd Font icon the user can override. All default to disabled so
+/// upgrading users see zero behavior change.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct IconSegmentConfig {
+    pub enabled: bool,
+    pub icon: String,
+}
+
+impl Default for IconSegmentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            icon: "\u{f492}".into(),
+        }
+    }
+}
+
+impl IconSegmentConfig {
+    /// Disabled-by-default variant carrying a specific glyph.
+    fn with_icon(icon: &str) -> Self {
+        Self {
+            enabled: false,
+            icon: icon.into(),
+        }
+    }
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct OsSegmentConfig {
@@ -739,7 +787,23 @@ impl Default for Config {
             terminal: TerminalConfig::default(),
             daemon: DaemonConfig::default(),
             looks: Default::default(),
+            plugins: PluginsConfig::default(),
         }
+    }
+}
+
+/// Plugin economy config: which distributed plugins (built-in catalog names
+/// or git-URL slugs) are enabled. Serde-default empty so legacy configs
+/// parse unchanged.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PluginsConfig {
+    pub enabled: Vec<String>,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self { enabled: Vec::new() }
     }
 }
 

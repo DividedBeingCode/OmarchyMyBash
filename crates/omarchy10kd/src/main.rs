@@ -1,6 +1,8 @@
 mod config;
 mod git;
 mod looks;
+mod plugins;
+mod profiles;
 mod layout;
 mod render;
 mod segments;
@@ -175,6 +177,13 @@ async fn run_watchers(
             watcher.watch(config_dir, notify::RecursiveMode::NonRecursive)?;
             info!("watching config dir: {}", config_dir.display());
         }
+        // Plugin registry: watch plugins/ so drop-in add/update/remove and
+        // manifest edits trigger a registry reload like a config change.
+        let plugins_dir = plugins::plugins_dir_for(config_dir);
+        if plugins_dir.exists() {
+            watcher.watch(&plugins_dir, notify::RecursiveMode::Recursive)?;
+            info!("watching plugins dir: {}", plugins_dir.display());
+        }
     }
 
     // Watch Omarchy theme
@@ -202,6 +211,14 @@ async fn run_watchers(
                         p.file_name()
                             .is_some_and(|n| n == "colors.toml")
                     });
+                    // Any event under the plugins dir rebuilds the registry.
+                    let plugins_root = plugins::plugins_dir_for(
+                        config_path.parent().unwrap_or_else(|| std::path::Path::new(".")),
+                    );
+                    let is_plugin = event
+                        .paths
+                        .iter()
+                        .any(|p| p.starts_with(&plugins_root));
 
                     if is_config {
                         let state = Arc::clone(&state);
@@ -209,6 +226,15 @@ async fn run_watchers(
                             tokio::runtime::Handle::current().block_on(async {
                                 if let Err(e) = state.reload_config().await {
                                     warn!("auto-reload config failed: {e}");
+                                }
+                            });
+                        });
+                    } else if is_plugin {
+                        let state = Arc::clone(&state);
+                        tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(async {
+                                if let Err(e) = state.reload_config().await {
+                                    warn!("auto-reload plugins failed: {e}");
                                 }
                             });
                         });

@@ -74,7 +74,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     };
 
     Some(Segment {
-        name: "git",
+        name: "git".into(),
         content,
         compact_content: compact,
         priority: 20,

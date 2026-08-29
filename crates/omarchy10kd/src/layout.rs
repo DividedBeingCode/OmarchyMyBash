@@ -2,7 +2,9 @@ use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone)]
 pub struct Segment {
-    pub name: &'static str,
+    /// Registry name. Built-ins are static strings; plugin segments use
+    /// `plugin.<plugin>.<segment>` and need owned data, hence `Arc<str>`.
+    pub name: std::sync::Arc<str>,
     pub content: String,
     pub compact_content: Option<String>,
     pub priority: u8,
@@ -182,7 +184,7 @@ impl LayoutPreset {
 
     pub fn apply_filter(segments: &mut Vec<Segment>, preset: &str) {
         let allowed = Self::segment_order(preset);
-        segments.retain(|s| allowed.contains(&s.name));
+        segments.retain(|s| allowed.contains(&&*s.name));
     }
 }
 

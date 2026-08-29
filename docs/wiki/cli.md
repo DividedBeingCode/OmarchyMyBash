@@ -6,7 +6,7 @@ The `omarchy10k` binary is a thin async client (crate `omarchy10k`, version 0.4.
 
 ## Subcommands
 
-Subcommands in enum order: `prompt`, `init`, `doctor`, `reload`, `look`, `benchmark`, `debug`, `bridge`, `statusline`, `intro`, `configure`, `update`, `script`, `hook-event`, plus two hidden: `parse-prompt`, `benchmark-shell`.
+Subcommands in enum order: `prompt`, `init`, `layer`, `doctor`, `reload`, `look`, `plugin`, `migrate`, `benchmark`, `debug`, `bridge`, `statusline`, `intro`, `configure`, `update`, `script`, `hook-event`, plus two hidden: `parse-prompt`, `benchmark-shell`.
 
 ### `omarchy10k prompt`
 
@@ -77,11 +77,15 @@ Browse and apply named appearance bundles (Looks). A Look is a named patch over 
 | `look apply <name>` | `looks_apply` | Applies a Look atomically — the patch is merged into `config.toml` (tmp+rename) and the daemon's fs watcher reloads it |
 | `look apply <name> --transient` | `looks_apply` | In-memory only; reverted by the next config reload (`omarchy10k reload`) |
 | `look save <name> [--label <label>]` | `looks_save` | Snapshots the current appearance as a named user Look written to `[looks.<name>]` (palette directive `keep`) |
+| `look export <name> [--out FILE] [--clipboard]` | `looks` + `looks_save`-style local read | Emits the Look as a portable TOML bundle — stdout by default, `--out FILE`, or `--clipboard` (wl-copy, then xclip). User entries export verbatim; curated Looks need a reachable daemon (`export_curated`) |
+| `look install <file\|https-url> [--yes] [--force] [--as NAME]` | `config set` (looks table) | Installs a Look bundle. Local files or **https:// URLs only** (fetched with `curl`; any other scheme refused before network activity — share.rs `fetch_bundle`). The bundle is validated (exactly one `[looks.<name>]` table, entry keys checked, valid name) and by default only the resolved patch is **printed (dry run)**. `--yes` writes via the daemon's atomic config patch, falling back to a local atomic tmp+rename write; `--force` overwrites an existing user Look of the same name, `--as NAME` installs under a different name |
 
 ```bash
 omarchy10k look list
 omarchy10k look apply tokyo-night --transient
 omarchy10k look save my-rice --label "My Rainbow"
+omarchy10k look export my-rice --out my-rice.toml
+omarchy10k look install my-rice.toml --as borrowed-rice
 ```
 
 ### `omarchy10k benchmark`
@@ -197,6 +201,9 @@ the real daemon renderer**:
 
 On completion the chosen keys are written to `~/.config/omarchy10k/config.toml` (any existing file is backed up first); the daemon's fs watcher picks the change up immediately — no restart needed.
 
+**v0.4.1 depth additions**: new steps after appearance — context preview (cycle Clean / Failed / Dirty repo / SSH with live daemon previews), per-segment enable toggles (arrows + space, live preview via the patch payload), and three finish paths: apply now (config.toml), save as Look (config_set on the looks table), or save as project profile (`.o10k.toml` in cwd). Every wizard preview carries a config_set-shaped patch so prompt char, transient, OS icon, and segment toggles render live.
+
+
 ### `omarchy10k update`
 
 One-command upgrade path. Pulls latest source, rebuilds, replaces binaries, refreshes the Quattro plugin and theme hook, and gracefully restarts running daemons.
@@ -291,6 +298,12 @@ Shell-layer claim map (C2). Reads `[shell.layer]` from the user config, resolves
 omarchy10k layer            # human map (claim / kind / category / action / notes)
 omarchy10k layer --json     # machine-readable claim table
 ```
+
+## `plugin`
+
+Segment-plugin economy (v0.4.1). Plugins live in `~/.config/omarchy10k/plugins/<name>/` with a `plugin.toml` (name, description, version, author, [[segments]] with tier env|command). `plugin add <git-url>` shallow-clones (https/git/git@ remotes only — local paths refused), installs DISABLED, and prints what it adds; `plugin list`; `plugin enable|disable <name>` (config `[plugins].enabled`, daemon registry reloads live); `plugin remove` (refuses while enabled); `plugin update` (git pull + commit summary). Enabled plugin segments join the render pipeline as `plugin.<plugin>.<segment>`.
+
+Convert a starship.toml into an o10k Look: `omarchy10k migrate <starship.toml> [--yes]`. Dry-run by default — prints the mapping table (directory, git, cmd_duration, character, time, battery, jobs, aws, gcloud, kubernetes, terraform, package, docker_context, hostname/username→ssh, python/conda→python_env, nodejs/rust/golang/ruby/java→toolchain; collapsed rows like git_branch+git_status→git) and an honest unmapped list ($fill, $memory_usage, $custom…). `--yes` saves Look `migrated-starship` via the daemon (local atomic fallback). Style/symbol formatting inside starship modules is not translated — segments land with o10k defaults.
 
 ## Socket Path Resolution
 

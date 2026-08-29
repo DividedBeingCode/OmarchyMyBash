@@ -39,11 +39,13 @@
 | **Palette API** | Daemon control command (`command: "palette"`) returning current theme colors as hex strings. Used by Quattro for theme color swatches without reading `colors.toml` directly. |
 | **Parent PID monitor** | The daemon's background task that checks `kill(ppid, 0)` every 2 seconds and exits when the parent shell is gone. |
 | **Per-shell daemon** | Architecture where each Bash session gets its own `omarchy10kd` process and socket. Provides isolation and automatic cleanup. |
+| **Plugin** | Distributed segment plugin: a directory under `~/.config/omarchy10k/plugins/<name>/` containing a `plugin.toml` manifest that declares env-tier and command-tier `[[segments]]` entries (icon, env keys or a command line, `ttl_secs` cache, optional `detect_cwd_file` gate). Plugins ship data, not code. Presence on disk means *available*; a name listed in `[plugins] enabled` means rendered. Installed via `omarchy10k plugin add <git-url>` (installs disabled with a review hint); managed by `plugin enable/disable/remove/update`. Plugin segments render under the `plugin.<plugin>.<segment>` registry name. |
 | **Porcelain v2** | Git's machine-readable status format (`git status --porcelain=v2 --branch`). Used by the daemon for reliable parsing. |
 | **Preexec ready gate** | `__O10K_PREEXEC_READY` flag that prevents the preexec handler from firing multiple times per command line. |
 | **Preview API** | Daemon protocol message (`type: "preview"`) that renders a prompt with simulated context for Quattro live preview. Accepts optional fields (`cwd`, `exit_code`, `git_branch`, `git_staged`, `cols`, etc.) plus dry-run overrides: `look` (render with a Look applied — used by the gallery overlay) and `style_preset` (per-card preset previews). Omits OSC 133 markers and skips git subprocesses. |
 | **Priority** | Segment attribute (lower number = more important). The layout engine keeps high-priority segments when space is tight. |
 | **Protocol version** | Version string (currently `"0.5"`) exchanged during `hello` handshake. Enables backward-compatible protocol evolution. |
+| **Project profile** | A `.o10k.toml` file in a repo (or any ancestor dir below `$HOME`) that applies a display-only config patch while working in that project. Untrusted input: allowlisted to `style`/`prompt`/`segments`/`theme`/`frame`; any other top-level key rejects the whole file. Detection walks upward from the cwd, stops at `.git` boundaries and `$HOME`, and is cached 30 s / 512 entries. Merge order: base config → Look → project profile → preview patch. |
 | **Quattro** | The Omarchy desktop bar/panel system built on Quickshell. The Omarchy10k plugin appears as a bar widget. |
 | **Quickshell** | The QML-based desktop shell framework used by Omarchy Quattro. Provides `Process`, `Socket`, bar/panel infrastructure. |
 | **Segment** | A discrete piece of the prompt (directory, git, exit status, command duration). Each is a `render(ctx) -> Option<Segment>` function. |
@@ -72,6 +74,7 @@
 | `O10K_SKIP_HOOK_UPDATE` | User (optional) | `hooks/post-update` | Skip the git pull/update step in the post-update hook (already skipped when the hook runs on an interactive terminal). |
 | `O10K_SKIP_TOOLS` | User (optional) | install.sh | Skip installing the modern CLI tools (eza, bat, zoxide, fzf, ...). |
 | `O10K_NO_TOOLS` | User (optional) | Adapter, install.sh | Disable the tools layer entirely — the adapter never sources `~/.config/omarchy10k/tools.sh` and the installer skips the packages. |
+| `O10K_HARNESS_ONLY` | Test harness (`tests/vanilla_transient_test.sh`) | Adapter | Set to `1` to source the adapter for tests only: the interactive-shell guard passes and the script returns right after the function definitions — no daemon/bridge/watchdog startup, no hook installation, no EXIT trap — so the prompt functions can be exercised standalone in a plain bash fixture. |
 | `__O10K_INITIALIZED` | Adapter (shell variable, not exported) | Adapter | Re-initialization guard: a re-sourced `omarchy10k.bash` returns immediately when it is already set in the shell. |
 | `KEYMAP` | Bash / ble.sh | Adapter (env channel) | Current readline keymap. Forwarded to the daemon as the env-channel key `vi_mode`; when empty (vanilla bash outside bind-based callbacks) nothing is emitted. |
 | `vi_mode` (env-channel key) | Adapter (from `KEYMAP`) | Daemon (`segments/character.rs`) | Vi-mode signal for `[segments.character] vi_mode`. Any value starting with `n`/`N` renders the NORMAL glyph `❮`; INSERT or absent keeps the configured prompt char. |
@@ -102,6 +105,8 @@
 |------|---------|------------|
 | `~/.config/omarchy10k/config.toml` | User configuration | User or Quattro panel |
 | `~/.config/omarchy10k/scripts/` | Quick-action user scripts (`omarchy10k script list` / `script run <name>`; 30s default timeout, traversal-guarded, local-exec fallback without a daemon) | User |
+| `.o10k.toml` (repo root or an ancestor dir below `$HOME`) | Project profile — display-only config patch (`style`/`prompt`/`segments`/`theme`/`frame` allowlist) | User or `omarchy10k configure` wizard |
+| `~/.config/omarchy10k/plugins/<name>/` | Distributed segment plugins, each a directory with a `plugin.toml` manifest (env-tier / command-tier `[[segments]]`) | `omarchy10k plugin add` / User |
 | `~/.local/state/omarchy/current/theme/colors.toml` | Generated theme palette | Omarchy theme engine |
 | `~/.local/state/omarchy/current/theme.name` | Current theme name | Omarchy theme engine |
 | `$XDG_RUNTIME_DIR/omarchy10k-{ppid}.pid` | Daemon PID file written at spawn | Bash adapter |
@@ -112,7 +117,6 @@
 | `${XDG_STATE_HOME:-$HOME/.local/state}/omarchy10k/intro_shown` | One-time first-run intro marker | CLI (`omarchy10k intro`) |
 | `$XDG_CACHE_HOME/omarchy10k/.first-run-hint-shown` | First-run hint gate flag | Bash adapter |
 | `~/.local/share/blesh/ble.sh` | ble.sh installation | User |
-
 | `~/.config/omarchy10k/ghostty.conf` | Static terminal personality include (`shell-integration = none`); wired into the ghostty config by install.sh |
 | `~/.local/state/omarchy/current/theme/o10k-ghostty.conf` / `o10k-foot.ini` | Theme-rendered non-color terminal personality (cursor accent) from `templates/themed/o10k-*.tpl` |
 | `~/.local/state/omarchy/current/theme/o10k-blesh.bash` / `o10k-delta.gitconfig` | Rendered ble.sh faces / delta theme (self-gating; delta opt-in via gitconfig include) |

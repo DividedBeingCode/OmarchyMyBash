@@ -15,7 +15,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let width = UnicodeWidthStr::width(content.as_str()) as u16;
 
     Some(Segment {
-        name: "jobs",
+        name: "jobs".into(),
         content,
         compact_content: Some(format!("\u{f013}{}", ctx.jobs)),
         priority: 45,

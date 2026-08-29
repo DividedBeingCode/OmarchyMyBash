@@ -16,7 +16,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let preferred_width = UnicodeWidthStr::width(content.as_str()) as u16;
 
     Some(Segment {
-        name: "toolchain",
+        name: "toolchain".into(),
         content: content.clone(),
         compact_content: Some(parts.join("")),
         priority: 40,

@@ -50,6 +50,10 @@ Omarchy10k exists because shell prompts are a hot path that most tools treat as 
 │    ├── Looks (curated + user [looks.<name>] bundles, palette merge)  │
 │    ├── ScriptExec (~/.config/omarchy10k/scripts, 30s timeout,        │
 │    │            traversal guard)                                     │
+│    ├── PluginRegistry (~/.config/omarchy10k/plugins/<name>/          │
+│    │            plugin.toml, env/command tiers,                      │
+│    │            `plugin.<plugin>.<segment>` names, reload pickup)    │
+│    ├── Profiles (per-repo .o10k.toml, allowlisted, 30s TTL cache)    │
 │    ├── SegmentCollector → style-preset filter → LayoutEngine         │
 │    │    → PromptRenderer (OSC 2 title, OSC 8 links, undercurl,       │
 │    │      right rail via resolve_right_rail → render_right)          │
@@ -74,16 +78,20 @@ Omarchy10k exists because shell prompts are a hot path that most tools treat as 
 ├──────────────────────────────────────────────────────────────────────┤
 │  QUATTRO BAR PLUGIN (QML/JS, desktop integration)                     │
 │    ├── BarWidget.qml → "❯" glyph in system bar + bar badges          │
-│    │   (daemon-status dot, git dirty dot, long-cmd chip)             │
+│    │   (daemon-status dot, git dirty dot, agents badge, long-cmd chip)│
 │    ├── Panel.qml → Control Center, 4-bucket rail                     │
 │    │   (LOOKS · STYLE · BEHAVIOR · SYSTEM)                           │
 │    │   ├── Looks cards → looks_apply; Save-as-Look → looks_save      │
 │    │   ├── Config read/write (config_get/config_set, delta saves)    │
 │    │   ├── Live preview (preview message, look dry-run override)     │
 │    │   ├── Palettes/defaults (palette + defaults control verbs)      │
-│    │   └── Socket discovery + daemon IPC (spawns headless daemon)    │
-│    ├── Gallery.qml → full-screen Looks gallery overlay               │
-│    │   (real daemon dry-run renders per card, category filter)       │
+│    │   ├── Socket discovery + daemon IPC (spawns headless daemon)    │
+│    │   └── PanelLooks/PanelStyle/PanelBehavior/PanelSystem.qml →     │
+│    │       extracted bucket panes; PanelKit.qml → shared unbound     │
+│    │       components (bound inline components cannot instantiate    │
+│    │       cross-file — the KEY FINDING of the C4 decomposition)     │
+│    ├── Gallery.qml → full-screen Looks gallery overlay + Looks Studio│
+│    │   editor (palette/cycle rows, Gradient Ramp Designer)           │
 │    ├── SessionPicker.qml → live session list overlay                 │
 │    ├── Service.qml → persistent connection hub for all sockets       │
 │    └── Model.js → TOML parser, CONFIG_MAP, protocol helpers          │
@@ -272,8 +280,10 @@ Each `Segment` declares:
 - `hide_below_cols` — minimum terminal width to show at all
 - `fg` / `bg` / `bold` — ANSI color attributes
 - `min_width` / `preferred_width` — layout hints
+- `name` — registry name as `Arc<str>`: built-ins are static strings, plugin segments carry `plugin.<plugin>.<segment>` and need owned data (the old `Box::leak` trick is banned)
 
 The `LayoutEngine` performs a two-pass resolution:
+
 1. **Fit check** — sum all preferred widths; if they fit terminal width, use all
 2. **Priority compress** — sort by priority, greedily add segments using compact forms, stop when terminal width exhausted
 3. **Order restore** — sort resolved segments back to original display order
@@ -297,7 +307,17 @@ Current segments and their priorities (collection order in `segments/mod.rs`):
 | Jobs | 45 | 50 cols | Blue |
 | Time | 55 | 40 cols | Muted (localtime via libc, no chrono) |
 | Battery | 56 | 40 cols | Green/yellow/red by threshold (sysfs BAT0/BAT1) |
+| Dir Writable | 6 | 40 cols | Red when the cwd is NOT writable (cached write probe; silent when writable) |
+| Package Version | 33 | 50 cols | Accent (manifest scan of the cwd, TTL-cached) |
+| VPN | 34 | 50 cols | Green (sysfs `/sys/class/net` tun*/tap*/wg* interface names) |
+| AWS Profile | 35 | 50 cols | Yellow (env: AWS_PROFILE / AWS_VAULT / AWS_DEFAULT_PROFILE) |
+| Docker Context | 36 | 50 cols | Blue (env DOCKER_HOST, else async `docker context show`, TTL-cached) |
+| Kubectl Context | 37 | 50 cols | Cyan (async `kubectl config current-context`, `on_path`-gated, TTL-cached) |
+| Terraform Workspace | 39 | 50 cols | Magenta (stat gate on a `.terraform` dir in the cwd, then async `terraform workspace show`, TTL-cached) |
+| GCloud Project | 40 | 50 cols | Orange (env GOOGLE_CLOUD_PROJECT, else async `gcloud config get-value project`, TTL-cached) |
 | Load | 55 | 40 cols | Muted (braille sparkline of per-render load ring, opt-in) |
+
+*Tier D note:* the eight segments above (v0.4.0 Tier D catalog) are **all default-off** — each is gated on its own `[segments.<name>].enabled` flag and excluded from every style preset until enabled. Shared helpers (`TtlCache`, `run_command`, `on_path`) live in `segments/util.rs`. Detection is tiered to protect the sub-5ms budget: pure env read → cached filesystem stat → `on_path`-gated async subprocess with a hard timeout, TTL-cached across renders.
 
 Style presets (`style.preset`, honoring legacy `prompt.layout` as an input) control separators, frames, and the segment allowlist. `omarchy`, `powerline`, `rainbow`, `gradient`, `framed`, `classic`, `lean`, and `slanted` resolve their segment lists from `ALL_SEGMENTS` in `style.rs` (everything in the table above); `dense` keeps os/ssh/directory/git/exit_status/command_duration/jobs; `minimal` is directory-only; `pure` is directory + git. Presets `minimal` and `dense` force single-line mode regardless of `prompt.newline`.
 
@@ -324,7 +344,7 @@ Features gate rendering behavior: OSC 8 wraps directory paths in clickable hyper
 
 **Looks** (`command: "looks"` / `"looks_apply"` / `"looks_save"`) list, apply, and snapshot appearance bundles. `looks_apply` merges the resolved patch through the config_set path, or patches the in-memory config only when `transient` is true. See [Data Flow: Look Apply](#data-flow-look-apply-protocol-05).
 
-**Status** (`command: "status"`) is the ambient snapshot served additively: `pid`, `version`, `protocol_version`, `cwd`, the last render summary (branch, dirty counts, duration, exit code), a live git-cache summary for that cwd, battery (sysfs; `null` on desktops), `last_cmd_duration_ms`, and `session_age_secs`. The BarWidget badges and SessionPicker consume this stream — no new timers.
+**Status** (`command: "status"`) is the ambient snapshot served additively: `pid`, `version`, `protocol_version`, `cwd`, the last render summary (branch, dirty counts, duration, exit code, and `agent` — `"claude"|"codex"|null`, detected from the same env channel the AI-agent segment reads via `detect_agent`), a live git-cache summary for that cwd, battery (sysfs; `null` on desktops), `last_cmd_duration_ms`, and `session_age_secs`. The BarWidget badges (including the robot-glyph agents badge) and SessionPicker consume this stream — no new timers.
 
 ## Instant Prompt Caching
 
@@ -388,6 +408,9 @@ Git status fetching now calls `detect_worktree()` after porcelain v2 parse. When
 └───┬────┘ └──────┘ └──────┘                 │          │          │
     │                                        │          │          │
     ├── os ssh container directory git       │          │          │
+    ├── package_version dir_writable aws_profile docker_context
+    ├── kubectl_context terraform_workspace vpn gcloud_project
+    │   (Tier D catalog; shared TtlCache/run_command/on_path in util.rs)
     ├── python_env toolchain nix k8s         │          │          │
     ├── ai exit_status command_duration jobs │          │          │
     └── time battery load                    │          │          │
@@ -396,6 +419,46 @@ Git status fetching now calls `detect_worktree()` after porcelain v2 parse. When
 ```
 
 All modules are private to the daemon binary (no `lib.rs`). This is intentional — the daemon is a self-contained service, not a library.
+
+## Project Profiles (v0.4.1)
+
+Render merge order: base config → transient Look → **project profile** (`.o10k.toml`, display-keys allowlisted: style/prompt/segments/theme/frame; `.git`-boundary-stopped detection; 30s TTL / 512-entry cache) → the Looks Studio's ephemeral `preview.patch` override (config_set-shaped; last layer wins, never persisted). `theme.source = "terminal"` resolves the palette from the rendered ghostty palette file (accent=4, muted=8, red..cyan=1–6, orange=11) with default fallback. The configure wizard gained context previews, per-segment toggles, and three finish paths (apply / Look / profile).
+
+## Plugin Economy (v0.4.0 Tier D)
+
+Plugins are data, not code. A plugin is a directory under
+`~/.config/omarchy10k/plugins/<name>/` containing a `plugin.toml` manifest that
+declares segments in two tiers:
+
+| Tier | Mechanism | Cost profile |
+|------|-----------|--------------|
+| `env` | Renders the first set key from an ordered `env_keys` list, via the shell's env channel | Zero forks; cannot stall the prompt |
+| `command` | Runs a fixed command line in the prompt's cwd, async with a hard timeout, TTL-cached (TtlCache modelled on GitCache) | Subprocess cost paid off the critical path |
+
+Plugin segments render as `plugin.<plugin>.<segment>` so they can never collide
+with (or shadow) a built-in segment. Presence on disk means *available*; presence
+in `[plugins] enabled` means *active* — the registry rebuilds on every config
+reload, so `omarchy10k plugin enable|disable` (which writes that table via the
+daemon) picks up immediately.
+
+The CLI lifecycle: `plugin add <git-url>` accepts only remote git URLs
+(`https://`, `git://`, scp-like `git@host:repo`; local paths and `file://` are
+refused before any command runs) and shallow-clones into place — always
+installed DISABLED with a review hint, since the manifest and any code ship
+unreviewed. `list` shows installed plugins with their enabled state; `remove`
+is refused while the plugin is enabled.
+
+## Starship Migration (v0.4.0 Tier D)
+
+`omarchy10k migrate <starship.toml> [--yes]` reads a Starship config, extracts
+the `$module` names from its `format` string, and maps them onto o10k segments
+(e.g. `git_branch`/`git_status` → `git`, `cmd_duration` → `command_duration`,
+`hostname`/`username` → `ssh`, `python`/`conda` → `python_env`, `aws` →
+`aws_profile`, `kubernetes` → `k8s`, `package` → `package_version`, …).
+Modules with no o10k counterpart are listed honestly as unmapped. Dry-run by
+default (mapping table + unmapped list); with `--yes` it saves a
+`[looks.migrated-starship]` Look through the daemon, with an atomic local
+fallback when no daemon answers.
 
 ## Known Architectural Issues
 

@@ -124,9 +124,19 @@ Item {
     }
 
     function _onSessionSocketError(index) {
+        // Defer + match by path: this fires from inside the Instantiator's
+        // delegate teardown; mutating socketPaths synchronously re-enters the
+        // model binding and trips a binding loop.
+        var path = service.socketPaths[index]
+        if (!path) return
+        Qt.callLater(service._removeSessionPath, path)
+    }
+
+    function _removeSessionPath(path) {
+        var idx = service.socketPaths.indexOf(path)
+        if (idx < 0) return
         var paths = service.socketPaths.slice()
-        if (index < 0 || index >= paths.length) return
-        paths.splice(index, 1)
+        paths.splice(idx, 1)
         service.socketPaths = paths
         if (paths.length === 0) {
             service.sessions = []

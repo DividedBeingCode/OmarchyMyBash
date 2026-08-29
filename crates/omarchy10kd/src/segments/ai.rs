@@ -19,7 +19,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let preferred_width = UnicodeWidthStr::width(content.as_str()) as u16;
 
     Some(Segment {
-        name: "ai",
+        name: "ai".into(),
         content: content.clone(),
         compact_content: Some(glyph.to_string()),
         priority: 38,
@@ -92,7 +92,7 @@ mod tests {
         let git = GitStatus::default();
         let ctx = make_ctx(&env, &config, &git);
         let seg = render(&ctx).expect("claude env should activate the segment");
-        assert_eq!(seg.name, "ai");
+        assert_eq!(&*seg.name, "ai");
         assert!(seg.content.contains("claude"));
     }
 

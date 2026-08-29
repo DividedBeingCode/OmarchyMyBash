@@ -12,7 +12,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let preferred_width = UnicodeWidthStr::width(content.as_str()) as u16;
 
     Some(Segment {
-        name: "python_env",
+        name: "python_env".into(),
         content: content.clone(),
         compact_content: Some("🐍".to_string()),
         priority: 35,

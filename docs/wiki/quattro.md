@@ -4,7 +4,7 @@
 
 The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as a bar widget in the Omarchy Quattro panel. It reads and writes config files, communicates with running daemon instances over Unix sockets, detects installed shell tools, and previews prompt output in real time.
 
-**Protocol version:** 0.3 hello handshake (feature gating). The v0.4 daemon adds `style_preset` and `look` override fields on `preview` requests; the v0.5 daemon adds the `looks` / `looks_apply` / `looks_save` / `palettes` / `defaults` control verbs.
+**Protocol version:** 0.3 hello handshake (feature gating). The v0.4 daemon adds `style_preset` and `look` override fields on `preview` requests; the v0.5 daemon adds the `looks` / `looks_apply` / `looks_save` / `looks_delete` / `palettes` / `defaults` control verbs plus the `patch` override on `preview` (Looks Studio dry-run re-renders).
 
 ## Manifest (`quattro/manifest.json`)
 
@@ -66,7 +66,8 @@ Panel (qs.Ui.Panel, manageIpc: false)
 ├── Live prompt preview (ANSI → StyledText colors) + Error/SSH/Long cmd toggles
 ├── Rail bar: Looks · Style · Behavior · System (4 buckets, Loader-switched)
 ├── omarchyService mirror (daemonStatus + sessionList, feature-detected)
-├── 4× Component buckets (Looks / appearance / behavior / system)
+├── bucket files PanelLooks / PanelStyle / PanelBehavior / PanelSystem.qml
+│   (Loader-switched; state injected via `panel`) + shared PanelKit.qml
 └── Processes/Sockets/Timers as in v0.3 (own daemonSocket still drives preview/config)
 
 SessionPicker (Item, overlay kind — summoned on demand)
@@ -118,11 +119,13 @@ The bar glyph tooltip reflects live daemon status:
 
 ### Bar Intelligence (status-stream badges, no new timers)
 
-All three badges are pure bindings over the `status` payload the widget already receives (Service hub's `lastStatus` in service mode, the existing 5s poll response otherwise — no new timers):
+All four badges are pure bindings over the `status` payload the widget already receives (Service hub's `lastStatus` in service mode, the existing 5s poll response otherwise — no new timers):
 
 1. **Glyph health color** — `barGlyphColor`: `Color.accent` while the daemon answers, `Color.urgent` when disconnected/not running. Replaces the default bar foreground on the ❯ glyph.
 2. **Git dirty dot** — 6 px dot next to the glyph, driven by `status.git` `{branch, dirty, staged, unstaged}`: accent while staged-only, urgent once the tree is dirty/unstaged (`barGitHot`); hidden entirely when git is absent/clean or the daemon is down.
 3. **Long-cmd chip** — `⏱ <duration>` in urgent color while the last command's `last_cmd_duration_ms` outlives the threshold; the next fresh status clears it by rebinding. Threshold comes from the hub's `notifyThresholdMs` (0 = notifications off), falling back to `barLongCmdFallbackMs` = 10000.
+
+4. **Agent mini-badge** — a Nerd Font robot glyph (`\uF086`, diamond star `\u2726` fallback when the bar font family is not a Nerd Font) in accent color, shown while the last prompt render saw an AI agent env key: `status.agent` is `"claude"` or `"codex"` (daemon-side `detect_agent`, delivered on the existing status stream), and null otherwise. Gated exactly like the git dot — hidden when the daemon is down (status data stale) or `status.agent` is null. The tooltip appends `" · Agent: <name>"` when present.
 
 ## Quickshell Imports
 
@@ -143,7 +146,7 @@ All three badges are pure bindings over the `status` payload the widget already 
 | Panel opens | Load config, discover all sockets, detect tools, request preview + palette |
 | Config change | Snapshot undo stack → update property → debounce 300ms → `config_set` → request preview |
 | Panel closes | `controller.hide()`, disconnect `daemonSocket` |
-| Tab switch | `Loader` swaps among 5 tab components |
+| Tab switch | `Loader` swaps among the 4 bucket files (decomposition, v0.4.1) |
 | Undo click | Pop last config snapshot from circular buffer, re-apply, save |
 
 ### Body layout conventions (fixed to match first-party panels)
@@ -161,7 +164,7 @@ All three badges are pure bindings over the `status` payload the widget already 
 |---------|----------------|
 | Connection status indicator | Green/yellow/red dot in panel header; green = running, yellow = reconnecting, red = not running |
 | Hero backdrop toggle | "◧ bg" button in the header cycles a `backdropMode` flag on the header row (visual mode switch for the hero preview area) |
-| Doctor output in panel | Scrollable monospace `TextEdit` in the System bucket after "Run Doctor" |
+| Doctor dashboard | "Run Doctor" parses output into per-subsystem cards (status glyph + colored OK/FAIL/SKIP chip, detail line); a `raw ▸` toggle keeps the scrollable monospace `TextEdit` one click away |
 | Live prompt preview | Preview box above the rail; `preview` IPC with simulated context; auto-updates on config save |
 | Preview toggles | Error / SSH / Long cmd pill buttons modify preview context and re-request |
 | Config diff toast | `"Changed key → value"` accent toast with 2s fade on every config change |
@@ -179,12 +182,12 @@ All three badges are pure bindings over the `status` payload the widget already 
 | Feature | Implementation |
 |---------|----------------|
 | Theme color preview | `palette` command on connect/theme change; swatch row for 8 colors |
-| Segment toggle grid | New Segments grid (Behavior bucket) with 2-column pills for 8 segment flags |
-| One-click tool setup | "Install Atuin" / "Install Mise" buttons in the System bucket when tools missing |
+| Segment toggle grid | 2-column pill grid (Behavior bucket) for 9 segment flags, filtered by the panel's `searchQuery` |
+| Remediation cards (supersedes tool install buttons) | One card per missing tool with why + a one-tap **COPY** of the exact install command to the clipboard; auto-install buttons are retired (`installRunner` has no remaining caller) |
 | Config undo | Circular buffer of last 10 config states; "↩ Undo" button in header |
 | Config import/export | "Copy Config" / "Paste Config" in the System bucket via xclip/wl-copy |
 | Degradation labels | Per-feature: preview shows "Live preview requires daemon v0.3+" and palette shows "Palette preview requires daemon v0.3+" when protocol < 0.3; System bucket shows "full (v0.3+)" / "degraded (upgrade daemon)" |
-| Benchmark display | "Run Benchmark" button with scrollable results (`omarchy10k benchmark --iterations 50`) |
+| Benchmark display | "Run Benchmark" button; results render as a summary card (braille sparkline + best/median/worst) with a `raw ▸` toggle back to the full scrollable output (`omarchy10k benchmark --iterations 50`) |
 
 ## Live Prompt Preview (ANSI-colored, v0.4)
 
@@ -219,7 +222,7 @@ Same tokenizer family as `stripAnsi`, but SGR state is carried across the stream
 
 ### Preset Gallery Live Previews
 
-The Style bucket's 8 style cards render **live daemon previews** instead of hardcoded strings: `requestPresetPreviews()` sends one `preview` request per preset with the id `preset-<name>` and the v0.4 `style_preset` override field (daemon renders one-shot with that preset; no config mutation — see [protocol.md](protocol.md)). Responses route by id into `presetPreviews[name]`; the card shows the rich preview (`textFormat: Text.StyledText`), falling back to the static glyph string when the daemon is unreachable or older than the override. Requires daemon ≥ 0.3 for previews, ≥ 0.4 for per-card distinct presets.
+The Style bucket's 9 style cards (incl. the Wave-1 `gradient` preset) render **live daemon previews** instead of hardcoded strings: `requestPresetPreviews()` sends one `preview` request per preset with the id `preset-<name>` and the v0.4 `style_preset` override field (daemon renders one-shot with that preset; no config mutation — see [protocol.md](protocol.md)). Responses route by id into `presetPreviews[name]`; the card shows the rich preview (`textFormat: Text.StyledText`), falling back to the static glyph string when the daemon is unreachable or older than the override. Requires daemon ≥ 0.3 for previews, ≥ 0.4 for per-card distinct presets.
 
 ## v0.4 Spike: Quattro Plugin Platform Contract (verified upstream)
 
@@ -293,6 +296,10 @@ Fullscreen overlay (summoned by the `picker` or `gallery` IPC method, a Hyprland
 - **Escape / scrim click** closes (`shell.hide(<id>)` when the host is available, plain hide otherwise).
 - **Empty state** when no sessions are live or the service isn't loaded (with a hint); non-Hyprland adjusts the help line to the terminal-fallback behavior.
 - Rendering follows the first-party overlay pattern: `PanelWindow` anchored to all edges, transparent, `WlrLayer.Overlay`, exclusive keyboard focus, scrim + centered card, with `Color.menu.*` theme tokens falling back to `Color.*` then hard-coded values.
+
+## Looks Studio (v0.4.1)
+
+The gallery's detail sheet is an editor: palette hex rows (accent/foreground/muted/background with swatches), cycle rows (style preset over the daemon's 11, separator shape over the 14, frame enabled/gap char, prompt character over the 8, OS icon over the 17), and a gradient ramp designer (two hex endpoints → live 8-step client-side lerp strip; Apply maps start→accent, end→magenta onto `theme.custom` so the daemon's shipped lerp engine previews the ramp). Every edit writes the working patch (config_set-shaped) and re-requests the preview with the `{ look, patch }` override for instant dry-run re-render; preview error responses keep the last good render. Save-as-new writes the edited patch via `config_set` on the looks table; Overwrite (user looks only) does the same; Delete uses `looks_delete` with a two-tap confirm (`_deleteArmed`). Curated looks force Save-as-new.
 
 ## Looks Gallery Overlay: `Gallery.qml`
 
@@ -427,26 +434,28 @@ Primary path uses `config_set` with a JSON patch:
 setConfigValue(key, value)
   → push undo snapshot (if value changed)
   → _configFlat[key] = value
+  → _dirtyKeys[key] = true   (delta tracking)
   → QML property updated
   → show config diff toast
   → saveTimer.restart() (300ms debounce)
     → _flushSave()
-      → patch = Model.unflattenPatch(Model.collectConfig(root))
+      → full = Model.collectConfig(root); flat = only keys in _dirtyKeys
+      → patch = Model.unflattenPatch(flat)   (empty delta → no-op)
       → send {type:"config", command:"set", config: patch}
       → daemon recursively merges patch into config.toml (preserving unmentioned keys)
       → daemon reloads config in-memory
-      → requestPreview()
+      → requestPreview() + requestPresetPreviews()
 ```
+
+**Delta save (v0.5):** `_flushSave` sends *only the keys changed from this panel since the last successful save* — not the full CONFIG_MAP. A full-property stamp would clobber edits made outside the panel (CLI, another surface) with the panel's stale load-time state. Consequences, all in `Panel.qml`:
+
+- Pending changes are flushed before a session switch (`connectToSession`), so the delta lands on the daemon it was edited against.
+- On reconnect (`_onSocketConnected`), a flush that failed while disconnected is retried — the dirty set survives a daemon restart mid-edit.
+- Reset to Defaults clears `_configDirty`/`_dirtyKeys` before deleting the file, so a queued save cannot resurrect deleted keys.
 
 On daemon error, `lastError` is set and the red error toast appears for 5 seconds.
 
-**No offline writes:** If `daemonSocket` is not connected, the debounced save is
-refused — the panel never rebuilds or overwrites `config.toml` itself. Instead
-`lastError` is set, the red error toast tells the user that saving settings
-requires a running omarchy10k daemon, and the change stays in the panel
-properties for when a daemon reconnects. All config writes go through the
-daemon's `config_set` (see [architecture.md](architecture.md), "Data Flow:
-Config Change via Quattro").
+**No offline writes:** If `daemonSocket` is not connected, the debounced save is refused — the panel never rebuilds or overwrites `config.toml` itself. Instead `lastError` is set, the red error toast tells the user that saving settings requires a running omarchy10k daemon, and the dirty set is kept: `_configDirty` re-arms and the flush retries on the next reconnect, so a daemon restart mid-edit no longer drops changes. All config writes go through the daemon's `config_set` (see [architecture.md](architecture.md), "Data Flow: Config Change via Quattro").
 
 ### CONFIG_MAP
 
@@ -495,7 +504,7 @@ Maps TOML keys to QML property names (32 keys):
 
 ## Panel Rail: Looks · Style · Behavior · System
 
-The old five-tab bar (`Appearance / Context / Segments / Shell / Advanced`) is now a **4-bucket rail**: `Repeater model: ["Looks", "Style", "Behavior", "System"]` in `Panel.qml`, with the active bucket's `Component` Loader-switched (`looksTab` / `appearanceTab` / `behaviorTab` / `systemTab`). The previous tab content lives on under the new buckets:
+The old five-tab bar (`Appearance / Context / Segments / Shell / Advanced`) is now a **4-bucket rail**: `Repeater model: ["Looks", "Style", "Behavior", "System"]` in `Panel.qml`, with the active bucket Loader-switched among four extracted files (`looksTab` → `PanelLooks { panel: root }` / `appearanceTab` → `PanelStyle` / `behaviorTab` → `PanelBehavior` / `systemTab` → `PanelSystem`). The previous tab content lives on under the new buckets:
 
 | Old tab | New home |
 |---------|----------|
@@ -504,6 +513,26 @@ The old five-tab bar (`Appearance / Context / Segments / Shell / Advanced`) is n
 | Segments | **Behavior → Segments** |
 | Shell (tool detection) | **System** |
 | Advanced (config actions, daemon info) | **System** |
+
+### Panel Decomposition (C4, v0.4.1)
+
+The monolithic 2701-line `Panel.qml` was split 53% down to **1277 lines**; the bucket UIs live in per-file Components and the shared row components moved to a kit file. Line counts in the current tree (verified with `wc -l`):
+
+| File | Lines | Contents |
+|------|-------|----------|
+| `Panel.qml` | 1277 | All state (config properties, sockets, processes, preview, undo, dirty-key delta save), header + hero preview + rail, the 4 bucket `Component`s, and the wrapper functions |
+| `PanelLooks.qml` | 112 | Looks bucket: curated Look cards, Save-as-Look, Expand gallery |
+| `PanelStyle.qml` | 304 | Style bucket: preset gallery, Separator picker, frame controls, palette cards, theme swatches |
+| `PanelBehavior.qml` | 376 | Behavior bucket: Prompt/Glyphs/Context/Segments/Notifications |
+| `PanelSystem.qml` | 531 | System bucket: tool StatusRows, remediation cards, daemon info + session cards, doctor cards, benchmark card, actions (holds the `RawToggle` inline component) |
+| `PanelKit.qml` | 284 | Shared `SectionLabel` / `ControlRow` / `StatusRow` / `ActionButton` / `GlyphRow` components |
+
+Structure:
+
+- **State stays in the Panel root.** Bucket files declare `property var panel` and receive the root at instantiation: `Component { id: looksTab; PanelLooks { panel: root } }` (same for `PanelStyle`/`PanelBehavior`/`PanelSystem` under `appearanceTab`/`behaviorTab`/`systemTab`). The Loader keeps the lazy one-active-bucket behavior of the old inline Components.
+- **Eight wrapper functions** keep the panel's Process/Socket ids out of the bucket files: `runDoctor`, `runBenchmark`, `copyConfigToClipboard`, `pasteConfigFromClipboard`, `openFloatingTerminal`, `openConfigInEditor`, `reloadConfig`, `resetToDefaults`. Bucket code calls e.g. `panel.runDoctor()` (PanelSystem also drives `copyInstallCommand`, `connectToSession`, `resetConfigKey`, and similar panel helpers).
+- **PanelKit is property-injected and intentionally unbound.** Its five components take plain properties (`label`, `value`, `status`, `configKey`, …) plus the injected `panel` root (for bar-aware font family and config writes). The C4 key finding: **bound inline components cannot instantiate cross-file** — a `pragma ComponentBehavior: Bound` file cannot instantiate another file's inline `component` without a matching binding context. The four bucket files carry the pragma; `PanelKit.qml` deliberately does not, and the buckets instantiate `PanelKit.ControlRow { … }` freely.
+- **Doctor-header overlap fixed** and qmllint noise down as measured in C4: unqualified access 442 → 35, missing-property 137 → 29.
 
 ### Looks Bucket
 
@@ -516,30 +545,31 @@ The old five-tab bar (`Appearance / Context / Segments / Shell / Advanced`) is n
 
 #### Style Gallery
 
-A 4-column grid of 8 preset cards. Each card's preview line renders the **live daemon preview** for that preset (see [Preset Gallery Live Previews](#preset-gallery-live-previews)); the static glyphs below are the offline fallback.
+A 4-column grid of 9 preset cards (the Wave-1 `gradient` preset added an "Ramp" card). Each card's preview line renders the **live daemon preview** for that preset (see [Preset Gallery Live Previews](#preset-gallery-live-previews)); the static glyphs are the offline fallback.
 
 | Card | Preview | Description |
 |------|---------|-------------|
 | omarchy | `~ ❯` | Clean |
 | powerline | `~ ▶ git` | Classic |
 | rainbow | `~ ▶▶▶` | Vibrant |
+| gradient | `~ ▄▄▄` | Ramp |
 | framed | `╭─ ~ ─╮` | Framed |
 | classic | `~ │ git` | Divided |
 | lean | `~/src` | Minimal |
 | dense | `~ git ❯` | Compact |
 | slanted | `~ ╲ git` | Modern |
 
-Clicking a card sets `style.preset` **and re-stamps the preset-controlled granular keys** (`style.frame.enabled`, `style.frame.gap_char`, empty `style.separators.left/right`) — `_flushSave` writes every CONFIG_MAP key, so without this a stale frame/separator toggle from an earlier preset would silently override the new one.
+Clicking a card sets `style.preset` **and re-stamps the preset-controlled granular keys** (`style.frame.enabled`, `style.frame.gap_char`, empty `style.separators.left/right`) — `_flushSave` writes every mapped key touched by the click, so without this a stale frame/separator toggle from an earlier preset would silently override the new one.
 
 #### Glyph Pickers
 
+The Style bucket keeps only the Separator picker; the glyph pickers moved to the Behavior bucket's Glyphs section (see [Behavior Bucket](#behavior-bucket)).
+
 | Picker | TOML Key(s) | Options |
 |--------|------------|---------|
-| OS Icon | `segments.os.icon` | 13 distro icons (Arch, Ubuntu, Debian, Fedora, NixOS, macOS, Win, Linux, Omarchy, Alpine, Void, Gentoo) + None |
-| Git Icon | `git.branch_icon` | Powerline, Octicon, Nerd, git:, None |
-| Separator | `style.separators.left` + `.right` | Default, Arrow, Thin, Slant, Round, Bar, Dot, Diamond |
+| Separator | `style.separators.left` + `.right` | 14 shapes: Default (none), Arrow, Thin, Slant, Round, Trap, Trap· (trapezoid_rev), Flame, Dither, Bar, Dot, Diamond, Fade, Fade Rev |
 
-(Prompt Char pickers moved to the Behavior bucket's Glyphs section.) The Separator picker uses a custom handler that sets left and right separators at once.
+The Separator picker uses a custom handler that sets left and right separators at once (`none` writes empty strings to both keys).
 
 #### Frame Controls
 
@@ -575,8 +605,11 @@ Changing theme source triggers `requestPalette()` to refresh the color swatch ro
 
 | Picker | TOML Key(s) | Options |
 |--------|------------|---------|
-| Prompt Char | `segments.character.success` + `.error` + `.transient` | Chevron ❯, Arrow ➜, Lambda λ, $, >, %, ▶, # |
-| Animals | `segments.character.success` (+ error/transient) | Nerd-font animal glyphs (cat, penguin, fox, owl, duck, butterfly, ladybug, bee, dog, rabbit, …) |
+| Prompt Char | `segments.character.success` + `.error` + `.transient` | 8: Chevron ❯, Arrow ➜, Lambda λ, $, >, %, ▶, # |
+| Animals | `segments.character.success` (+ error/transient) | 23 Nerd Font animals verified against NF v3 (cat, penguin, fox, owl, duck, butterfly, ladybug, bee, dog, rabbit, turtle, paw, fish, frog, dragon, panda, koala, unicorn, teddy, cow, horse, pig, sheep) |
+| Kaomoji | `segments.character.success` (+ error/transient) | 6 (labeled experimental): Bear ʕ•ᴥ•ʔ, Smile (◕‿◕), Rage (╯°□°)╯, Relaxed ヽ(´ー`)ノ, Smirk (¬‿¬), No ಠ_ಠ |
+| OS Icon | `segments.os.icon` | 12 distro icons (Arch, Ubuntu, Debian, Fedora, NixOS, macOS, Win, Linux, Omarchy, Alpine, Void, Gentoo) + None |
+| Git Icon | `git.branch_icon` | Powerline, Octicon, Nerd, git:, None |
 
 #### Context
 
@@ -589,7 +622,7 @@ Changing theme source triggers `requestPalette()` to refresh the color swatch ro
 
 #### Segments
 
-Two-column toggle grid. Clicking a pill toggles the boolean config value via `setConfigValue()`:
+Two-column toggle grid (9 pills). Clicking a pill toggles the boolean config value via `setConfigValue()`:
 
 | Label | TOML Key | QML Property |
 |-------|----------|-------------|
@@ -605,41 +638,54 @@ Two-column toggle grid. Clicking a pill toggles the boolean config value via `se
 
 Enabled segments render with accent background; disabled segments use muted styling. Pills are filtered by the panel's `searchQuery` property (case-insensitive label match) — the settings-search hook; no visible search input is currently rendered in the panel (inferred).
 
+Layout note (v0.4.1 decomposition): the toggle grid, its intro text, and the Time Format selector render after the Context rows. A `Segments`-labeled 2-column grid of curated-Look chips (wired to `style.preset`) previously sat below them — removed in v0.4.1: it duplicated the LOOKS page and wrote Look names (not valid preset values) into `style.preset`; Look switching lives on the LOOKS bucket via `looks_apply`.
+
 **Time Format selector** — visible when Time is enabled. Three options: `HH:MM` (`%H:%M`), `HH:MM:SS` (`%H:%M:%S`), `hh:mm AM/PM` (`%I:%M %p`).
 
 #### Notifications
 
 **Notify After** — `ControlRow` selector with `5s`, `10s`, `30s` options, mapped to `segments.notification.threshold_ms` (5000/10000/30000). The daemon includes `notify_threshold_ms` in prompt responses; the bash adapter updates its threshold from this field.
 
-### System Bucket
+**Tool detection** — five `PanelKit.StatusRow`s (`✓ <path>` / `✗ not found` / `checking...`), no install buttons:
 
-Opens with a note that shell integrations are configured through their own tools (Omarchy10k coordinates their lifecycle via the hook broker).
+| Tool | Detection |
+|------|-----------|
+| ble.sh | `command -v blesh` |
+| Atuin | `command -v atuin` |
+| Mise | `command -v mise` |
+| Zoxide | `command -v zoxide` |
+| fzf | `command -v fzf` |
 
-**Tool detection** — `StatusRow`s for five tools with conditional install actions:
+**Remediation cards** — one card per toolDetector-tracked tool that detection reported missing (cards appear only once detection answered with `✗`, never while `checking...`). Each card shows the tool name (accent), a one-tap **COPY** button that puts the exact install command on the clipboard (`copyInstallCommand` → xclip/wl-copy + confirmation toast), and a muted *why* line. Nothing is auto-installed — the old curl install buttons are retired and `installRunner` has no remaining caller. The hard-coded install commands per tool live in `Panel.qml::_collectMissingTools`.
 
-| Tool | Detection | Install Action |
-|------|-----------|----------------|
-| ble.sh | `command -v blesh` | — |
-| Atuin | `command -v atuin` | "Install Atuin" → `curl setup.atuin.sh` |
-| Mise | `command -v mise` | "Install Mise" → `curl mise.run` |
-| Zoxide | `command -v zoxide` | — |
-| fzf | `command -v fzf` | — |
-
-Install buttons appear only when the tool status contains `✗ not found`. After any install runner completes, `detectTools()` is called automatically and a success toast is shown.
-
-**Daemon info card** — status, PID, version + protocol version (with the full/degraded protocol label), session count, and the session list with per-row floating-terminal buttons.
+**Daemon info card** — status (green/urgent), PID, version + protocol version (with the full/degraded protocol label), and session count; followed by the session cards (active session highlighted, per-row floating-terminal button → `openFloatingTerminal`). Promoted to the top area of the bucket with the v0.5 redesign.
 
 **Actions:**
 
 | Action | Behavior |
 |--------|----------|
-| Open Config File | Opens `$TERMINAL` (default: `foot`) running `$EDITOR` (default: `nano`) via `Process.startDetached()` |
-| Run Doctor | `omarchy10k doctor`; output shown in scrollable monospace area below |
+| Open Config File | Opens `$TERMINAL` (default: `foot`) running `$EDITOR` (default: `nano`) via `openConfigInEditor()` |
+| Run Doctor | `omarchy10k doctor`; parsed into dashboard cards below (see next section) |
 | Copy Config | Serialize config to clipboard |
 | Paste Config | Parse clipboard TOML, apply, save |
-| Reload Config | Re-fetch config via `config_get` + `reload_config` |
-| Run Benchmark | `omarchy10k benchmark --iterations 50`; results in scrollable area |
-| Reset to Defaults | Backup to `.bak`, delete config, reload |
+| Reload Config | `reloadConfig()`: `reload_config` control command + config re-fetch |
+| Run Benchmark | `omarchy10k benchmark --iterations 50`; parsed into the summary card (see next section) |
+| Reset to Defaults | Backup to `.bak`, delete config, reload; also clears the pending delta (`_configDirty`/`_dirtyKeys`) so a queued save cannot resurrect deleted keys |
+
+### Doctor Dashboard Cards
+
+`Run Doctor` output is parsed client-side (`Panel.qml::_parseDoctorCards`) into one card per subsystem line: the doctor output is one subsystem per 2-space-indented line with a padded name column and a ✓/✘/⚠/?/- status column. Each card renders:
+
+- **Status glyph** — `✓` (accent) / `✘` or `⚠` (urgent) / `?` / `-` (muted), bold, bar font
+- **Subsystem name** — the padded leading column
+- **Colored chip** — `OK` (accent fill) / `FAIL` (urgent fill) / `SKIP` (muted outline)
+- **Detail line** — the remainder with status markers stripped; a bare trailing `-` renders as `not installed` (missing tool) or `—`
+
+Lines that don't match the shape are skipped by the parser but stay reachable via the **`raw ▸` toggle** (header row: `Doctor` label + toggle), which swaps the card list back to the original scrollable monospace `TextEdit` (also the fallback while `doctorCards` is empty). QML-only parsing — no new timers.
+
+### Benchmark Summary Card
+
+`Run Benchmark` output is parsed client-side (`Panel.qml::_parseBenchStats`): every `N.NNms` value in the text (summary stats and per-iteration lines) is collected, then the card renders a **braille sparkline** — one cell per recorded value, dot column rising with the value (`▁▂▃▄`-style 4-level ramp: `⠁⠃⠇⡇`) — over a stats line `best · median · worst (N values)`. The `raw ▸` toggle (visible once stats exist) swaps back to the full scrollable output; the raw view is also the fallback while parsing has produced nothing numeric.
 
 ### Multi-Session
 
@@ -668,7 +714,7 @@ When the v0.4 service hub is loaded, this list mirrors `Service.sessions` (live 
 | `editorLauncher` | `$EDITOR config.toml` | System bucket button |
 | `doctorRunner` | `omarchy10k doctor` | System bucket button |
 | `benchRunner` | `omarchy10k benchmark --iterations 50` | System bucket button |
-| `installRunner` | curl install scripts | System bucket install buttons |
+| `installRunner` | curl install scripts | *retired* — remediation COPY cards replaced the install buttons; the Process remains defined but nothing triggers it |
 | `floatingTermLauncher` | `cd '$cwd' && exec $SHELL` | Session row terminal icon |
 | `clipboardCopy` | xclip / wl-copy | Copy Config |
 | `clipboardPaste` | xclip -o / wl-paste | Paste Config |
@@ -725,8 +771,10 @@ Key QML properties on `Panel.qml` beyond config fields:
 |----------|---------|
 | `lastError` / `_showError` | Daemon error message + red toast visibility |
 | `toastMessage` / `_showToast` | Config diff / undo / paste toast |
-| `doctorOutput` | Scrollable doctor command output |
-| `benchmarkOutput` | Scrollable benchmark results |
+| `doctorOutput` / `doctorCards` | Raw doctor output + parsed per-subsystem cards (`_parseDoctorCards`) |
+| `benchmarkOutput` / `benchStats` | Raw benchmark output + parsed summary (`_parseBenchStats`: braille sparkline, best/median/worst) |
+| `missingTools` | toolDetector-tracked tools reported missing → remediation cards |
+| `_doctorRaw` / `_benchRaw` | `raw ▸` toggles swapping parsed cards back to the monospace output |
 | `previewText` | ANSI→StyledText left prompt for the color preview box |
 | `previewError` / `previewSsh` / `previewLongCmd` | Preview context toggles |
 | `paletteColors` | Theme color map from `palette` IPC response |
@@ -734,6 +782,9 @@ Key QML properties on `Panel.qml` beyond config fields:
 | `sessionList` / `activeSessionIndex` | Multi-session socket list |
 | `presetPreviews` / `presetCards` | Style-gallery live renders (id-routed `preview` replies) / card fallback strings |
 | `omarchyService` | The plugin's `Service` hub instance when the host loaded it (null otherwise) |
+| `defaultFlat` | Factory-defaults snapshot from the daemon `defaults` verb (powers modified-ink + per-row reset) |
+| `searchQuery` | Settings-search filter text (filters the segment pills) |
+| `_configDirty` / `_dirtyKeys` | Pending-delta save state; `_flushSave` sends only the dirty keys |
 
 ## Styling
 
@@ -775,10 +826,7 @@ Recorded by the [Bug Audit](bug-audit.md).
 
 ### The fallback config writer destroys `config.toml` (fixed: offline writer removed)
 
-`Panel.qml`'s `_flushSave` used to rebuild the whole file from `Model.parseTOML`'s
-flat output whenever `daemonSocket` was disconnected. `parseTOML` keeps only
-`section.key = scalar` pairs, so round-tripping stripped every comment and dropped
-the nested `[theme.custom]` table entirely.
+`Panel.qml`'s `_flushSave` used to rebuild the whole file from `Model.parseTOML`'s flat output whenever `daemonSocket` was disconnected. `parseTOML` keeps only `section.key = scalar` pairs, so round-tripping stripped every comment and dropped the nested `[theme.custom]` table entirely.
 
 The offline writer has been removed: config saves now require a connected daemon
 and always go through `config_set` (the daemon deep-merges the patch and refuses
@@ -786,12 +834,9 @@ to overwrite a file it cannot parse). When no daemon is connected the panel show
 an error toast instead of writing the file. See
 [Bug Audit #19](bug-audit.md#19-quattros-fallback-config-writer-destroys-the-config-file).
 
-### Every save writes every mapped key
+### Every save writes every mapped key (fixed: delta save)
 
-`Model.collectConfig` returns all of `CONFIG_MAP`, not just the changed keys, so
-`_flushSave` sends the panel's full property set on each save. If a save fires
-before `config_get` has returned, the panel's QML defaults are written over the
-user's real settings.
+`_flushSave` used to send the panel's full property set on every save (`Model.collectConfig` returns all of `CONFIG_MAP`), which could clobber edits made outside the panel and resurrect stale pre-`config_get` defaults. The save path is now a delta — only keys touched from this panel (`_dirtyKeys`) are sent; see [Write Flow](#write-flow).
 
 ### Preview escape handling (v0.3.0: fixed)
 

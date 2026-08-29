@@ -9,9 +9,11 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
+    if !ctx.config.directory.enabled {
+        return None;
+    }
     let path = ctx.cwd;
     let home = ctx.home;
-
     let display_path = if !home.is_empty()
         && std::path::Path::new(path).starts_with(std::path::Path::new(home))
     {
@@ -65,7 +67,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let compact_width = UnicodeWidthStr::width(compact.as_str()) as u16;
 
     Some(Segment {
-        name: "directory",
+        name: "directory".into(),
         content: display_content,
         compact_content: Some(compact),
         priority: 10,

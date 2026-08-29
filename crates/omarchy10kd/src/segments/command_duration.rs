@@ -12,7 +12,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let preferred_width = UnicodeWidthStr::width(content.as_str()) as u16;
 
     Some(Segment {
-        name: "command_duration",
+        name: "command_duration".into(),
         content,
         compact_content: Some(format_duration_compact(ctx.cmd_duration_ms)),
         priority: 50,

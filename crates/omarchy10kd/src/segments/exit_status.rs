@@ -31,7 +31,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     let preferred_width = UnicodeWidthStr::width(raw.as_str()) as u16;
 
     Some(Segment {
-        name: "exit_status",
+        name: "exit_status".into(),
         content,
         compact_content: Some(format!("✘ {}", ctx.exit_code)),
         priority: 30,

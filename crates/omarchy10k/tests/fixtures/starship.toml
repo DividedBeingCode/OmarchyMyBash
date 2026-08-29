@@ -1,0 +1,9 @@
+# Test fixture: 6 known segments + 2 unknown, add_newline, directory truncation.
+format = "$directory$git_branch$git_status$cmd_duration$character$jobs$fill$memory_usage"
+add_newline = true
+
+[directory]
+truncation_length = 4
+
+[cmd_duration]
+min_time = 2000

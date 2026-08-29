@@ -4,8 +4,11 @@ mod doctor;
 mod hook_event;
 mod intro;
 mod layer;
+mod migrate;
+mod plugins_cli;
 mod prompt;
 mod script;
+mod share;
 mod statusline;
 mod update;
 
@@ -34,6 +37,30 @@ enum LookAction {
         name: String,
         #[arg(short, long, default_value = "")]
         label: String,
+    },
+    /// Export a Look as a portable TOML bundle (stdout, --out FILE, or --clipboard)
+    Export {
+        name: String,
+        /// Write the bundle to a file instead of stdout
+        #[arg(long)]
+        out: Option<String>,
+        /// Copy the bundle to the clipboard (wl-copy/xclip)
+        #[arg(long)]
+        clipboard: bool,
+    },
+    /// Install a Look bundle from a local file or https URL
+    Install {
+        /// Local bundle file path or https:// URL
+        source: String,
+        /// Write the Look into config.toml (otherwise print the resolved patch only)
+        #[arg(long)]
+        yes: bool,
+        /// Overwrite an existing user Look of the same name
+        #[arg(long)]
+        force: bool,
+        /// Install under a different name
+        #[arg(long = "as")]
+        as_name: Option<String>,
     },
 }
 
@@ -80,6 +107,19 @@ enum Commands {
     Look {
         #[command(subcommand)]
         action: LookAction,
+    },
+
+    /// Install, list, enable, disable, remove, or update segment plugins
+    Plugin {
+        #[command(subcommand)]
+        action: plugins_cli::PluginAction,
+    },
+
+    /// Migrate a starship.toml into an o10k Look (dry run by default)
+    Migrate {
+        path: String,
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Run a prompt render benchmark
@@ -255,7 +295,21 @@ async fn main() -> anyhow::Result<()> {
                     prompt::send_request(&socket_path(), &request.to_string()).await?;
                 println!("{response}");
             }
+            LookAction::Export { name, out, clipboard } => {
+                share::run_export(&socket_path(), &name, out.as_deref(), clipboard).await?;
+            }
+            LookAction::Install { source, yes, force, as_name } => {
+                share::run_install(&socket_path(), &source, yes, force, as_name.as_deref())
+                    .await?;
+            }
         },
+        Commands::Plugin { action } => {
+            plugins_cli::run(&socket_path(), action).await?;
+        }
+
+        Commands::Migrate { path, yes } => {
+            migrate::run(&socket_path(), &path, yes).await?;
+        }
 
         Commands::Benchmark { iterations } => {
             prompt::benchmark(&socket_path(), iterations).await?;

@@ -81,6 +81,8 @@ const FRAME_ENABLED: FrameStyle = FrameStyle {
 const ALL_SEGMENTS: &[&str] = &[
     "os", "ssh", "container", "directory", "git", "python_env", "toolchain", "nix",
     "ai", "k8s", "exit_status", "command_duration", "jobs", "time", "battery", "load",
+    "package_version", "dir_writable", "aws_profile", "docker_context",
+    "kubectl_context", "terraform_workspace", "vpn", "gcloud_project",
 ];
 
 const CLASSIC_SEGMENTS: &[&str] = &["ssh", "directory", "git", "exit_status"];

@@ -14,7 +14,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     };
 
     Some(Segment {
-        name: "os",
+        name: "os".into(),
         content: icon.to_string(),
         compact_content: Some(icon.to_string()),
         priority: 5,

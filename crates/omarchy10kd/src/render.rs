@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::git::GitStatus;
-use crate::layout::{LayoutEngine, ResolvedSegment};
+use crate::layout::{LayoutEngine, ResolvedSegment, Segment};
+use crate::plugins;
 use crate::segments::{self, SegmentContext, character};
 use crate::style::{GapGradient, GlyphCatalog, ResolvedStyle, StyleResolver};
 use crate::theme::AnsiColor;
@@ -119,10 +120,10 @@ impl<'a> PromptRenderer<'a> {
         git_status: &GitStatus,
         shell_integration: bool,
         env: Option<&std::collections::HashMap<String, String>>,
+        plugin_segments: Vec<Segment>,
     ) -> PromptResponse {
-        self.render_with_ssh(cwd, exit_code, cmd_duration_ms, cols, jobs, git_status, shell_integration, None, env)
+        self.render_with_ssh(cwd, exit_code, cmd_duration_ms, cols, jobs, git_status, shell_integration, None, env, plugin_segments)
     }
-
     pub fn render_with_ssh(
         &self,
         cwd: &str,
@@ -134,6 +135,7 @@ impl<'a> PromptRenderer<'a> {
         shell_integration: bool,
         force_ssh: Option<bool>,
         env: Option<&std::collections::HashMap<String, String>>,
+        plugin_segments: Vec<Segment>,
     ) -> PromptResponse {
         let home = std::env::var("HOME").unwrap_or_default();
         let in_ssh = force_ssh.unwrap_or_else(|| {
@@ -157,11 +159,13 @@ impl<'a> PromptRenderer<'a> {
         };
 
         let resolved_style = StyleResolver::resolve(self.config);
-
         let mut segments = segments::collect_segments(&ctx);
-        // Filter segments by style preset's allowed list
+        // Plugin segments join the built-in pipeline here: same Vec, same
+        // layout/priority/filter path. The preset filter passes
+        // `plugin.`-prefixed names through.
+        segments.extend(plugin_segments);
         let allowed = resolved_style.segment_order;
-        segments.retain(|s| allowed.contains(&s.name));
+        segments.retain(|s| allowed.contains(&&*s.name) || s.name.starts_with(plugins::PLUGIN_SEGMENT_PREFIX));
         let use_newline = self.config.prompt.newline && !resolved_style.force_single_line;
 
         // True powerline (v0.4 1.1): fill each segment with a background
@@ -193,7 +197,7 @@ impl<'a> PromptRenderer<'a> {
                     seg.bg = Some(self.palette.ramp_color(t).bg_escape());
                     seg.fg = self.palette.background.fg_escape();
                 } else if resolved_style.rainbow {
-                    let (bg, fg) = semantic_fill(&self.palette, seg.name, &ctx);
+                    let (bg, fg) = semantic_fill(&self.palette, &seg.name, &ctx);
                     seg.bg = Some(bg.bg_escape());
                     seg.fg = fg.fg_escape();
                 } else {
@@ -243,10 +247,9 @@ impl<'a> PromptRenderer<'a> {
             String::new()
         };
 
-
-        let left_segment_names: std::collections::HashSet<&str> = resolved
+        let left_segment_names: std::collections::HashSet<String> = resolved
             .iter()
-            .map(|r| segments[r.original_index].name)
+            .map(|r| segments[r.original_index].name.to_string())
             .collect();
 
         let right = if self.config.prompt.right_prompt && !resolved_style.frame.enabled {
@@ -419,7 +422,7 @@ impl<'a> PromptRenderer<'a> {
     fn render_right(
         &self,
         ctx: &SegmentContext<'_>,
-        left_names: &std::collections::HashSet<&str>,
+        left_names: &std::collections::HashSet<String>,
     ) -> Option<String> {
         let mut parts = Vec::new();
 
@@ -510,7 +513,7 @@ impl<'a> PromptRenderer<'a> {
     fn render_right_raw(
         &self,
         ctx: &SegmentContext<'_>,
-        left_names: &std::collections::HashSet<&str>,
+        left_names: &std::collections::HashSet<String>,
     ) -> Option<String> {
         self.render_right(ctx, left_names)
     }
@@ -814,6 +817,7 @@ mod tests {
             false,
             Some(false),
             env,
+            Vec::new(),
         )
     }
 

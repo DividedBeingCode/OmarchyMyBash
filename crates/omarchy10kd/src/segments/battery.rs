@@ -27,7 +27,7 @@ pub fn render(ctx: &SegmentContext<'_>) -> Option<Segment> {
     };
 
     Some(Segment {
-        name: "battery",
+        name: "battery".into(),
         content: content.clone(),
         compact_content: Some(icon.to_string()),
         priority: 56,

@@ -8,7 +8,7 @@ The daemon is the computational core of Omarchy10k. It holds all state, renders 
 
 Bootstraps everything: config loading, tracing initialization, theme palette, shared state, filesystem watchers, parent-process monitor, and the socket server.
 
-Module tree (declaration order in `main.rs`): `config`, `git`, `looks`, `layout`, `render`, `segments`, `script_exec`, `server`, `style`, `theme`, `terminal`.
+Module tree (declaration order in `main.rs`): `config`, `git`, `looks`, `plugins`, `profiles`, `layout`, `render`, `segments`, `script_exec`, `server`, `style`, `theme`, `terminal`.
 
 ### Startup Sequence
 
@@ -87,14 +87,16 @@ pub struct DaemonState {
     pub config: RwLock<Config>,
     pub palette: RwLock<ThemePalette>,
     pub git_cache: GitCache,
+    pub plugins: RwLock<Vec<Plugin>>,           // plugin registry; rebuilt on startup + every reload_config
+    pub plugin_cache: PluginCache,              // TTL cache for command-tier plugin segments (never blocks render)
     pub config_path: PathBuf,
     pub socket_path: PathBuf,
-    pub last_render: RwLock<Option<RenderSummary>>,  // cwd/branch/dirty/counts/duration/exit of the last prompt render (status enrichment)
+    pub last_render: RwLock<Option<RenderSummary>>,  // cwd/branch/dirty/counts/duration/exit/agent of the last prompt render (status enrichment)
     pub started_at: std::time::Instant,              // feeds status.session_age_secs
 }
 ```
 
-`DaemonState::new` reads `git_ttl_ms` from `config.git.cache_ttl_ms` and passes it to `GitCache::new(ttl_ms)`. The `socket_path` is used by the shutdown handler to clean up the socket file on exit.
+`DaemonState::new` reads `git_ttl_ms` from `config.git.cache_ttl_ms` and passes it to `GitCache::new(ttl_ms)`, and loads the plugin registry from `<config dir>/plugins/` (`plugins::load_plugins`). The `socket_path` is used by the shutdown handler to clean up the socket file on exit.
 
 `reload_theme` calls `ThemePalette::resolve_palette(&config)`, which respects `config.theme.source` and custom overrides — the same unified path used at startup.
 
@@ -158,6 +160,7 @@ Connections are persistent — the server reads lines in a loop until EOF. This 
 | `looks` | `looks::all(&config)` | Returns curated + user Looks as `{name, label, patch}` entries; user entries shadow curated names |
 | `looks_apply` | `looks::resolve` → `apply_transient` or `write_config_patch` | Applies a named Look; `transient: true` = in-memory only (revert via `reload_config`), default = atomic disk merge |
 | `looks_save` | snapshot of in-memory config → `write_config_patch` | Writes a `[looks.<name>]` entry (style/glyph/prompt.blank_line snapshot, `palette: "keep"`) |
+| `looks_delete` | `delete_user_look` | Deletes a USER look by rewriting `config.toml` without the `[looks.<name>]` entry (the merge path cannot delete keys), atomically (tmp+rename), then reloads. Curated Looks are refused (`cannot delete curated look`); a user look shadowing a curated name deletes only the override. Added in v0.4.1 (Studio). |
 | `palettes` | `looks::curated_palette` | Returns the 8 curated palette keys with their `[theme]` patches |
 | `defaults` | `Config::default()` | Returns the full default config as JSON (modified-vs-default comparison) |
 | `script_list` | `script_exec::list_scripts` | Lists executable scripts in `~/.config/omarchy10k/scripts` (traversal-guarded names) |
@@ -308,6 +311,64 @@ User Looks live in `[looks.<name>]` tables in `config.toml` with `label`, `palet
 
 `looks::apply_transient(current, patch)` merges the patch into the current **in-memory** config only (JSON→TOML merge + re-serialize round-trip, no file write). `looks_apply` with `transient: true` uses this, then calls `reload_theme()`. The change reverts on any `reload_config` (watcher, control command, config write, or atomic look apply) — disk state is untouched.
 
+## Project Profiles (`src/profiles.rs`)
+
+Added in the Tier C wave (2026-08-29). A repository can carry its own prompt appearance in a `.o10k.toml` file at its root (`PROFILE_FILE`). Detection, validation, and merging live in `profiles.rs`; both the prompt path and the preview path consult it.
+
+### Detection (`detect_profile`)
+
+- Walks upward from the prompt cwd and returns the first directory containing `.o10k.toml`.
+- The walk **stops at project boundaries** (any directory containing a `.git` entry) and at `$HOME` (**exclusive** — `$HOME` itself is never considered), so a profile never leaks across projects or over the whole home tree.
+- Results are cached per cwd in a process-local `LazyLock<Mutex<HashMap<PathBuf, CachedDetection>>>` — **30 s TTL, bounded at 512 entries** (`DETECTION_TTL`, `MAX_DETECTION_ENTRIES`), with expired-then-oldest eviction (same pattern as the sibling-table cache). Negative results (no profile) are cached too, so warm renders skip the directory walk entirely.
+
+### Validation (`load_profile_patch`) — untrusted input
+
+`.o10k.toml` comes from cloned repositories, so it is treated as untrusted. The loader enforces a strict **display-key allowlist**: top-level `style`, `prompt`, `segments`, `theme`, `frame` only. State keys (`daemon`, `env`, `notifications`, `git`, …) and unknown keys are rejected with an error naming the offending key. Both a bare `config_set`-shaped patch and the wrapper form `{ patch = { ... }, name = "..." }` are accepted; an empty file is a no-op.
+
+Every profile failure is **warn-once per profile path** (`WARNED_PROFILES` set) and swallowed: a broken repo profile must never fail the prompt (the render falls back to the base config).
+
+### Merge order (`apply_profile`)
+
+`apply_profile(base, patch)` merges the validated patch over the base config (profile wins) and re-parses into a `Config`; it fails only if the merged document is no longer representable. The full effective-config order, shared by prompt and preview:
+
+```
+base config (incl. any in-memory transient Look) → project profile → per-request overrides (look, patch) → style knobs
+```
+
+In the preview path (`effective_preview_config` in `server.rs`), a broken profile patch falls back to the pre-profile config for that render.
+
+## Segment Plugins (`src/plugins.rs`)
+
+Added in the Tier D wave (2026-08-29). Declarative segment plugins — plugins declare **data, not code**. A plugin is a directory under `~/.config/omarchy10k/plugins/<name>/` containing a `plugin.toml` manifest whose `[[segments]]` entries are either:
+
+| Tier | Behavior |
+|------|----------|
+| `env` | Renders the first set env key's value; zero forks |
+| `command` | Runs a command in the prompt's cwd, async, TTL-cached, hard **500 ms** timeout (`COMMAND_TIMEOUT_MS`); the render path never awaits it — a slow refresh returns stale/absent |
+
+Command output is capped to its first line, 256 bytes (`MAX_OUTPUT_BYTES`). The command string is split quote-aware into argv (`split_command`) — never a shell string: no `sh -c`, no interpolation, no injection surface.
+
+### Registry and lifecycle
+
+- **Presence on disk means *available*; presence in `[plugins] enabled` (`PluginsConfig.enabled`, serde-default empty) means *active*.** Dropping a directory in never activates it.
+- `DaemonState::new` loads the registry at startup and **`reload_config` rebuilds it** (re-reads the plugins dir and invalidates `PluginCache`), so `plugin add/remove/update` on disk and `[plugins].enabled` changes all land on one reload path.
+- Plugin segments join the built-in pipeline with the registry name **`plugin.<plugin>.<segment>`** (`PLUGIN_SEGMENT_PREFIX`), so they can never collide with or shadow a built-in segment; the render-path preset filter lets this prefix through where built-in allowlists apply. Malformed plugins are skipped with a `warn!` — a broken plugin never takes down a shell.
+- `valid_plugin_name` (`[A-Za-z0-9_-]+`, short) doubles as the traversal guard; the manifest `name` must match its install directory, so a hostile manifest cannot direct reads/writes at another path.
+
+### PluginCache
+
+TTL cache for command-tier segments, modelled on `GitCache`: keyed by (segment registry name, cwd), in-flight deduped so a fast prompt loop cannot spawn a process storm, generation-guarded against resurrecting pre-invalidation snapshots. Invalidated on every `reload_config`.
+
+## Segment Utilities (`src/segments/util.rs`)
+
+Added in the Tier D wave. Shared helpers for the cloud/ops segment catalog (and the same patterns reused elsewhere):
+
+| Helper | Behavior |
+|--------|----------|
+| `TtlCache<V>` | Process-local TTL cache keyed by an arbitrary string (usually the cwd). Negative results are cached alongside positives so a miss is not retried every prompt; bounded by `max_entries`, expired entries recomputed on access |
+| `on_path(bin)` | True when `bin` resolves to an existing executable file on `PATH` — a missing tool costs one stat walk, not a spawn |
+| `run_command(bin, args, timeout_ms)` | Synchronous trimmed-stdout run; `None` on spawn failure, non-zero exit, or timeout. The child is **killed on timeout** so a hung CLI cannot stall the synchronous render path |
+
 ## Script Execution (`src/script_exec.rs`)
 
 Added in v0.5. Daemon-side user-script registry and runner for the quick-actions feature (`omarchy10k script`).
@@ -359,6 +420,9 @@ Uses the `directories` crate for XDG compliance. Falls back to `$HOME/.config/om
 | `directory.strategy` | Yes | `smart` (default), `full`, or `truncate` |
 | `directory.max_length` | Yes | Truncation limit |
 | `directory.repo_root_style` | Yes | Bold repo root in smart truncate mode |
+| `directory.enabled` | Yes | Tier C (wizard daemon gap closed, additive): `DirectoryConfig.enabled`, default `true`; gates the directory segment inside `segments/directory.rs::render` |
+| `plugins.enabled` | Yes | Tier D: list of active plugin names (`PluginsConfig.enabled`, default empty); changes land on `reload_config` |
+| `directory.unique` | Yes | Wave 1: `unique = true` enables the p10k-grade unique-prefix truncation (sibling tables + anchor files); `directory.anchors` lists anchor-file names (default `.git`, `Cargo.toml`, `package.json`, `pyproject.toml`, `go.mod`, `Gemfile`, `flake.nix`, `README.md`). NOTE: top-level `[directory]`, not `[segments.directory]` |
 | `git.enabled` | Yes | Toggles git segment |
 | `git.mode` | Yes | adaptive/compact/expanded/hidden |
 | `git.cache_ttl_ms` | Yes | Git cache TTL in milliseconds (default 5000) |
@@ -525,6 +589,7 @@ pub struct GitStatus {
     pub worktree: Option<String>,   // worktree directory name when in linked worktree
     pub repo_root: String,
     pub stale: bool,             // true on stale/cold cache hits
+    pub remote: Option<String>,  // `origin` URL captured once per cache refresh (OSC 8 branch hyperlink)
 }
 ```
 
@@ -548,19 +613,21 @@ Implements `Display` for prompt formatting: `"merge"`, `"rebase 3/5"`, etc.
 
 ```rust
 pub struct Segment {
-    pub name: String,
+    pub name: std::sync::Arc<str>,   // built-ins: static strings; plugin segments: owned `plugin.<plugin>.<segment>` names
     pub content: String,
     pub compact_content: Option<String>,
     pub priority: u8,          // lower = more important
     pub min_width: u16,
     pub preferred_width: u16,
     pub hide_below_cols: u16,
-    pub fg: Option<AnsiColor>,
-    pub bg: Option<AnsiColor>,
+    pub fg: String,
+    pub bg: Option<String>,
     pub bold: bool,
     pub separator: Option<String>,
 }
 ```
+
+`name` is an `Arc<str>` (Tier D): built-in segments clone static registry names, but plugin segments need owned data, hence shared ownership. `Box::leak` for this was explicitly banned — `Arc<str>` avoids an unbounded process-lifetime leak while keeping `Segment` cheap to clone. Colors are plain strings (`fg: String`, `bg: Option<String>`), since segments may also carry embedded escape runs.
 
 ### LayoutEngine Resolution Algorithm
 
@@ -669,12 +736,19 @@ The `shell_integration` parameter controls OSC 133 emission. When `false`, promp
 
 ### render_right
 
-Returns an optional right prompt string when `config.prompt.right_prompt` is enabled (and frame mode is not active):
+Returns an optional right prompt string when `config.prompt.right_prompt` is enabled (and frame mode is not active). Since the Wave-2 desktop integration, the rail is **configurable** via `[prompt] right_segments` (default `["command_duration", "git"]`, byte-identical to the old hardcoded pair):
 
-- **Command duration** (muted) — shown when above threshold
-- **Git branch** (accent, or muted when `git_status.stale`) — configurable branch icon via `GlyphCatalog::branch_icon(config.git.branch_icon)` + name
+```rust
+resolve_right_rail(config.prompt.right_segments) -> Vec<RightSegment>
+```
 
-Parts are space-separated. Returns `None` when both would be empty. When frame mode is active, right content is inlined into the framed line 1 and the `right` field in `PromptResponse` is `None`.
+Recognized names: `command_duration`, `git`, `time`, `battery`, `jobs` (`layout.rs` `RightSegment`). Unknown names are skipped with a `debug!` log; order is preserved.
+
+- **Command duration** (muted) — shown when above `show_above_ms` and not already in the left rail
+- **Git branch** (accent, or muted when `git_status.stale`) — configurable branch icon via `GlyphCatalog::branch_icon(config.git.branch_icon)` + name; suppressed on stale hits unless `git.stale_display`
+- **time / battery / jobs** — reuse their left-rail renderers for gating and content, styled muted; skipped when the left rail already rendered them
+
+Parts are space-separated. Returns `None` when the rail would be empty. When frame mode is active, right content is inlined into the framed line 1 and the `right` field in `PromptResponse` is `None`.
 
 ### OSC 2 Terminal Title
 
@@ -715,21 +789,46 @@ pub fn collect_segments(ctx: &SegmentContext<'_>) -> Vec<Segment> {
     // 2. SSH (if enabled and show policy matches)
     // 3. Container (if segments.container.enabled and detected)
     // 4. Directory (always attempts)
-    // 5. Git (if config.git.enabled)
-    // 6. Python env (if segments.python.enabled)
-    // 7. Toolchain (if segments.toolchain.enabled)
-    // 8. Nix (if segments.nix.enabled)
-    // 9. K8s (if segments.k8s.enabled)
-    // 10. Exit status (if enabled and exit_code != 0)
-    // 11. Command duration (if enabled and above threshold)
-    // 12. Jobs (if enabled and jobs > 0)
-    // 13. Time (if segments.time.enabled)
-    // 14. Battery (if segments.battery.enabled and below show_above threshold)
+    // 5. Dir writable (if enabled; lock glyph when cwd is NOT writable)
+    // 6. Git (if config.git.enabled)
+    // 7. Python env (if segments.python.enabled)
+    // 8. Toolchain (if segments.toolchain.enabled)
+    // 9. Nix (if segments.nix.enabled)
+    // 10. K8s (if segments.k8s.enabled)
+    // 11. Package version (if enabled; package.json/Cargo.toml/pyproject.toml in cwd)
+    // 12. Docker context (if enabled)
+    // 13. Kubectl context (if enabled)
+    // 14. Terraform workspace (if enabled and .terraform exists)
+    // 15. GCloud project (if enabled)
+    // 16. AWS profile (if enabled)
+    // 17. VPN (if enabled; tun/tap/wg interfaces)
+    // 18. Exit status (if enabled and exit_code != 0)
+    // 19. AI agent (if segments.ai.enabled and agent env present)
+    // 20. Command duration (if enabled and above threshold)
+    // 21. Jobs (if enabled and jobs > 0)
+    // 22. Time (if segments.time.enabled)
+    // 23. Battery (if segments.battery.enabled and below show_above threshold)
+    // 24. Load sparkline (if segments.load.enabled)
     segs
 }
 ```
 
 Note: `LayoutPreset::apply_filter()` in `render.rs` runs after collection and may remove segments not in the active preset.
+
+The full catalog (`ALL_SEGMENTS` in `style.rs`) is **24 names** — 16 pre-Tier D (`os` … `load`, including the Wave 1 `load` and `ai` additions) plus the 8 Tier D segments below. All 8 are **default-off** and driven by `IconSegmentConfig`-style entries (`enabled` + `icon`) under `[segments.*]`:
+
+| Segment (`segments/*.rs`) | Signal | Mechanism | TTL / timeout |
+|---------------------------|--------|-----------|---------------|
+| `package_version` | Version from `package.json`, `Cargo.toml`, or `pyproject.toml` in cwd (first match wins) | Manifest scan, regex-free; cached per cwd, negative results included | 10 s |
+| `dir_writable` | Lock glyph when cwd is NOT writable | Real create/delete probe (catches ACLs/RO mounts); cached per cwd | 10 s |
+| `aws_profile` | Active AWS identity; precedence `AWS_PROFILE` > `AWS_VAULT` > `AWS_DEFAULT_PROFILE` | Pure env-tier via the 0.4 env channel — zero forks | — |
+| `docker_context` | Docker target | `DOCKER_HOST` from env channel wins; else `docker context show` | 15 s / bounded |
+| `kubectl_context` | Current kubeconfig context | `kubectl config current-context`; hidden when kubectl absent/hangs | 15 s / bounded |
+| `terraform_workspace` | Workspace name | Stat-gated on `.terraform` in cwd, then `terraform workspace show` | 15 s / 1 s |
+| `vpn` | Active VPN | `/sys/class/net` directory listing — tun/tap/wg interface names | 15 s |
+| `gcloud_project` | GCP project | `GOOGLE_CLOUD_PROJECT` env wins; else `gcloud config get-value project` (artifacts like `() (empty)` treated as unset) | 30 s / bounded |
+
+Command-tier segments share `segments/util.rs` (`TtlCache`, `on_path`, `run_command` — see [Segment Utilities](#segment-utilities-srcsegmentsutilrs) above).
 
 ### Container Segment (`segments/container.rs`)
 
@@ -873,6 +972,8 @@ When `git.worktree` is set (linked worktree detected), the worktree directory na
 
 Branch name truncated to 20 characters with `…` suffix.
 
+**OSC 8 clickable branch** (C1 wave): `fetch_git_status` also runs `git remote get-url origin` once per cache refresh (additive `GitStatus.remote`; porcelain parsing never sets it). When `TermCaps.has_osc8`, the branch (and its compact form) is wrapped in an OSC 8 hyperlink to the normalized URL — scp-like ssh and `ssh://` remotes become `https://host/path` (credentials/port dropped), `http(s)://` passes through, a trailing `.git` is stripped, and `git://`/`file://`/local paths render plain. The URL is percent-encoded outside printable ASCII and widths are computed from the plain text before wrapping (`segments/git.rs` `normalize_remote_url`/`hyperlink`).
+
 ### Exit Status Segment
 
 Only shown for non-zero exit codes. When `TermCaps::detect().has_undercurl`, content is wrapped in `\x1b[4:3m` / `\x1b[4:0m` for wavy underline styling.
@@ -904,6 +1005,7 @@ Not a layout `Segment` — rendered directly by `render.rs` via `GlyphCatalog::p
 - Success: `config.segments.character.success` (default `❯`) in accent color
 - Error: `config.segments.character.error` (default `❯`) in red; undercurl when `TermCaps.has_undercurl`
 - Transient: `config.segments.character.transient` (default `❯`) in muted color. Previously hardcoded; now configurable in v0.3.
+- Vi NORMAL mode (Wave-1.5): when `[segments.character] vi_mode = true` and the adapter reports `KEYMAP` through the env channel as `vi_mode` (any value starting with `n`/`N` = NORMAL), the success glyph becomes `❮`; insert mode, unset `vi_mode` env, or the config off-switch keep the default char (`segments/character.rs`).
 
 ## v0.3.0 Bug Fixes
 
