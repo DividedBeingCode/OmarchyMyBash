@@ -21,3 +21,24 @@ function radius(styleCornerRadius) {
         r = 0;
     return Math.max(r, RADIUS_FLOOR);
 }
+
+// Elevation levels expressed as RectangularShadow parameters.
+//
+// RectangularShadow computes a rounded-rect falloff analytically in ONE
+// quad. MultiEffect/DropShadow instead require layer.enabled on the
+// shadowed item — an offscreen buffer per surface — plus a multi-tap blur.
+// On the integrated-GPU target shared with the Spatial UX plugin that is
+// the difference between free and not, so consumers must use
+// RectangularShadow exclusively.
+var ELEVATION = {
+    flat:   { blur: 0,  spread: 0, offsetY: 0, opacity: 0.0 },
+    rest:   { blur: 12, spread: 0, offsetY: 2, opacity: 0.18 },
+    raised: { blur: 24, spread: 0, offsetY: 6, opacity: 0.28 }
+};
+
+function elevation(level, shadowsEnabled) {
+    if (shadowsEnabled === false)
+        return ELEVATION.flat;
+    var e = ELEVATION[level];
+    return e ? e : ELEVATION.flat;
+}

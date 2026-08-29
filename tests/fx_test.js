@@ -32,6 +32,37 @@ check('negative is treated as zero', Fx.radius(-4), Fx.RADIUS_FLOOR);
 check('non-numeric is treated as zero', Fx.radius(undefined), Fx.RADIUS_FLOOR);
 check('string number is coerced', Fx.radius('20'), 20);
 
+const FxElev = new Function(src +
+    '\n;return { elevation: elevation, ELEVATION: ELEVATION };')();
+
+function checkShape(desc, obj) {
+    for (const k of ['blur', 'spread', 'offsetY', 'opacity']) {
+        if (typeof obj[k] !== 'number') {
+            console.error(`FAIL: ${desc} — missing numeric "${k}"`);
+            failures++;
+        }
+    }
+}
+
+checkShape('rest elevation shape', FxElev.elevation('rest', true));
+checkShape('raised elevation shape', FxElev.elevation('raised', true));
+
+// Raised surfaces must read as further from the background than resting
+// ones, or elevation carries no information.
+const rest = FxElev.elevation('rest', true);
+const raised = FxElev.elevation('raised', true);
+if (!(raised.blur > rest.blur && raised.offsetY > rest.offsetY)) {
+    console.error('FAIL: raised must exceed rest in blur and offsetY');
+    failures++;
+}
+
+// The accessibility escape hatch: shadows off must cost nothing to draw.
+check('shadows disabled is transparent',
+    FxElev.elevation('raised', false).opacity, 0);
+check('flat is transparent', FxElev.elevation('flat', true).opacity, 0);
+check('unknown level falls back to flat',
+    FxElev.elevation('nonsense', true).opacity, 0);
+
 if (failures > 0) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);
