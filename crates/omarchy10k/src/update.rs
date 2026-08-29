@@ -265,7 +265,27 @@ fn install_hook(source_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn rescan_plugins() {
+/// Make the running Quattro shell pick up the plugin we just installed.
+///
+/// `rescanPlugins` re-reads the plugin LIST but does NOT invalidate QML's
+/// component cache, so changed `.qml` files keep serving their previous code
+/// — an update would appear to succeed and change nothing until something
+/// else restarted the shell. Restart when the command exists; otherwise
+/// rescan and say plainly that a restart is still required.
+fn reload_shell_plugins() {
+    let restarted = Command::new("omarchy")
+        .args(["restart", "shell"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if restarted {
+        ok("Quattro shell restarted (picks up changed QML)");
+        return;
+    }
+
     if let Ok(status) = Command::new("omarchy-shell")
         .args(["shell", "rescanPlugins"])
         .stdout(std::process::Stdio::null())
@@ -273,7 +293,7 @@ fn rescan_plugins() {
         .status()
     {
         if status.success() {
-            ok("Quattro plugin rescan triggered");
+            warn("Plugin rescanned — run `omarchy restart shell` to load changed QML");
         }
     }
 }
@@ -389,7 +409,7 @@ pub fn run(no_pull: bool, no_build: bool) -> anyhow::Result<()> {
 
     install_binaries(&source_dir)?;
     install_plugin(&source_dir)?;
-    rescan_plugins();
+    reload_shell_plugins();
     install_hook(&source_dir)?;
     install_template(&source_dir)?;
     write_breadcrumb(&source_dir);

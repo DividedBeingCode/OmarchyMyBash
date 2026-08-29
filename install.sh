@@ -44,7 +44,16 @@ case "${1:-}" in
         rm -f "${BIN_DIR}/omarchy10k" "${BIN_DIR}/omarchy10kd" && ok "Removed binaries" || warn "Binaries not found"
         rm -rf "${PLUGIN_DIR}" && ok "Removed Quattro plugin" || warn "Plugin not found"
         if command -v omarchy-shell &>/dev/null; then
-            omarchy-shell shell rescanPlugins 2>/dev/null && ok "Quattro plugin rescan triggered" || true
+            # A rescan re-reads the plugin LIST but does not invalidate QML's
+        # component cache, so changed .qml files keep serving the old code
+        # (verified: an edited PanelLooks.qml still rendered its previous
+        # content until the shell restarted). Restart when we can, and say
+        # so plainly when we cannot.
+        if command -v omarchy >/dev/null 2>&1 && omarchy restart shell >/dev/null 2>&1; then
+            ok "Quattro shell restarted (picks up changed QML)"
+        elif omarchy-shell shell rescanPlugins 2>/dev/null; then
+            warn "Plugin rescanned, but changed QML needs: omarchy restart shell"
+        fi
             warn "If the widget was enabled, also remove it from Setup > Plugins (or ~/.config/omarchy/shell.json)."
         fi
         for HOOK_EVENT in theme-set battery-low post-update font-set; do rm -f "${HOME}/.config/omarchy/hooks/${HOOK_EVENT}.d/omarchy10k"; done && ok "Removed hooks" || warn "Hooks not found"
@@ -249,7 +258,16 @@ if [[ -d "${SCRIPT_DIR}/quattro" ]]; then
     fi
     ok "Plugin installed to ${PLUGIN_DIR}"
     if command -v omarchy-shell &>/dev/null; then
-        omarchy-shell shell rescanPlugins 2>/dev/null && ok "Quattro plugin rescan triggered" || true
+        # A rescan re-reads the plugin LIST but does not invalidate QML's
+        # component cache, so changed .qml files keep serving the old code
+        # (verified: an edited PanelLooks.qml still rendered its previous
+        # content until the shell restarted). Restart when we can, and say
+        # so plainly when we cannot.
+        if command -v omarchy >/dev/null 2>&1 && omarchy restart shell >/dev/null 2>&1; then
+            ok "Quattro shell restarted (picks up changed QML)"
+        elif omarchy-shell shell rescanPlugins 2>/dev/null; then
+            warn "Plugin rescanned, but changed QML needs: omarchy restart shell"
+        fi
     fi
 else
     warn "Quattro plugin directory not found; skipping"
@@ -260,10 +278,19 @@ fi
 for HOOK_EVENT in theme-set battery-low post-update font-set; do
     if [[ -f "${SCRIPT_DIR}/hooks/${HOOK_EVENT}" ]]; then
         EVENT_DIR="${HOME}/.config/omarchy/hooks/${HOOK_EVENT}.d"
-        mkdir -p "$EVENT_DIR"
-        cp "${SCRIPT_DIR}/hooks/${HOOK_EVENT}" "${EVENT_DIR}/omarchy10k"
-        chmod +x "${EVENT_DIR}/omarchy10k"
-        ok "${HOOK_EVENT} hook installed"
+        # Prefer Omarchy's own installer so the hook lands wherever the
+        # platform decides hooks live; fall back to the manual drop-in on
+        # older Omarchy versions that lack the command.
+        if command -v omarchy >/dev/null 2>&1 &&
+           omarchy hook install "$HOOK_EVENT" "${SCRIPT_DIR}/hooks/${HOOK_EVENT}" >/dev/null 2>&1
+        then
+            ok "${HOOK_EVENT} hook installed (omarchy hook install)"
+        else
+            mkdir -p "$EVENT_DIR"
+            cp "${SCRIPT_DIR}/hooks/${HOOK_EVENT}" "${EVENT_DIR}/omarchy10k"
+            chmod +x "${EVENT_DIR}/omarchy10k"
+            ok "${HOOK_EVENT} hook installed"
+        fi
     elif [[ "$HOOK_EVENT" == "theme-set" ]]; then
         warn "Theme hook not found; skipping"
     fi

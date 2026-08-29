@@ -237,7 +237,11 @@ One-command upgrade path. Pulls latest source, rebuilds, replaces binaries, refr
 4. `cargo build --release` (unless `--no-build`)
 5. Atomic binary install to `~/.local/bin/` (write to `.tmp`, rename)
 6. Copy `quattro/*` to plugin directory; patch `manifest.json` version from `Cargo.toml`
-7. Trigger Quattro plugin rescan (`omarchy-shell shell rescanPlugins`, silent if unavailable)
+7. Reload the Quattro shell (`omarchy restart shell`; falls back to
+   `omarchy-shell shell rescanPlugins` with a warning). **A rescan alone is
+   not enough** — it re-reads the plugin list but does not invalidate QML's
+   component cache, so changed `.qml` files keep serving their previous code
+   and an update appears to succeed while changing nothing.
 8. Copy `hooks/theme-set` to hook directory
 9. Copy `templates/omarchy10k.toml.tpl` to `~/.local/share/omarchy/templates/` (theme bridge)
 10. Send `shutdown` command to all running daemon sockets (`omarchy10k-*.sock`)
