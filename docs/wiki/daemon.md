@@ -405,7 +405,7 @@ Added in v0.5. Daemon-side user-script registry and runner for the quick-actions
 - Scripts live in `$XDG_CONFIG_HOME/omarchy10k/scripts` (`scripts_dir()`), must be executable regular files. Trust model: user's own config directory — same trust level as `.bashrc`, nothing network-sourced.
 - `valid_name()` traversal guard: non-empty, no `/`, no `..` substring, does not start with `.`. `resolve_script()` applies it plus regular-file and executable-bit checks.
 - `list_scripts(dir)` returns `{name, path}` entries sorted by name; missing directory → empty list.
-- `run_script(path, timeout_secs)` spawns the script (stdin nulled, stdout/stderr piped, `kill_on_drop`), enforces a hard timeout (`DEFAULT_SCRIPT_TIMEOUT_SECS = 30`), and returns trimmed stdout; non-zero exits carry status + trimmed stderr in the error.
+- `run_script(path, timeout_secs)` spawns the script (stdin nulled, stdout/stderr piped, `kill_on_drop`), retrying up to 5 times with growing backoff on **ETXTBSY** — a script the user just saved can still be held open for write, which is exactly the run-it-right-after-saving case a quick-actions UI makes common (same treatment `hook_event.rs` gives freshly-installed hooks), enforces a hard timeout (`DEFAULT_SCRIPT_TIMEOUT_SECS = 30`), and returns trimmed stdout; non-zero exits carry status + trimmed stderr in the error.
 - `handle_script_control(command, rest)` serves the `script_list` and `script_run` control verbs, sharing the daemon's `{"type":"control", ...}` response shape.
 
 ## Config (`src/config.rs`)

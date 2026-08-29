@@ -214,6 +214,24 @@ Wizard invariants worth keeping (each was broken once and is now covered by a un
 | `q` quits, and the prompt-character step runs | Both regressed to dead code: nothing produced `Key::Quit` while every screen advertised "[q] quit", and `step_prompt_char` had been dropped from the step chain, pinning the glyph to `chevron` |
 
 
+### `omarchy10k configure --describe`
+
+Prints the wizard's step data as JSON and exits: the step list, every option
+catalog, segment metadata (`all`, `default_on`, `exec_tier`) and the finish
+paths.
+
+This exists so the wizard's options live in **one** place. The Quattro
+Studio's Setup tab renders this rather than restating the catalogs in QML —
+the CLI wizard had already drifted badly (segment toggles writing config paths
+the daemon never read, the prompt-character step dropped from the chain, `q`
+no longer quitting) precisely because nothing else consumed the data and
+nothing checked it. `describe_exposes_every_catalog_the_wizard_offers` pins
+the contract.
+
+```bash
+omarchy10k configure --describe | jq .steps
+```
+
 ### `omarchy10k update`
 
 One-command upgrade path. Pulls latest source, rebuilds, replaces binaries, refreshes the Quattro plugin and theme hook, and gracefully restarts running daemons.

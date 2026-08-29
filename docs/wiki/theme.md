@@ -176,6 +176,43 @@ Applied when `theme.source` is anything except `"omarchy"` — i.e. `"custom"`, 
 
 When `reload_theme` is triggered (via the theme-set hook, filesystem watcher, or protocol command), the daemon re-reads config and calls `resolve_palette()` — custom overrides are preserved for `custom`, `hybrid`, and `terminal` sources (all except `omarchy`), and the terminal palette is re-parsed on every reload.
 
+## Theme Bind State (sync / desync)
+
+The terminal's colours either **follow** the Omarchy desktop theme or are
+**pinned** away from it. The daemon has always modelled this through the Look
+schema's `palette` directive; what was missing was any way for a surface to
+*show* it — applying a curated palette wrote `theme.source = "hybrid"` and
+silently desynced the terminal from the desktop, with no indicator and no road
+back.
+
+`o10k/Store.js` `themeBindState(cfgFlat, palettes, desktopTheme)` derives it,
+and `o10k/ThemeBindRow.qml` renders it in both the Quick Panel and the Studio:
+
+| State | `theme.source` | Indicator |
+|-------|----------------|-----------|
+| **Bound** | `omarchy` (or absent) | 🔗 Colors follow *Tokyo Night* — muted, no action |
+| **Pinned** | `hybrid` / `custom` | 📌 Pinned to *Gruvbox* · desktop is *Tokyo Night* · **[Sync ↻]** |
+| **Index** | `terminal` | ▦ Terminal palette · desktop is *Tokyo Night* · **[Sync ↻]** |
+
+Design rules:
+
+- **Bound is ambient, pinned is loud.** The pinned row names *both* sides, so
+  the divergence is legible rather than silent; the bound row is muted because
+  there is nothing to act on.
+- **A fresh config is bound, not broken.** No `[theme]` table at all means
+  bound.
+- **Sync emits exactly `{theme: {source: "omarchy"}}`** — the same patch the
+  daemon expects from a Look whose `palette` directive is `"theme"`.
+- **An unrecognised accent labels as "Custom"**, never guessed. Accent →
+  palette matching is case-insensitive because TOML may carry either case.
+- Looks can carry a palette, so the bind row sits directly above the Looks
+  grid: applying a Look is exactly what pins your colours.
+
+The Studio's **Theme** tab drives both halves — installed Omarchy themes
+applied desktop-wide via `omarchy theme set` (labelled as such, never
+pretending to be terminal-only), and the curated palettes as an explicit
+terminal-only pin.
+
 ## Palette API
 
 The daemon exposes a `palette` control command that returns the current in-memory `ThemePalette` as hex strings. This is the server-side equivalent of converting each `AnsiColor` to hex (the palette handler formats RGB components as `#rrggbb` at response time rather than via a dedicated `AnsiColor::to_hex()` method).

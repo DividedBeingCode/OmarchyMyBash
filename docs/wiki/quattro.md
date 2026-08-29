@@ -17,11 +17,12 @@ The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as
   "author": "Ian Johnston",
   "license": "MIT",
   "description": "Control Center for the Omarchy10k shell experience. Configure prompt style, theme, segments, and shell integrations from the Quattro bar.",
-  "kinds": ["bar-widget", "service", "overlay"],
+  "kinds": ["bar-widget", "service", "overlay", "panel"],
   "entryPoints": {
     "barWidget": "BarWidget.qml",
     "service": "Service.qml",
-    "overlay": "SessionPicker.qml"
+    "overlay": "SessionPicker.qml",
+    "panel": "Studio.qml"
   },
   "barWidget": {
     "displayName": "Omarchy10k",
@@ -32,12 +33,144 @@ The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as
 }
 ```
 
-- `kinds` ↔ `entryPoints` are 1:1: `bar-widget`→`BarWidget.qml`, `service`→`Service.qml`, `overlay`→`SessionPicker.qml` (all relative, inside the plugin dir)
+- `kinds` ↔ `entryPoints` are 1:1: `bar-widget`→`BarWidget.qml`, `service`→`Service.qml`, `overlay`→`SessionPicker.qml`, `panel`→`Studio.qml` (all relative, inside the plugin dir)
+
+> **The host mounts exactly ONE panel-ish kind per plugin, and `panel` wins.**
+> `shell.qml`'s `computePanelEntries` resolves
+> `kind = kinds.indexOf("panel") !== -1 ? "panel" : (overlay ? "overlay" : "menu")`.
+> Declaring `panel` therefore **unmounts** the `overlay` entry point — the
+> session picker and Looks gallery stop being summonable on their own.
+> `Studio.qml` absorbs that routing (`{"page":"sessions"|"gallery"}`) by
+> delegating to `SessionPicker.qml` unchanged, which is why both still work.
+> Keeping `overlay` in `kinds` is harmless and documents the delegation.
+
+- Panel-kind entry points are injected with `omarchyPath`, `shell`, `manifest`,
+  `barWidgetRegistry`, `pluginRegistry` and **`service`** (the plugin's own
+  service singleton), and must expose `open(payloadJson)` / `close()`.
+  User-initiated dismissal routes through `shell.hide(pluginId)` so the host's
+  open-panel state stays consistent.
+- **A plugin rescan does not reload changed QML.**
+  `omarchy-shell shell rescanPlugins` re-reads the plugin list but does not
+  invalidate QML's component cache, so edited `.qml` files keep serving their
+  previous code. `omarchy restart shell` is what picks them up; both
+  `install.sh` and `omarchy10k update` now restart rather than rescan.
 - `allowMultiple: false` — only one bar widget instance; `defaultSection: "right"`
 - The `service` kind mounts `Service.qml` at shell startup **when the plugin is enabled** — for third-party plugins that means the id is present in `shell.json` `plugins[]` (`omarchy plugin add`/`enable` does this)
 - The `overlay` kind is loaded on summon (`omarchy-shell shell summon community.omarchy10k '<payload>'` or the plugin's own `picker` IPC method)
 - Older Quattro hosts that do not know `service`/`overlay` kinds simply ignore them (manifest validation only requires a non-empty `kinds` array and safe relative `entryPoints` paths) — the bar-widget path keeps working unchanged
 - Panel path is not declared in manifest — `BarWidget.qml` loads `Panel.qml` via `Loader`
+
+## The `o10k/` Component Kit
+
+Shared components every new surface is built from. Two libraries plus three
+components; the libraries are `.pragma library` JavaScript so they are
+unit-testable under Node (`tests/fx_test.js`, `tests/motion_test.js`,
+`tests/store_test.js`) — Quickshell's `Socket`/`Process` types cannot load
+under `qmltestrunner`, so logic kept in QML cannot be tested at all.
+
+| File | Owns |
+|------|------|
+| `o10k/Fx.js` | **Radius floor** (`RADIUS_FLOOR = 8`) and elevation parameters. Nothing else — `Style` already provides the state fills. |
+| `o10k/Motion.js` | Duration tokens mirrored from the Spatial UX plugin's `lib/Motion.qml` (micro 90 / short 140 / medium 220 / long 360 ms) plus `scaled(ms, speed)` for reduced motion. A test pins the values against drift. |
+| `o10k/Store.js` | Preview broker, config delta tracking, undo stack, and the theme bind state machine. |
+| `o10k/Card.qml` | Elevated surface: floored radius, `RectangularShadow`, **opaque** base with the state tint composited over it. |
+| `o10k/SettingRow.qml` | Label + control slot + modified-vs-default ink + per-row reset. |
+| `o10k/ThemeBindRow.qml` | The sync/desync indicator (see [Theme](theme.md)). |
+
+Two rules the kit exists to enforce, both learned the hard way:
+
+- **Surfaces must be opaque.** `Style.normalFill` / `hoverFill` / `selectedFill`
+  are 4–8 % alpha *tints* meant to sit **on** a surface. Using one as a base
+  colour renders a ~96 % transparent card with the wallpaper showing through.
+  `Card` takes `surface` (opaque) and `tint` separately, and
+  `tests/qml/tst_card.qml` asserts `color.a === 1`.
+- **The radius floor is not cosmetic.** `Style.cornerRadius` mirrors Hyprland
+  `decoration:rounding`, which Omarchy ships at `0`, so honouring it faithfully
+  renders every card as a hard rectangle. The floor is a *minimum*: a theme
+  asking for more rounding keeps its value.
+
+The kit components are deliberately **unbound** (no `pragma ComponentBehavior:
+Bound`) — bound inline components cannot be instantiated cross-file, the key
+finding of the C4 decomposition. Consumers are bound.
+
+### Testing QML
+
+`qmltestrunner` cannot load the real `qs.Commons` (`Border.qml` needs the
+Quickshell runtime), so `tests/qml/stubs/qs/Commons/` provides a stub mirroring
+the real singleton's shape with stock-Omarchy defaults. `tests/qml/run.sh` runs
+every `tst_*.qml` against it headlessly.
+
+`tests/qmllint.sh` is the static gate: **no file may error**, and **no file in
+`o10k/` or `Studio*.qml` may have `[unqualified]` access**. That rule is
+load-bearing — unqualified access is what produced both the `wheelBoost`
+id-collision bug and the `Gallery.qml:936` `headerHeightD` ReferenceError that
+collapsed the detail sheet at runtime. The plugin-wide legacy backlog
+(341 warnings, 134 of them unqualified) is reported but not gated, so the rule
+could land before the rewrite finished.
+
+## Studio (`Studio.qml`, panel kind)
+
+The full-screen Control Center, summonable with
+`omarchy-shell shell summon community.omarchy10k`. Six lazily-loaded tabs —
+only the active tab is instantiated:
+
+| Tab | Contents |
+|-----|----------|
+| **Looks** | Theme bind row + Sync, Looks from the daemon `looks` verb, link to the gallery |
+| **Prompt** | Style presets, separator shapes, prompt characters, behavior toggles (`StudioPrompt.qml`) |
+| **Rice** | Omarchy-native vs o10k-added theming, with include-wiring detection (`StudioRice.qml`) |
+| **Theme** | Omarchy theme browser (desktop-wide) + terminal-only palette pin (`StudioTheme.qml`) |
+| **System** | Sessions, segment plugins, shell-layer claim map, doctor (`StudioSystem.qml`) |
+| **Setup** | Wizard rendered from `omarchy10k configure --describe` (`StudioWizard.qml`) |
+
+Tabs read and write config **through the service**, never through a panel
+root, so the Studio and the bar panel share one config state, one dirty set and
+one debounce and cannot race each other's saves.
+
+> **Bindings must reference a property, not call a function.** Reading config
+> through `service.configValue(key)` creates a dependency on `service` only, so
+> the binding never re-evaluates when `cfgFlat` arrives — the entire Prompt tab
+> stayed frozen at its first paint. Tabs bind
+> `readonly property var cfg: service ? service.cfgFlat : ({})` and index that.
+
+## Service-Owned State
+
+The service is the single owner of everything stateful: sockets, config,
+Looks, palettes, defaults, the preview broker, the undo stack and the headless
+daemon. Every other surface is a **view** that binds to it and mutates only
+through its functions.
+
+This is not decoration. The panel and the gallery each used to own a socket
+and a cache, and they drifted immediately: `PanelLooks.qml` hardcoded the eight
+curated Look names while `Gallery.qml` used the real `looks` verb, so a Look
+the user saved appeared in one surface and not the other. One owner removes
+that failure mode by construction.
+
+What it fixes, each a measured cost:
+
+1. **Three sockets → one.** Panel, Gallery and Service each opened their own.
+2. **One preview broker.** A config change previously fired ~10 preset
+   previews from the panel plus the gallery's own per-card previews. The
+   broker dedupes by `(ctx, patch)` key, cancels superseded requests by
+   sequence, and shares the cache. It also fixes two defects in the caches it
+   replaced: in-flight entries were released only on a *matching* response
+   (so a disconnect stranded a card forever showing `--`), and the cache was
+   keyed on Look **name** alone (so a palette change left every cached preview
+   stale but un-refetchable).
+3. **One dirty set and one debounce.** The delta-save discipline — send only
+   changed keys, never a full stamp — exists because a full stamp clobbers
+   edits made outside the surface. Two surfaces with independent dirty sets
+   would race each other.
+4. **Undo spans surfaces.** An edit made in the Studio is undoable from the
+   Quick Panel.
+5. **One headless daemon.** Two surfaces would otherwise risk spawning two.
+
+### NDJSON framing
+
+`_rpc(msgString, id, cb)` writes its string **verbatim** — it does not append a
+newline. `Model.buildCommand` / `buildConfigSet` already end with `\n`; a
+hand-built `JSON.stringify(...)` must add one. Trimming it means the daemon
+never sees a complete line and the request silently never completes.
 
 ## Component Hierarchy
 
@@ -51,6 +184,11 @@ Service (Item, service kind — mounted at shell startup)
 │   leave socket files behind that would otherwise surface as ghost sessions
 ├── Instantiator → one persistent Socket per session (hello → status)
 ├── controlSocket Socket (config_get/config_set/invalidate_git for IPC)
+├── OWNED STATE (o10k/Store.js): preview broker · config delta · undo stack
+├── DERIVED DAEMON STATE: looks · palettes · defaultsFlat · scripts ·
+│   desktopTheme (fetched on connect, refreshed on config change)
+├── CONFIG WRITES: setConfigValue / resetConfigValue / undoConfig,
+│   applyLook / applyPalette / applyPaletteTheme, runScript
 └── IpcHandler target "community.omarchy10k"
 
 BarWidget (qs.Ui.BarWidget)

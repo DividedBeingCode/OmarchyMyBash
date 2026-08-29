@@ -77,6 +77,13 @@ Omarchy10k exists because shell prompts are a hot path that most tools treat as 
 │    └── parse-prompt (hidden) → extract left from JSON stdin          │
 ├──────────────────────────────────────────────────────────────────────┤
 │  QUATTRO BAR PLUGIN (QML/JS, desktop integration)                     │
+│    ├── Studio.qml → full-screen Control Center (PANEL kind,          │
+│    │   summonable: omarchy-shell shell summon community.omarchy10k)  │
+│    │   tabs: Looks · Prompt · Rice · Theme · System · Setup          │
+│    ├── o10k/ → shared kit: Fx.js (radius floor, elevation),          │
+│    │   Motion.js (tokens mirrored from Spatial UX), Store.js         │
+│    │   (preview broker, config delta, undo, theme bind state),       │
+│    │   Card/SettingRow/ThemeBindRow                                  │
 │    ├── BarWidget.qml → "❯" glyph in system bar + bar badges          │
 │    │   (daemon-status dot, git dirty dot, agents badge, long-cmd chip)│
 │    ├── Panel.qml → Control Center, 4-bucket rail                     │
@@ -459,6 +466,27 @@ Modules with no o10k counterpart are listed honestly as unmapped. Dry-run by
 default (mapping table + unmapped list); with `--yes` it saves a
 `[looks.migrated-starship]` Look through the daemon, with an atomic local
 fallback when no daemon answers.
+
+## Control Center Ownership (rebuild)
+
+The Quattro plugin's surfaces are **views over service-owned state**.
+`Service.qml` owns the sockets, config, Looks, palettes, defaults, the preview
+broker, the undo stack and the headless daemon; the Quick Panel and the Studio
+bind to it and mutate only through its functions.
+
+The rule exists because the previous split failed in a specific way: the panel
+and the gallery each owned a socket and a cache, and `PanelLooks.qml` ended up
+hardcoding the eight curated Look names while `Gallery.qml` used the real
+`looks` verb — so a user-saved Look appeared in one surface and not the other.
+One owner removes that class of drift by construction, collapses three sockets
+to one, and gives the two surfaces a single dirty set so they cannot race each
+other's config saves.
+
+**Host constraint worth knowing:** `shell.qml`'s `computePanelEntries` mounts
+exactly one panel-ish kind per plugin and `panel` outranks `overlay`, so
+declaring `panel` unmounts the overlay entry point. `Studio.qml` therefore also
+serves the pages `SessionPicker.qml` used to route, by delegating to it
+unchanged.
 
 ## Known Architectural Issues
 

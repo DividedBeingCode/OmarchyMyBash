@@ -10,6 +10,16 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 
 Since the 0.5 doc sync, the crate gained seven more waves (all shipped as v0.4.0): **C1 stabilization** — daemon `status` gains an `agent` field ("claude"|"codex"|null, detected from the env channel), the BarWidget gains a robot-glyph agents badge, the git branch becomes an OSC 8 hyperlink to the normalized remote URL when the terminal supports it, the hook-event ETXTBSY race was fixed with write-then-rename, and 12 new integration assertions landed; **C2 platform coexistence** — `[shell.layer]` claim policy (extend/defer/own/off) resolved at `omarchy10k init bash` and baked into the adapter prelude, prompt handoff unhooks starship/Ghostty precmd hooks at init (reversible, recorded in `__O10K_DISPLACED[]`), `omarchy10k layer [--json]` prints the claim map, terminal include templates (o10k-ghostty.conf.tpl, o10k-foot.ini.tpl) plus o10k-blesh.bash.tpl and o10k-delta.gitconfig.tpl join the rice templates, and tools.sh keeps only uncontested aliases; **C3 Looks Studio** — the Gallery detail sheet became an editor (palette hex rows, cycle rows, Gradient Ramp Designer) rendering every edit through the `preview.patch` override (merge base → look → patch) with a new `looks_delete` verb; **C4 Panel decomposition** — Panel.qml shrank 2701→1277 lines into PanelLooks/PanelStyle/PanelBehavior/PanelSystem.qml + shared PanelKit.qml; **C5 parity + share** — vanilla-bash (non-ble.sh) gains an escape-aware right prompt rail and a rewritten transient prompt, and Looks export/install as portable TOML bundles (`look export` / `look install`, https-only, dry-run by default); **Tier C** — per-repo `.o10k.toml` project profiles (display-keys allowlist, `.git`-boundary detection), p10k-grade wizard depth (context previews, per-segment toggles, apply/Look/profile finish paths), and `theme.source = "terminal"` index-palette mode; **Tier D** — 8 new catalog segments with layered detection tiers, a plugin economy (`plugin add|list|enable|disable|remove|update` over `~/.config/omarchy10k/plugins/<name>/plugin.toml`), and `omarchy10k migrate <starship.toml>` mapping Starship config into a `migrated-starship` Look.
 
+Since the increments above, the Control Center was rebuilt against a shared
+component kit and service-owned state: the plugin now registers the **`panel`**
+kind (`Studio.qml`, summonable via `omarchy-shell shell summon`), the service
+owns config/Looks/palettes/preview/undo so surfaces cannot drift, the theme
+**bind state** (sync/desync) is surfaced with a one-click resync, and four
+daemon capabilities that were CLI-only gained a UI — quick actions
+(`script_list`), segment plugins, the shell-layer claim map (`layer --json`)
+and the rice layer's include wiring. A daemon watcher feedback loop that leaked
+~9.5 MB/s per shell was fixed (see [Daemon](daemon.md)).
+
 ## Wiki Pages
 
 | Page | Description |
@@ -75,7 +85,15 @@ omarchy10k/
 │                                    #   o10k-env.sh, o10k-blesh.bash, o10k-delta.gitconfig,
 │                                    #   o10k-ghostty.conf, o10k-foot.ini, lazygit, yazi, cava
 ├── quattro/                         # Quattro bar plugin
-│   ├── manifest.json
+│   ├── manifest.json                # kinds: bar-widget, service, overlay, panel
+│   ├── Studio.qml                   # Full-screen Control Center (panel kind, summonable)
+│   ├── StudioPrompt.qml             # Studio: presets, separators, glyphs, toggles
+│   ├── StudioRice.qml               # Studio: tool theming + include-wiring detection
+│   ├── StudioTheme.qml              # Studio: Omarchy theme browser + palette pin
+│   ├── StudioSystem.qml             # Studio: sessions, plugins, shell-layer map
+│   ├── StudioWizard.qml             # Studio: wizard from `configure --describe`
+│   ├── o10k/                        # Shared kit — Fx.js, Motion.js, Store.js,
+│   │                                #   Card.qml, SettingRow.qml, ThemeBindRow.qml
 │   ├── BarWidget.qml                # Bar glyph + badges (daemon status, git dirty, long-cmd chip, agent badge)
 │   ├── Panel.qml                    # Control Center — 4-bucket rail (LOOKS · STYLE · BEHAVIOR · SYSTEM)
 │   ├── PanelLooks.qml               # Looks bucket: cards, Looks Studio editor, delete
@@ -89,6 +107,9 @@ omarchy10k/
 │   └── Model.js                     # TOML parser, CONFIG_MAP, protocol helpers
 ├── tests/
 │   ├── integration_test.sh          # Integration test suite
+│   ├── qml/                         # Headless QML component tests (stubbed qs.Commons)
+│   ├── qmllint.sh                   # Static gate: no errors, no unqualified in new code
+│   ├── fx_test.js / motion_test.js / store_test.js   # o10k kit unit tests
 │   ├── model_parity_test.js         # Model.js CONFIG_MAP round-trip parity harness
 │   └── vanilla_transient_test.sh    # Vanilla-bash transient + right-rail fixture
 ├── docs/wiki/                       # This wiki
