@@ -207,6 +207,63 @@ Item {
         })
     }
 
+    // ── Config writes (service-owned) ──────────────────────────────────────
+    // Surfaces mutate config ONLY through here, so the Quick Panel and the
+    // Studio share one dirty set and one debounce and cannot race each
+    // other's saves. Reads come from `cfgFlat`.
+    readonly property var cfgFlat: service._cfgFlat
+
+    function configValue(tomlKey, fallback) {
+        var v = service._cfgFlat[tomlKey]
+        return v === undefined ? fallback : v
+    }
+
+    function defaultValue(tomlKey) {
+        return service.defaultsFlat[tomlKey]
+    }
+
+    // Stage a change: applied to the local view immediately so the UI is
+    // responsive, then flushed as a delta.
+    function setConfigValue(tomlKey, value) {
+        var flat = service._cfgFlat
+        if (flat[tomlKey] === value) return
+        service.pushUndo(flat)
+        var next = {}
+        for (var k in flat) next[k] = flat[k]
+        next[tomlKey] = value
+        service._cfgFlat = next
+        service.touchConfigKey(tomlKey)
+        configSaveTimer.restart()
+    }
+
+    function resetConfigValue(tomlKey) {
+        var d = service.defaultValue(tomlKey)
+        if (d !== undefined) service.setConfigValue(tomlKey, d)
+    }
+
+    function undoConfig() {
+        var prev = service.popUndo()
+        if (!prev) return
+        service._cfgFlat = prev
+        for (var k in prev) service.touchConfigKey(k)
+        configSaveTimer.restart()
+    }
+
+    function _flushConfig() {
+        var patchFlat = service.collectDelta(service._cfgFlat)
+        if (Object.keys(patchFlat).length === 0) return
+        var id = "svc-cfg-set"
+        service._rpc(Model.buildConfigSet(Model.unflattenPatch(patchFlat), id), id,
+                     function () { service.invalidateDerived() })
+    }
+
+    Timer {
+        id: configSaveTimer
+        interval: 300
+        repeat: false
+        onTriggered: service._flushConfig()
+    }
+
     // Everything derived from daemon state, refetched together.
     function refreshDerived() {
         service.invalidateDerived()

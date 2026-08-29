@@ -44,7 +44,7 @@ for f in *.qml o10k/*.qml; do
     # Studio.qml earned its place here immediately: the gate caught
     # `Fx.radius(...)` with no `import "o10k/Fx.js"`, which would have thrown
     # at runtime exactly like the Gallery headerHeightD bug.
-    if [[ "$f" == o10k/* || "$f" == "Studio.qml" ]]; then
+    if [[ "$f" == o10k/* || "$f" == Studio*.qml ]]; then
         if grep -q "\[unqualified\]" <<<"$out"; then
             echo "UNQUALIFIED ACCESS in $f (not allowed in the o10k kit):"
             grep -B1 "\[unqualified\]" <<<"$out"

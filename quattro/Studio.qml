@@ -213,8 +213,10 @@ Item {
                         height: parent.height - y
                         sourceComponent: {
                             switch (studio.tabs[studio.currentTab].key) {
-                                case "looks": return looksPage
-                                default: return pendingPage
+                                case "looks":  return looksPage
+                                case "prompt": return promptPage
+                                case "system": return systemPage
+                                default:       return pendingPage
                             }
                         }
                     }
@@ -316,6 +318,16 @@ Item {
                 }
             }
         }
+    }
+
+    Component {
+        id: promptPage
+        StudioPrompt { service: studio.service }
+    }
+
+    Component {
+        id: systemPage
+        StudioSystem { service: studio.service; shell: studio.shell }
     }
 
     // Tabs whose content lands in later increments. Named honestly rather
