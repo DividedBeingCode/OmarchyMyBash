@@ -101,6 +101,65 @@ check('response for a superseded id is rejected',
 check('response for the current id is accepted',
     S.brokerResolve(b5, k5, 'req-5b', '<current>'), true);
 
+// ── Config delta ───────────────────────────────────────────────────────────
+const D = new Function(src + '\n;return {' +
+    ' newDelta, deltaTouch, deltaPending, deltaCollect };')();
+
+const d = D.newDelta();
+check('fresh delta has nothing pending', D.deltaPending(d), false);
+
+D.deltaTouch(d, 'git.mode');
+check('touched delta is pending', D.deltaPending(d), true);
+
+// The delta discipline: a save must send ONLY what changed here. Stamping
+// every mapped key would clobber edits made outside this surface (CLI,
+// another panel) with UI state captured at load time.
+const full = { 'git.mode': 'compact', 'git.enabled': true, 'style.preset': 'lean' };
+const patch = D.deltaCollect(d, full);
+check('collect returns only dirty keys', Object.keys(patch).join(','), 'git.mode');
+check('collect returns the current value', patch['git.mode'], 'compact');
+check('collect clears the dirty set', D.deltaPending(d), false);
+
+// A key touched but absent from the config snapshot must not invent a
+// value — that would write undefined into the user's TOML.
+const d2 = D.newDelta();
+D.deltaTouch(d2, 'nonexistent.key');
+check('unknown key is dropped', Object.keys(D.deltaCollect(d2, full)).length, 0);
+
+// Touching the same key twice must not send it twice.
+const d3 = D.newDelta();
+D.deltaTouch(d3, 'git.mode');
+D.deltaTouch(d3, 'git.mode');
+check('repeat touch collapses', Object.keys(D.deltaCollect(d3, full)).length, 1);
+
+// ── Undo stack ─────────────────────────────────────────────────────────────
+const U = new Function(src + '\n;return {' +
+    ' newUndo, undoPush, undoDepth, undoPop };')();
+
+const u = U.newUndo(3);
+check('fresh stack is empty', U.undoDepth(u), 0);
+check('popping an empty stack is null', U.undoPop(u), null);
+
+U.undoPush(u, { a: 1 });
+U.undoPush(u, { a: 2 });
+check('depth tracks pushes', U.undoDepth(u), 2);
+check('pop returns the most recent', U.undoPop(u).a, 2);
+check('pop shrinks the stack', U.undoDepth(u), 1);
+
+// Bounded: a long editing session must not grow memory without limit.
+const u2 = U.newUndo(3);
+for (let i = 0; i < 10; i++) U.undoPush(u2, { n: i });
+check('stack is bounded by its limit', U.undoDepth(u2), 3);
+check('the newest entry survives', U.undoPop(u2).n, 9);
+
+// Snapshots must be deep-copied. Storing a live reference means the caller
+// mutating its config object silently rewrites undo history.
+const u3 = U.newUndo(3);
+const live = { nested: { v: 'before' } };
+U.undoPush(u3, live);
+live.nested.v = 'after';
+check('snapshot is deep-copied', U.undoPop(u3).nested.v, 'before');
+
 if (failures > 0) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);

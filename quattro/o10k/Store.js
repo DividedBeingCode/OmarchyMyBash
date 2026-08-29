@@ -80,3 +80,65 @@ function brokerInvalidate(broker) {
     broker.generation++;
     broker.cache = {};
 }
+
+// ── Config delta ───────────────────────────────────────────────────────────
+//
+// The save path sends ONLY keys changed on this surface. Stamping every
+// mapped key instead would clobber edits made elsewhere (the CLI, another
+// panel) with UI state captured at load time — a bug the panel already hit
+// once and fixed with this discipline. One owner means the Quick Panel and
+// the Studio cannot race each other's saves.
+
+function newDelta() {
+    return { dirty: {} };
+}
+
+function deltaTouch(delta, key) {
+    delta.dirty[key] = true;
+}
+
+function deltaPending(delta) {
+    return Object.keys(delta.dirty).length > 0;
+}
+
+function deltaCollect(delta, fullFlat) {
+    var out = {};
+    var keys = Object.keys(delta.dirty);
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        // A dirty key absent from the snapshot has no value to send;
+        // inventing one would write undefined into the user's TOML.
+        if (Object.prototype.hasOwnProperty.call(fullFlat, k))
+            out[k] = fullFlat[k];
+    }
+    delta.dirty = {};
+    return out;
+}
+
+// ── Undo stack ─────────────────────────────────────────────────────────────
+//
+// Owned by the service rather than a surface, so an edit made in the Studio
+// is undoable from the Quick Panel and vice versa.
+
+function newUndo(limit) {
+    var n = Number(limit);
+    return { entries: [], limit: (isFinite(n) && n > 0) ? n : 10 };
+}
+
+function undoPush(undo, snapshot) {
+    // Deep copy: storing the live object means a later mutation by the
+    // caller silently rewrites history.
+    undo.entries.push(JSON.parse(JSON.stringify(snapshot)));
+    while (undo.entries.length > undo.limit)
+        undo.entries.shift();
+}
+
+function undoDepth(undo) {
+    return undo.entries.length;
+}
+
+function undoPop(undo) {
+    if (undo.entries.length === 0)
+        return null;
+    return undo.entries.pop();
+}
