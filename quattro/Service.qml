@@ -194,6 +194,23 @@ Item {
         })
     }
 
+    // Pin terminal colors to a curated palette — the deliberate unbind.
+    function applyPalette(key) {
+        var pal = Model.CURATED_PALETTES[key]
+        if (!pal) return false
+        var id = "svc-palette-" + key
+        var msg = JSON.stringify({
+            type: "config", command: "set",
+            config: { theme: { source: "hybrid", custom: {
+                accent: pal.accent, foreground: pal.foreground, muted: pal.muted,
+                background: pal.background, red: pal.red, green: pal.green,
+                yellow: pal.yellow, blue: pal.blue, magenta: pal.magenta,
+                cyan: pal.cyan, orange: pal.orange
+            } } }, id: id
+        }) + "\n"
+        return service._rpc(msg, id, function () { service.invalidateDerived() })
+    }
+
     // Return terminal colors to the Omarchy desktop theme — the resync half
     // of the bind indicator.
     function applyPaletteTheme() {

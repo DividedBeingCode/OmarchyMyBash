@@ -216,6 +216,8 @@ Item {
                                 case "looks":  return looksPage
                                 case "prompt": return promptPage
                                 case "system": return systemPage
+                                case "rice":   return ricePage
+                                case "theme":  return themePage
                                 default:       return pendingPage
                             }
                         }
@@ -328,6 +330,16 @@ Item {
     Component {
         id: systemPage
         StudioSystem { service: studio.service; shell: studio.shell }
+    }
+
+    Component {
+        id: ricePage
+        StudioRice { service: studio.service }
+    }
+
+    Component {
+        id: themePage
+        StudioTheme { service: studio.service }
     }
 
     // Tabs whose content lands in later increments. Named honestly rather
