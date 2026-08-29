@@ -38,6 +38,13 @@ TestCase {
         compare(flatCard.shadowOpacity, 0)
     }
 
+    // Regression: Style.normalFill is a 4-8% alpha TINT, not a surface
+    // colour. Using one as the base rendered a ~96% transparent card with
+    // the desktop wallpaper showing straight through it.
+    function test_surface_is_opaque() {
+        compare(restCard.color.a, 1.0)
+    }
+
     // The accessibility escape hatch must actually remove the shadow.
     function test_shadows_disabled_draws_no_shadow() {
         compare(noShadowCard.shadowOpacity, 0)

@@ -9,12 +9,14 @@
   "kinds": [
     "bar-widget",
     "service",
-    "overlay"
+    "overlay",
+    "panel"
   ],
   "entryPoints": {
     "barWidget": "BarWidget.qml",
     "service": "Service.qml",
-    "overlay": "SessionPicker.qml"
+    "overlay": "SessionPicker.qml",
+    "panel": "Studio.qml"
   },
   "barWidget": {
     "displayName": "Omarchy10k",

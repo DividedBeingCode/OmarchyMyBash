@@ -5,7 +5,7 @@
 #   1. NO file may produce an Error:.
 #   2. NO file in quattro/o10k/ may produce an [unqualified] warning.
 #
-# Rule 2 is scoped to the new kit deliberately: the plugin-wide baseline is
+# Rule 2 is scoped to new code deliberately: the plugin-wide baseline is
 # 341 warnings / 0 errors, of which 134 are [unqualified] — the class that
 # produced the wheelBoost id-collision bug (a property sharing its name with
 # a handler id made every lookup resolve to the handler and the scroll step
@@ -40,7 +40,11 @@ for f in *.qml o10k/*.qml; do
         FAIL=1
     fi
 
-    if [[ "$f" == o10k/* ]]; then
+    # Files written against the o10k kit are held to the clean standard.
+    # Studio.qml earned its place here immediately: the gate caught
+    # `Fx.radius(...)` with no `import "o10k/Fx.js"`, which would have thrown
+    # at runtime exactly like the Gallery headerHeightD bug.
+    if [[ "$f" == o10k/* || "$f" == "Studio.qml" ]]; then
         if grep -q "\[unqualified\]" <<<"$out"; then
             echo "UNQUALIFIED ACCESS in $f (not allowed in the o10k kit):"
             grep -B1 "\[unqualified\]" <<<"$out"

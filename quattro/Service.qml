@@ -125,14 +125,14 @@ Item {
     property string desktopTheme: ""
 
     function fetchLooks() {
-        service._rpc(Model.buildCommand("looks", "svc-looks").trim(), "svc-looks",
+        service._rpc(Model.buildCommand("looks", "svc-looks"), "svc-looks",
                      function (resp) {
                          if (resp.looks !== undefined) service.looks = resp.looks
                      })
     }
 
     function fetchPalettes() {
-        service._rpc(Model.buildCommand("palettes", "svc-palettes").trim(), "svc-palettes",
+        service._rpc(Model.buildCommand("palettes", "svc-palettes"), "svc-palettes",
                      function (resp) {
                          if (resp.palettes === undefined) return
                          // The verb returns [{key, theme}]; flatten to the
@@ -143,8 +143,13 @@ Item {
                              var entry = resp.palettes[i]
                              if (!entry || !entry.key) continue
                              var custom = (entry.theme && entry.theme.custom) ? entry.theme.custom : {}
+                             // The `palettes` verb returns {key, theme} with
+                             // no display label, so the bind row rendered the
+                             // raw key ("gruvbox"). Model.js carries the
+                             // proper labels.
+                             var curated = Model.CURATED_PALETTES[entry.key]
                              out[entry.key] = {
-                                 label: entry.label || entry.key,
+                                 label: (curated && curated.label) || entry.label || entry.key,
                                  accent: custom.accent || "",
                                  custom: custom
                              }
@@ -154,7 +159,7 @@ Item {
     }
 
     function fetchDefaults() {
-        service._rpc(Model.buildCommand("defaults", "svc-defaults").trim(), "svc-defaults",
+        service._rpc(Model.buildCommand("defaults", "svc-defaults"), "svc-defaults",
                      function (resp) {
                          if (resp.config !== undefined)
                              service.defaultsFlat = Model.flattenConfig(resp.config)
@@ -162,7 +167,7 @@ Item {
     }
 
     function fetchScripts() {
-        service._rpc(Model.buildCommand("script_list", "svc-scripts").trim(), "svc-scripts",
+        service._rpc(Model.buildCommand("script_list", "svc-scripts"), "svc-scripts",
                      function (resp) {
                          if (resp.scripts !== undefined) service.scripts = resp.scripts
                      })
@@ -171,8 +176,35 @@ Item {
     function runScript(name, cb) {
         var msg = JSON.stringify({
             type: "control", command: "script_run", name: name, id: "svc-run-" + name
-        })
+        }) + "\n"
         return service._rpc(msg, "svc-run-" + name, cb || function () {})
+    }
+
+    // Apply a Look persistently (transient=true is the gallery's "Try").
+    function applyLook(name, transient) {
+        var id = "svc-apply-" + name
+        var msg = JSON.stringify({
+            type: "control", command: "looks_apply",
+            name: name, transient: !!transient, id: id
+        }) + "\n"
+        return service._rpc(msg, id, function () {
+            // A Look can change the palette, so every cached render is stale.
+            service.invalidateDerived()
+            service.fetchLooks()
+        })
+    }
+
+    // Return terminal colors to the Omarchy desktop theme — the resync half
+    // of the bind indicator.
+    function applyPaletteTheme() {
+        var id = "svc-sync-theme"
+        var msg = JSON.stringify({
+            type: "config", command: "set",
+            config: { theme: { source: "omarchy" } }, id: id
+        }) + "\n"
+        return service._rpc(msg, id, function () {
+            service.invalidateDerived()
+        })
     }
 
     // Everything derived from daemon state, refetched together.

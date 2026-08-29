@@ -23,8 +23,16 @@ Rectangle {
 
     default property alias content: inner.data
 
+    // The surface must be OPAQUE. Style.normalFill and friends are 4-8%
+    // alpha TINTS meant to sit on top of a surface, not to be one: using a
+    // tint as the base colour renders a ~96% transparent card with the
+    // wallpaper showing through. The tint is composited over this base by
+    // `tint` below.
+    property color surface: Color.background
+    property color tint: Style.normalFill
+
     radius: Fx.radius(Style.cornerRadius)
-    color: Style.normalFill
+    color: card.surface
 
     // RectangularShadow computes the falloff analytically in one quad. A
     // MultiEffect/DropShadow here would require layer.enabled — an
@@ -39,6 +47,13 @@ Rectangle {
         color: Qt.rgba(0, 0, 0, card._elev.opacity)
         visible: card._elev.opacity > 0
         z: -1
+    }
+
+    // State tint, composited over the opaque surface at the same radius.
+    Rectangle {
+        anchors.fill: parent
+        radius: card.radius
+        color: card.tint
     }
 
     Item {
