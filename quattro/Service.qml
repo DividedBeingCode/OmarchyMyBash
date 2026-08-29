@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "o10k/Store.js" as Store
 
 // Omarchy10k service-kind plugin (manifest kind "service").
 //
@@ -56,6 +57,64 @@ Item {
     property var _pending: ({})
     property int _reqSeq: 0
     property var _cfgFlat: ({})
+
+    // ── Owned state (Increment 2) ──────────────────────────────────────────
+    // The service is the single owner of preview caching, config delta
+    // tracking and undo, so surfaces cannot drift apart or race each other's
+    // saves. Logic lives in o10k/Store.js because Quickshell's Socket type
+    // cannot load under qmltestrunner — see tests/store_test.js.
+    property var _broker: Store.newBroker()
+    property var _delta: Store.newDelta()
+    property var _undo: Store.newUndo(10)
+
+    // Plain property, not a binding: the stack is a plain JS object, so a
+    // binding over it would never re-evaluate. The mutators below keep it
+    // in sync.
+    property int undoDepth: 0
+
+    function previewLookup(ctx, patch) {
+        return Store.brokerLookup(service._broker, Store.previewKey(ctx, patch))
+    }
+
+    function previewBegin(ctx, patch, id) {
+        var key = Store.previewKey(ctx, patch)
+        Store.brokerBegin(service._broker, key, id)
+        return key
+    }
+
+    function previewResolve(key, id, value) {
+        return Store.brokerResolve(service._broker, key, id, value)
+    }
+
+    // Call on disconnect and on any error response, so a stranded request
+    // does not block that key forever.
+    function previewRelease(key) {
+        Store.brokerRelease(service._broker, key)
+    }
+
+    // Any config or theme change invalidates every cached render.
+    function invalidateDerived() {
+        Store.brokerInvalidate(service._broker)
+    }
+
+    function touchConfigKey(key) {
+        Store.deltaTouch(service._delta, key)
+    }
+
+    function collectDelta(fullFlat) {
+        return Store.deltaCollect(service._delta, fullFlat)
+    }
+
+    function pushUndo(flat) {
+        Store.undoPush(service._undo, flat)
+        service.undoDepth = Store.undoDepth(service._undo)
+    }
+
+    function popUndo() {
+        var prev = Store.undoPop(service._undo)
+        service.undoDepth = Store.undoDepth(service._undo)
+        return prev
+    }
 
     Component.onCompleted: discoverSockets()
 

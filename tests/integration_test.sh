@@ -1016,9 +1016,16 @@ if command -v node >/dev/null 2>&1; then
     else
         fail "Motion.js unit tests" "$(node "$SCRIPT_DIR/tests/motion_test.js" 2>&1 | tail -3)"
     fi
+
+    if node "$SCRIPT_DIR/tests/store_test.js" >/dev/null 2>&1; then
+        pass "Store.js unit tests"
+    else
+        fail "Store.js unit tests" "$(node "$SCRIPT_DIR/tests/store_test.js" 2>&1 | tail -3)"
+    fi
 else
     skip "Fx.js unit tests" "node not available"
     skip "Motion.js unit tests" "node not available"
+    skip "Store.js unit tests" "node not available"
 fi
 
 if [[ -x /usr/lib/qt6/bin/qmltestrunner ]]; then
