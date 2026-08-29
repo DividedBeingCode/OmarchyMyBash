@@ -56,7 +56,20 @@ Uses `notify` crate (v8) with a raw `mpsc` channel in `spawn_blocking`:
 - **Theme watcher**: monitors `colors.toml` → calls `state.reload_theme()`
 - **Plugins watcher**: monitors `<config dir>/plugins/` recursively → registry reload. The directory is **created if absent** before the watch is registered: `omarchy10k plugin add` creates it on first use, and a watch can only be armed on an existing path, so the previous `if plugins_dir.exists()` guard left every daemon started before the first plugin install with no plugins watch for the rest of its life (the non-recursive config-dir watch sees the directory appear but cannot arm a watch on it). Manifest edits, updates, and removals then needed a daemon restart to be noticed.
 
-The `notify-debouncer-full` crate is declared as a dependency but not imported or used. Debouncing happens implicitly through the watcher's event batching.
+Events are filtered by **kind** before they can trigger a reload
+(`is_content_change` in `main.rs`): create, remove, rename, and data
+modifications count; **access and metadata-only events never do**.
+
+That filter is load-bearing, not hygiene. `reload_config()` re-reads
+`config.toml` *and* re-scans the watched plugins directory, so treating a
+read as a change made the watcher feed itself: reload → directory read →
+access/atime event → reload. Measured on the shipped 0.4.0 build, each
+daemon pinned ~123 % of a core and grew ~9.5 MB/s (~190 MB per 20 s); five
+shell daemons had consumed **~24 GB PSS and 39 GB of swap**. Reloads are
+additionally coalesced behind a 250 ms debounce (`RELOAD_DEBOUNCE`).
+
+The `notify-debouncer-full` crate is declared as a dependency but still not
+imported — the in-loop debounce above supersedes it.
 
 ## Server (`src/server.rs`)
 
@@ -175,6 +188,14 @@ Connections are persistent — the server reads lines in a loop until EOF. This 
 - **Sibling-directory cache size bound** — `segments/directory.rs` bounds its cwd-keyed cache at `MAX_SIBLING_ENTRIES` (512) with the same expired-then-least-recently-stamped eviction policy (see [Wave 1 Internals](#wave-1-internals)).
 - **`PR_SET_PDEATHSIG`** — kernel-enforced parent death signal (see [Parent Process Monitor](#parent-process-monitor)).
 - **`write_config_patch` errors name the cause** — unrepresentable patch values list each failing key with its serde error; the shared patch path serves both `config_set` and `looks_apply`.
+
+### Accept-loop backoff
+
+`run_server`'s accept loop backs off on error (`ACCEPT_BACKOFF_BASE` 20 ms,
+growing to `ACCEPT_BACKOFF_MAX` 1 s) and logs the 1st failure then every
+100th. It previously logged and retried immediately, so any *persistent*
+accept error (EMFILE, a listener whose socket file was replaced underneath
+it) became an unthrottled spin that formatted an error string per iteration.
 
 ### Hello Response
 

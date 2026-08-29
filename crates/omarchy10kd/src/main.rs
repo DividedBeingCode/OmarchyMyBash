@@ -156,6 +156,26 @@ async fn monitor_parent() {
     }
 }
 
+/// Minimum gap between filesystem-triggered reloads.
+const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Whether an inotify event represents an actual content change.
+///
+/// Access and metadata-only events must NOT trigger a reload: `reload_config`
+/// reads the very directories being watched, so treating a read as a change
+/// makes the watcher feed itself forever.
+fn is_content_change(kind: &notify::EventKind) -> bool {
+    use notify::event::{EventKind, ModifyKind};
+    match kind {
+        EventKind::Create(_) | EventKind::Remove(_) => true,
+        // Metadata changes (atime in particular) are exactly the feedback
+        // source; only data and name changes count.
+        EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Name(_)) => true,
+        EventKind::Modify(ModifyKind::Any) => true,
+        _ => false,
+    }
+}
+
 async fn run_watchers(
     state: Arc<DaemonState>,
     config_path: &std::path::Path,
@@ -208,9 +228,26 @@ async fn run_watchers(
     let config_path = config_path.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let _watcher = watcher; // Keep alive
+        // Coalesce bursts: an editor writing a file emits several events, and
+        // reload_config re-reads config.toml AND re-scans the plugins dir —
+        // work far too expensive to repeat per raw inotify event.
+        let mut last_reload = std::time::Instant::now()
+            .checked_sub(RELOAD_DEBOUNCE)
+            .unwrap_or_else(std::time::Instant::now);
         loop {
             match rx.recv() {
                 Ok(event) => {
+                    // Only real content changes may trigger a reload.
+                    //
+                    // Without this filter EVERY inotify event counted —
+                    // including IN_ACCESS/IN_OPEN. Since reload_config()
+                    // itself READS the watched plugins directory, each
+                    // reload generated fresh access events, which triggered
+                    // another reload: a self-sustaining loop that pinned a
+                    // core and allocated a TOML parse per iteration.
+                    if !is_content_change(&event.kind) {
+                        continue;
+                    }
                     let is_config = event.paths.iter().any(|p| {
                         p.file_name()
                             .is_some_and(|n| n == "config.toml")
@@ -230,6 +267,15 @@ async fn run_watchers(
                         .paths
                         .iter()
                         .any(|p| p.starts_with(&plugins_root));
+
+                    if (is_config || is_plugin || is_theme)
+                        && last_reload.elapsed() < RELOAD_DEBOUNCE
+                    {
+                        continue;
+                    }
+                    if is_config || is_plugin || is_theme {
+                        last_reload = std::time::Instant::now();
+                    }
 
                     if is_config {
                         let state = Arc::clone(&state);
@@ -276,5 +322,65 @@ mod libc {
     unsafe extern "C" {
         pub fn kill(pid: i32, sig: i32) -> i32;
         pub fn prctl(option: i32, ...) -> i32;
+    }
+}
+
+#[cfg(test)]
+mod watcher_tests {
+    use super::is_content_change;
+    use notify::event::{
+        AccessKind, AccessMode, CreateKind, DataChange, EventKind, MetadataKind, ModifyKind,
+        RemoveKind, RenameMode,
+    };
+
+    #[test]
+    fn access_events_never_trigger_a_reload() {
+        // The feedback loop that pinned a core and leaked ~9.5 MB/s:
+        // reload_config() READS the watched plugins directory, so counting a
+        // read as a change made the watcher feed itself forever.
+        assert!(!is_content_change(&EventKind::Access(AccessKind::Read)));
+        assert!(!is_content_change(&EventKind::Access(AccessKind::Open(
+            AccessMode::Read
+        ))));
+        assert!(!is_content_change(&EventKind::Access(AccessKind::Close(
+            AccessMode::Read
+        ))));
+        assert!(!is_content_change(&EventKind::Access(AccessKind::Any)));
+    }
+
+    #[test]
+    fn metadata_only_changes_never_trigger_a_reload() {
+        // atime updates are emitted by the very reads reload_config performs.
+        for kind in [
+            MetadataKind::AccessTime,
+            MetadataKind::Any,
+            MetadataKind::Permissions,
+        ] {
+            assert!(
+                !is_content_change(&EventKind::Modify(ModifyKind::Metadata(kind))),
+                "metadata change {kind:?} must not reload"
+            );
+        }
+    }
+
+    #[test]
+    fn real_content_changes_still_trigger_a_reload() {
+        // Hot-reload is a documented feature; the filter must not break it.
+        assert!(is_content_change(&EventKind::Create(CreateKind::File)));
+        assert!(is_content_change(&EventKind::Remove(RemoveKind::File)));
+        assert!(is_content_change(&EventKind::Modify(ModifyKind::Data(
+            DataChange::Content
+        ))));
+        assert!(is_content_change(&EventKind::Modify(ModifyKind::Data(
+            DataChange::Any
+        ))));
+        // Atomic saves (tmp + rename) arrive as a rename, which is how
+        // config_set and every editor write the file.
+        assert!(is_content_change(&EventKind::Modify(ModifyKind::Name(
+            RenameMode::To
+        ))));
+        // Backends that cannot classify the change report Modify(Any); it
+        // must stay reloadable or hot-reload silently dies on those.
+        assert!(is_content_change(&EventKind::Modify(ModifyKind::Any)));
     }
 }

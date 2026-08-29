@@ -12,6 +12,11 @@ use crate::plugins::{self, Plugin, PluginCache};
 use crate::render::PromptRenderer;
 use crate::theme::ThemePalette;
 
+/// Backoff applied after a failed `accept()`, growing with consecutive
+/// failures. Without it a persistent error is an unthrottled spin.
+const ACCEPT_BACKOFF_BASE: std::time::Duration = std::time::Duration::from_millis(20);
+const ACCEPT_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_millis(1000);
+
 pub const PROTOCOL_VERSION: &str = "0.5";
 
 /// Hard cap on a single NDJSON frame from a client. The largest legitimate
@@ -240,9 +245,11 @@ pub async fn run_server(
     std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
     info!("daemon listening on {}", socket_path.display());
 
+    let mut accept_errors: u32 = 0;
     loop {
         match listener.accept().await {
             Ok((stream, _addr)) => {
+                accept_errors = 0;
                 let state = Arc::clone(&state);
                 tokio::spawn(async move {
                     if let Err(e) = handle_connection(stream, state).await {
@@ -251,7 +258,21 @@ pub async fn run_server(
                 });
             }
             Err(e) => {
-                error!("accept error: {e}");
+                // Back off. A persistent accept error (EMFILE, a listener
+                // whose socket was replaced underneath us) otherwise spins
+                // this loop at full speed, formatting an error string per
+                // iteration — a pinned core and unbounded allocation churn
+                // with no external input.
+                accept_errors += 1;
+                if accept_errors == 1 || accept_errors % 100 == 0 {
+                    error!("accept error ({accept_errors}): {e}");
+                }
+                let backoff = std::cmp::min(
+                    ACCEPT_BACKOFF_MAX,
+                    ACCEPT_BACKOFF_BASE * accept_errors.min(32),
+                );
+                tokio::time::sleep(backoff).await;
+                continue;
             }
         }
     }
