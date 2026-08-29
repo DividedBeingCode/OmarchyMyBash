@@ -110,6 +110,89 @@ Item {
         service.undoDepth = Store.undoDepth(service._undo)
     }
 
+    // ── Derived daemon state (Increment 3) ─────────────────────────────────
+    // Fetched once per connection and refreshed when the config changes.
+    // Surfaces bind to these instead of each running their own queries —
+    // the drift between Panel.qml's hardcoded Look list and Gallery.qml's
+    // real `looks` verb is exactly what one owner prevents.
+    property var looks: []
+    property var palettes: ({})
+    property var defaultsFlat: ({})
+    property var scripts: []
+    // Active Omarchy theme, so a pinned surface can name what it diverges
+    // from. Read from the omarchy CLI, not a theme file — Omarchy owns that
+    // state and both sibling projects treat it read-only.
+    property string desktopTheme: ""
+
+    function fetchLooks() {
+        service._rpc(Model.buildCommand("looks", "svc-looks").trim(), "svc-looks",
+                     function (resp) {
+                         if (resp.looks !== undefined) service.looks = resp.looks
+                     })
+    }
+
+    function fetchPalettes() {
+        service._rpc(Model.buildCommand("palettes", "svc-palettes").trim(), "svc-palettes",
+                     function (resp) {
+                         if (resp.palettes === undefined) return
+                         // The verb returns [{key, theme}]; flatten to the
+                         // {key: {label, accent, ...}} shape the bind
+                         // indicator and palette pickers expect.
+                         var out = {}
+                         for (var i = 0; i < resp.palettes.length; i++) {
+                             var entry = resp.palettes[i]
+                             if (!entry || !entry.key) continue
+                             var custom = (entry.theme && entry.theme.custom) ? entry.theme.custom : {}
+                             out[entry.key] = {
+                                 label: entry.label || entry.key,
+                                 accent: custom.accent || "",
+                                 custom: custom
+                             }
+                         }
+                         service.palettes = out
+                     })
+    }
+
+    function fetchDefaults() {
+        service._rpc(Model.buildCommand("defaults", "svc-defaults").trim(), "svc-defaults",
+                     function (resp) {
+                         if (resp.config !== undefined)
+                             service.defaultsFlat = Model.flattenConfig(resp.config)
+                     })
+    }
+
+    function fetchScripts() {
+        service._rpc(Model.buildCommand("script_list", "svc-scripts").trim(), "svc-scripts",
+                     function (resp) {
+                         if (resp.scripts !== undefined) service.scripts = resp.scripts
+                     })
+    }
+
+    function runScript(name, cb) {
+        var msg = JSON.stringify({
+            type: "control", command: "script_run", name: name, id: "svc-run-" + name
+        })
+        return service._rpc(msg, "svc-run-" + name, cb || function () {})
+    }
+
+    // Everything derived from daemon state, refetched together.
+    function refreshDerived() {
+        service.invalidateDerived()
+        service.fetchLooks()
+        service.fetchPalettes()
+        service.fetchDefaults()
+        service.fetchScripts()
+        themeNameProbe.running = true
+    }
+
+    Process {
+        id: themeNameProbe
+        command: ["omarchy", "theme", "current"]
+        stdout: StdioCollector {
+            onStreamFinished: service.desktopTheme = String(this.text).trim()
+        }
+    }
+
     function popUndo() {
         var prev = Store.undoPop(service._undo)
         service.undoDepth = Store.undoDepth(service._undo)
@@ -231,10 +314,13 @@ Item {
         if (resp.type === "hello") {
             controlSocket.write(Model.buildConfigGet("service-cfg"))
             controlSocket.flush()
+            service.refreshDerived()
             return
         }
         if (resp.type === "config" && resp.config) {
             service._cfgFlat = Model.flattenConfig(resp.config)
+            // Every cached preview was rendered against the previous config.
+            service.invalidateDerived()
             return
         }
         if (resp.id !== undefined && service._pending[resp.id] !== undefined) {
