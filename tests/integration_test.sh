@@ -1002,6 +1002,56 @@ else
     skip "Model.js parity" "node not available"
 fi
 
+section "Control Center Kit"
+
+if command -v node >/dev/null 2>&1; then
+    if node "$SCRIPT_DIR/tests/fx_test.js" >/dev/null 2>&1; then
+        pass "Fx.js unit tests"
+    else
+        fail "Fx.js unit tests" "$(node "$SCRIPT_DIR/tests/fx_test.js" 2>&1 | tail -3)"
+    fi
+
+    if node "$SCRIPT_DIR/tests/motion_test.js" >/dev/null 2>&1; then
+        pass "Motion.js unit tests"
+    else
+        fail "Motion.js unit tests" "$(node "$SCRIPT_DIR/tests/motion_test.js" 2>&1 | tail -3)"
+    fi
+else
+    skip "Fx.js unit tests" "node not available"
+    skip "Motion.js unit tests" "node not available"
+fi
+
+if [[ -x /usr/lib/qt6/bin/qmltestrunner ]]; then
+    if bash "$SCRIPT_DIR/tests/qml/run.sh" >/dev/null 2>&1; then
+        pass "QML component tests"
+    else
+        fail "QML component tests" "$(bash "$SCRIPT_DIR/tests/qml/run.sh" 2>&1 | tail -5)"
+    fi
+else
+    skip "QML component tests" "qmltestrunner not installed"
+fi
+
+if [[ -x /usr/lib/qt6/bin/qmllint ]]; then
+    if bash "$SCRIPT_DIR/tests/qmllint.sh" >/dev/null 2>&1; then
+        pass "qmllint gate (o10k kit clean)"
+    else
+        fail "qmllint gate" "$(bash "$SCRIPT_DIR/tests/qmllint.sh" 2>&1 | tail -5)"
+    fi
+else
+    skip "qmllint gate" "qmllint not installed"
+fi
+
+if command -v omarchy >/dev/null 2>&1; then
+    if omarchy plugin validate "$SCRIPT_DIR/quattro" >/dev/null 2>&1; then
+        pass "omarchy plugin manifest valid"
+    else
+        fail "omarchy plugin manifest valid" "schema validation failed"
+    fi
+else
+    skip "omarchy plugin manifest valid" "omarchy CLI not available"
+fi
+
+
 # ── Doctor ─────────────────────────────────────────────────────────────────
 
 section "Doctor"
