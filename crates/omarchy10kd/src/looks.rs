@@ -262,3 +262,93 @@ pub fn apply_transient(current: &Config, patch: &serde_json::Value) -> Result<Co
 pub fn palette_directive(config: &Config, name: &str) -> Option<String> {
     config.looks.get(name).and_then(|e| e.palette.clone())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, LookEntry};
+
+    #[test]
+    fn resolve_curated_by_name() {
+        let cfg = Config::default();
+        let look = resolve("tokyo-rainbow", &cfg).expect("curated look resolves");
+        assert_eq!(look.name, "tokyo-rainbow");
+        assert!(look.patch.get("style").is_some(), "curated patch touches style");
+    }
+
+    #[test]
+    fn resolve_unknown_is_none() {
+        let cfg = Config::default();
+        assert!(resolve("no-such-look", &cfg).is_none());
+    }
+
+    #[test]
+    fn user_look_shadows_curated() {
+        let mut cfg = Config::default();
+        let mut entry = LookEntry::default();
+        entry.label = "My Rainbow".into();
+        entry.patch.insert(
+            "style".into(),
+            toml::Value::Table(toml::from_str::<toml::Table>("preset = \"lean\"").unwrap()),
+        );
+        cfg.looks.insert("tokyo-rainbow".into(), entry);
+
+        let resolved = resolve("tokyo-rainbow", &cfg).expect("user look resolves");
+        assert_eq!(resolved.label, "My Rainbow");
+        assert_eq!(
+            resolved.patch["style"]["preset"], "lean",
+            "user patch must win over the curated one"
+        );
+
+        // `all` must not list the curated twin alongside the user entry.
+        let names: Vec<_> = all(&cfg).iter().map(|l| l.name.clone()).collect();
+        assert_eq!(
+            names.iter().filter(|n| **n == "tokyo-rainbow").count(),
+            1,
+            "exactly one tokyo-rainbow after shadowing"
+        );
+    }
+
+    #[test]
+    fn user_palette_directive_resolves_curated_palette() {
+        let mut cfg = Config::default();
+        let mut entry = LookEntry::default();
+        entry.palette = Some("tokyo-night".into());
+        cfg.looks.insert("mine".into(), entry);
+
+        let resolved = resolve("mine", &cfg).expect("look resolves");
+        let accent = resolved.patch["theme"]["custom"]["accent"]
+            .as_str()
+            .expect("palette merged into theme.custom");
+        assert_eq!(accent, "#7aa2f7");
+    }
+
+    #[test]
+    fn apply_transient_mutates_clone_not_original() {
+        let cfg = Config::default();
+        let look = resolve("gruvbox-drift", &Config::default()).expect("curated look");
+        let patched = apply_transient(&cfg, &look.patch).expect("transient apply ok");
+
+        assert_ne!(
+            patched.style.preset, cfg.style.preset,
+            "patched clone carries the look's preset"
+        );
+        assert_eq!(
+            cfg.style.preset, Config::default().style.preset,
+            "original config must be untouched (Try never persists)"
+        );
+    }
+
+    #[test]
+    fn reload_reverts_transient_apply() {
+        // Try = merge into memory; reload_config re-parses from disk. Model
+        // that: apply on the in-memory config, then "reload" from the
+        // pristine default and confirm the look is gone.
+        let disk = Config::default();
+        let look = resolve("lean-pure", &Config::default()).expect("curated look");
+        let tried = apply_transient(&disk, &look.patch).expect("apply ok");
+        assert_ne!(tried.style.preset, disk.style.preset);
+        let reloaded = Config::default();
+        assert_eq!(reloaded.style.preset, disk.style.preset, "reload reverts try");
+    }
+}

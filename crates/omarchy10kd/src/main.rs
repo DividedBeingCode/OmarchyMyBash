@@ -4,6 +4,7 @@ mod looks;
 mod layout;
 mod render;
 mod segments;
+mod script_exec;
 mod server;
 mod style;
 mod theme;
@@ -86,6 +87,16 @@ async fn main() -> anyhow::Result<()> {
             warn!("watcher error: {e}");
         }
     });
+
+    // Kernel-enforced parent death: SIGTERM the instant the parent shell
+    // dies. Closes the PID-recycling race that the kill(ppid, 0) poll in
+    // monitor_parent cannot close (a recycled PID keeps that poll alive
+    // indefinitely). The poll remains as a fallback for non-Linux builds
+    // and for a parent that died before this line ran.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+    }
 
     // Monitor parent process (clean exit when shell dies)
     let sock_for_cleanup = sock_path.clone();
@@ -221,8 +232,12 @@ async fn run_watchers(
 
 mod libc {
     pub const ESRCH: i32 = 3;
+    pub const SIGTERM: i32 = 15;
+    /// Linux prctl option: set the parent-death signal.
+    pub const PR_SET_PDEATHSIG: i32 = 1;
 
     unsafe extern "C" {
         pub fn kill(pid: i32, sig: i32) -> i32;
+        pub fn prctl(option: i32, ...) -> i32;
     }
 }

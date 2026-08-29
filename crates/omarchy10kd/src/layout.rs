@@ -185,3 +185,94 @@ impl LayoutPreset {
         segments.retain(|s| allowed.contains(&s.name));
     }
 }
+
+/// Segments render_right can draw inline in the right prompt rail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RightSegment {
+    CommandDuration,
+    Git,
+    Time,
+    Battery,
+    Jobs,
+}
+
+impl RightSegment {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::CommandDuration => "command_duration",
+            Self::Git => "git",
+            Self::Time => "time",
+            Self::Battery => "battery",
+            Self::Jobs => "jobs",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "command_duration" => Some(Self::CommandDuration),
+            "git" => Some(Self::Git),
+            "time" => Some(Self::Time),
+            "battery" => Some(Self::Battery),
+            "jobs" => Some(Self::Jobs),
+            _ => None,
+        }
+    }
+}
+
+/// Resolve the configured `[prompt] right_segments` names into rail segments,
+/// preserving order and skipping unknown names with a debug log.
+pub fn resolve_right_rail(config_right_segments: &[String]) -> Vec<RightSegment> {
+    config_right_segments
+        .iter()
+        .filter_map(|name| match RightSegment::from_name(name) {
+            Some(seg) => Some(seg),
+            None => {
+                tracing::debug!(segment = %name, "unknown right_segments entry skipped");
+                None
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(segs: &[&str]) -> Vec<String> {
+        segs.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn valid_set_resolves() {
+        assert_eq!(
+            resolve_right_rail(&names(&["command_duration", "git"])),
+            vec![RightSegment::CommandDuration, RightSegment::Git]
+        );
+    }
+
+    #[test]
+    fn empty_set_resolves_empty() {
+        assert!(resolve_right_rail(&[]).is_empty());
+    }
+
+    #[test]
+    fn unknown_entries_skipped() {
+        assert_eq!(
+            resolve_right_rail(&names(&["bogus", "time", "weather", "battery"])),
+            vec![RightSegment::Time, RightSegment::Battery]
+        );
+    }
+
+    #[test]
+    fn order_preserved() {
+        assert_eq!(
+            resolve_right_rail(&names(&["git", "jobs", "command_duration", "time"])),
+            vec![
+                RightSegment::Git,
+                RightSegment::Jobs,
+                RightSegment::CommandDuration,
+                RightSegment::Time
+            ]
+        );
+    }
+}

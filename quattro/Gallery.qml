@@ -10,7 +10,7 @@ import "Model.js" as Model
 //
 // Summoned via `omarchy-shell call community.omarchy10k.gallery toggle`
 // (the IpcHandler registered below) or the plugin's own shell.summon flow
-// once the host wires Panel.galleryRequested() to it. Browse the daemon's
+Browse the daemon's
 // Looks (control verb `looks`), preview each one as a REAL dry-run render
 // (preview message with the `look` override, protocol v0.4+), then Try it
 // transiently (`looks_apply {transient:true}` — reverted by reload_config)
@@ -364,6 +364,7 @@ Item {
         onConnectedChanged: {
             if (gallerySocket.connected) root._onSocketConnected()
         }
+        onError: root._onSocketError()
     }
 
     Timer {

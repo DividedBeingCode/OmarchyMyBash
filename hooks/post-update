@@ -1,0 +1,39 @@
+#!/bin/bash
+# Omarchy post-update hook for Omarchy10k
+# Installed to: ~/.config/omarchy/hooks/post-update.d/omarchy10k
+# Called by Omarchy after `omarchy update` completes.
+#
+# Non-interactive-ish guard: only refresh Omarchy10k when we are not attached
+# to a TTY (the desktop updater runs hooks headless), the binary exists, and
+# the user has not opted out. --no-pull avoids nested git operations while the
+# parent update is still finishing; the next interactive `omarchy10k update`
+# (or a later hook run) picks up newer commits.
+if [ -t 0 ] || [ -n "$O10K_SKIP_HOOK_UPDATE" ]; then
+    exit 0
+fi
+
+SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+
+if command -v omarchy10k &>/dev/null; then
+    timeout 600 omarchy10k update --no-pull 2>/dev/null || true
+fi
+
+# Invalidate daemon git caches so prompts re-query after the update touched
+# repositories (same fire-and-forget fan-out as the theme-set hook).
+MSG='{"command":"invalidate_git"}'
+for sock in "$SOCKET_DIR"/omarchy10k-*.sock; do
+    [ -S "$sock" ] || continue
+    if command -v socat &>/dev/null; then
+        echo "$MSG" | socat - UNIX-CONNECT:"$sock" 2>/dev/null || true
+    elif command -v python3 &>/dev/null; then
+        python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(2)
+s.connect(sys.argv[1])
+s.sendall((sys.argv[2] + "\n").encode())
+s.close()
+' "$sock" "$MSG" 2>/dev/null || true
+    fi
+done
+exit 0

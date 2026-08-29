@@ -420,6 +420,13 @@ impl GlyphCatalog {
         }
     }
 
+    /// Vi NORMAL-mode prompt glyph: the left-pointing angle bracket, so the
+    /// mode is visible at a glance. INSERT keeps `prompt_char`; success/error
+    /// coloring is unchanged.
+    pub fn prompt_char_normal() -> &'static str {
+        "\u{276e}"
+    }
+
     pub fn branch_icon<'a>(key: &'a str) -> &'a str {
         match key {
             "powerline" => "\u{e0a0}",

@@ -141,6 +141,15 @@ Panel {
     property int previewJobs: 0
     property var paletteColors: ({})
     property string benchmarkOutput: ""
+    // Collapsed/raw surface toggles for the Doctor and Benchmark cards.
+    property bool _doctorRaw: false
+    property bool _benchRaw: false
+    // Parsed views: doctor → one row per subsystem line; bench → numeric ms
+    // values found in the benchmark text (null while running/absent).
+    readonly property var doctorCards: doctorOutput.length > 0 ? _parseDoctorCards(doctorOutput) : []
+    readonly property var benchStats: benchmarkOutput.length > 0 ? _parseBenchStats(benchmarkOutput) : null
+    // Not-installed toolDetector tools that get a remediation card.
+    readonly property var missingTools: _collectMissingTools()
 
     // Style gallery cards — static `preview` strings are the offline fallback;
     // live renders are fetched per-preset via the daemon preview message's
@@ -593,6 +602,123 @@ Panel {
         root.miseStatus   = tools.mise   ? ("\u2713 " + tools.mise)   : "\u2717 not found"
         root.zoxideStatus = tools.zoxide ? ("\u2713 " + tools.zoxide) : "\u2717 not found"
         root.fzfStatus    = tools.fzf    ? ("\u2713 " + tools.fzf)    : "\u2717 not found"
+    }
+
+    // ── Doctor Card Parsing ────────────────────────────────────────────────
+    // Doctor output is one subsystem per line: 2-space indent, padded name
+    // column, then a status column with a ✓/✘/⚠/?/- marker. Lines that don't
+    // match the shape are skipped here but stay reachable via the raw toggle.
+    function _parseDoctorCards(text) {
+        var cards = []
+        var lines = String(text).split("\n")
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].replace(/ +$/, "")
+            if (!/^ {2,}\S/.test(line)) continue
+            var head = line.replace(/^ +/, "")
+            var split = head.match(/^(.*?) {2,}(.*)$/)
+            var name = split ? split[1] : head
+            var rest = split ? split[2] : ""
+            var status = "skip"
+            var glyph = "-"
+            if (rest.indexOf("\u2713") >= 0) {
+                status = "ok"
+                glyph = "\u2713"
+            } else if (rest.indexOf("\u2718") >= 0 || rest.indexOf("\u2717") >= 0) {
+                status = "bad"
+                glyph = "\u2718"
+            } else if (rest.indexOf("\u26a0") >= 0) {
+                status = "bad"
+                glyph = "\u26a0"
+            } else if (rest.indexOf("?") >= 0) {
+                glyph = "?"
+            }
+            var detail = rest
+                .replace(/[\u2713\u2717\u2718\u26a0]/g, "")
+                .replace(/(^|\s)\?(?=\s|\()/g, "$1")
+                .replace(/(^|\s)-(?=\s|$)/g, "$1")
+                .replace(/ {2,}/g, " ")
+                .trim()
+            // print_tool_check prints a bare trailing "-" for a missing tool.
+            if (detail.length === 0 || detail === "-")
+                detail = status === "skip" && glyph === "-" ? "not installed" : "\u2014"
+            cards.push({ name: name, detail: detail, status: status, glyph: glyph })
+        }
+        return cards
+    }
+
+    // ── Benchmark Parsing ──────────────────────────────────────────────────
+    // Collect every "N.NNms" value in the benchmark text (summary stats and
+    // any per-iteration lines) and derive a compact braille sparkline plus
+    // best/median/worst. Returns null when nothing numeric has arrived yet.
+    function _parseBenchStats(text) {
+        var vals = []
+        var re = /([0-9]+\.[0-9]+)\s*ms/g
+        var m
+        var s = String(text)
+        while ((m = re.exec(s)) !== null) {
+            var v = parseFloat(m[1])
+            if (isFinite(v)) vals.push(v)
+        }
+        if (vals.length === 0) return null
+        var sorted = vals.slice().sort(function (a, b) { return a - b })
+        var best = sorted[0]
+        var worst = sorted[sorted.length - 1]
+        var median = sorted[Math.floor((sorted.length - 1) / 2)]
+        // One braille cell per value; the dot column rises with the value so
+        // the sparkline reads left-to-right like the recorded sequence.
+        var levels = ["\u2801", "\u2803", "\u2807", "\u2847"]
+        var span = worst - best
+        var spark = ""
+        for (var i = 0; i < vals.length; i++) {
+            var level = span > 0
+                ? Math.min(4, Math.max(1, 1 + Math.round((vals[i] - best) / span * 3)))
+                : 2
+            spark += levels[level - 1]
+        }
+        return { spark: spark, best: best, median: median, worst: worst, n: vals.length }
+    }
+
+    function _fmtMs(v) {
+        return Number(v).toFixed(2) + "ms"
+    }
+
+    // ── Remediation Cards ──────────────────────────────────────────────────
+    // One card per toolDetector-tracked tool that detection reported missing.
+    // Cards only appear once detection answered (✗ marker) — never while a
+    // check is still "checking...". Nothing is auto-installed; COPY hands the
+    // exact command to the clipboard.
+    function _collectMissingTools() {
+        var defs = [
+            { name: "ble.sh", why: "Optional — enables enhanced line editing",
+              cmd: "git clone --depth=1 https://github.com/akinomyoga/ble.sh.git && make -C ble.sh install PREFIX=~/.local",
+              status: root.bleshStatus },
+            { name: "Atuin", why: "Synced, searchable shell history",
+              cmd: "curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh | bash",
+              status: root.atuinStatus },
+            { name: "Mise", why: "Per-project dev-tool version manager",
+              cmd: "curl https://mise.run | sh",
+              status: root.miseStatus },
+            { name: "Zoxide", why: "Faster directory jumping (z command)",
+              cmd: "sudo pacman -S --noconfirm zoxide",
+              status: root.zoxideStatus },
+            { name: "fzf", why: "Fuzzy finder for history and file search",
+              cmd: "sudo pacman -S --noconfirm fzf",
+              status: root.fzfStatus }
+        ]
+        var out = []
+        for (var i = 0; i < defs.length; i++) {
+            if (defs[i].status.indexOf("\u2717") >= 0)
+                out.push({ name: defs[i].name, why: defs[i].why, cmd: defs[i].cmd })
+        }
+        return out
+    }
+
+    function copyInstallCommand(toolName, cmd) {
+        clipboardCopy.exec(["sh", "-c",
+            "echo '" + String(cmd).replace(/'/g, "'\\''") + "' | xclip -selection clipboard 2>/dev/null || wl-copy 2>/dev/null"])
+        root.toastMessage = "Install command copied — " + toolName
+        root._showToast = true
+        toastTimer.restart()
     }
 
     // ── I/O Components ─────────────────────────────────────────────────────
@@ -1801,26 +1927,82 @@ Text {
             StatusRow { label: "ble.sh"; status: root.bleshStatus }
             StatusRow { label: "Atuin"; status: root.atuinStatus }
 
-            ActionButton {
-                label: "Install Atuin"
-                visible: root.atuinStatus.indexOf("\u2717") >= 0
-                onClicked: {
-                    installRunner.exec(["sh", "-c", "curl --proto '=https' --tlsv1.2 -sSf https://setup.atuin.sh | bash"])
-                }
-            }
 
             StatusRow { label: "Mise"; status: root.miseStatus }
 
-            ActionButton {
-                label: "Install Mise"
-                visible: root.miseStatus.indexOf("\u2717") >= 0
-                onClicked: {
-                    installRunner.exec(["sh", "-c", "curl https://mise.run | sh"])
-                }
-            }
 
             StatusRow { label: "Zoxide"; status: root.zoxideStatus }
             StatusRow { label: "fzf"; status: root.fzfStatus }
+            SectionLabel { label: "Remediations"; visible: root.missingTools.length > 0 }
+
+            Repeater {
+                model: root.missingTools
+                delegate: Rectangle {
+                    width: parent.width
+                    height: remediationBody.implicitHeight + Style.space(12)
+                    radius: Style.cornerRadius
+                    color: Qt.darker(Color.background, 1.3)
+
+                    Column {
+                        id: remediationBody
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Style.space(6)
+                        spacing: Style.space(4)
+
+                        Row {
+                            spacing: Style.space(8)
+
+                            Text {
+                                text: modelData.name
+                                color: Color.accent
+                                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                font.pixelSize: Style.font.body
+                                font.bold: true
+                            }
+
+                            Rectangle {
+                                width: remediationCopyText.implicitWidth + Style.space(12)
+                                height: Style.spacing.controlHeight
+                                radius: Style.cornerRadius
+                                color: remediationCopyArea.containsMouse
+                                    ? (Color.accent)
+                                    : (Style.normalFillFor(root.barForeground, Color.accent, Color.urgent))
+
+                                Text {
+                                    id: remediationCopyText
+                                    anchors.centerIn: parent
+                                    text: "COPY"
+                                    color: remediationCopyArea.containsMouse
+                                        ? (Color.background)
+                                        : (root.barForeground || "#a9b1d6")
+                                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                    font.pixelSize: Style.font.caption
+                                    font.bold: true
+                                }
+
+                                MouseArea {
+                                    id: remediationCopyArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.copyInstallCommand(modelData.name, modelData.cmd)
+                                }
+                            }
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: modelData.why
+                            color: Color.muted
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: Style.font.caption
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                }
+            }
 
             PanelSeparator { foreground: root.barForeground }
 
@@ -1994,8 +2176,98 @@ Text {
                 }
             }
 
+            Row {
+                spacing: Style.space(8)
+
+                SectionLabel { label: "Doctor" }
+
+                RawToggle {
+                    active: root._doctorRaw
+                    onToggled: root._doctorRaw = !root._doctorRaw
+                }
+            }
+
+            Column {
+                visible: !root._doctorRaw && root.doctorCards.length > 0
+                width: parent.width
+                spacing: Style.space(6)
+
+                Repeater {
+                    model: root.doctorCards
+                    delegate: Rectangle {
+                        width: parent.width
+                        height: doctorCardBody.implicitHeight + Style.space(12)
+                        radius: Style.cornerRadius
+                        color: Qt.darker(Color.background, 1.3)
+
+                        Column {
+                            id: doctorCardBody
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Style.space(6)
+                            spacing: Style.space(2)
+
+                            Row {
+                                spacing: Style.space(6)
+
+                                Text {
+                                    text: modelData.glyph
+                                    color: modelData.status === "ok"
+                                        ? (Color.accent)
+                                        : (modelData.status === "bad" ? (Color.urgent) : (Color.muted))
+                                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                    font.pixelSize: Style.font.body
+                                    font.bold: true
+                                }
+
+                                Text {
+                                    text: modelData.name
+                                    color: root.barForeground || "#a9b1d6"
+                                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                    font.pixelSize: Style.font.body
+                                }
+
+                                Rectangle {
+                                    width: doctorChipText.implicitWidth + Style.space(10)
+                                    height: Style.spacing.controlHeight
+                                    radius: Style.cornerRadius
+                                    color: modelData.status === "ok"
+                                        ? (Color.accent)
+                                        : (modelData.status === "bad" ? (Color.urgent) : ("transparent"))
+                                    border.width: modelData.status === "skip" ? 1 : 0
+                                    border.color: Color.muted
+
+                                    Text {
+                                        id: doctorChipText
+                                        anchors.centerIn: parent
+                                        text: modelData.status === "ok"
+                                            ? "OK"
+                                            : (modelData.status === "bad" ? "FAIL" : "SKIP")
+                                        color: modelData.status === "skip" ? (Color.muted) : (Color.background)
+                                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                        font.pixelSize: Style.font.caption
+                                        font.bold: true
+                                    }
+                                }
+                            }
+
+                            Text {
+                                width: parent.width
+                                text: modelData.detail
+                                visible: modelData.detail.length > 0
+                                color: Color.muted
+                                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                                font.pixelSize: Style.font.caption
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+                    }
+                }
+            }
+
             Rectangle {
-                visible: root.doctorOutput.length > 0
+                visible: root.doctorOutput.length > 0 && (root._doctorRaw || root.doctorCards.length === 0)
                 width: parent.width
                 height: Math.min(doctorText.implicitHeight + Style.space(12), 200)
                 radius: Style.cornerRadius
@@ -2042,8 +2314,57 @@ Text {
                 }
             }
 
+            Row {
+                spacing: Style.space(8)
+
+                SectionLabel { label: "Benchmark" }
+
+                RawToggle {
+                    visible: root.benchStats !== null
+                    active: root._benchRaw
+                    onToggled: root._benchRaw = !root._benchRaw
+                }
+            }
+
             Rectangle {
-                visible: root.benchmarkOutput.length > 0
+                visible: root.benchStats !== null && !root._benchRaw
+                width: parent.width
+                height: benchCardBody.implicitHeight + Style.space(12)
+                radius: Style.cornerRadius
+                color: Qt.darker(Color.background, 1.3)
+
+                Column {
+                    id: benchCardBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: Style.space(6)
+                    spacing: Style.space(4)
+
+                    Text {
+                        text: root.benchStats ? root.benchStats.spark : ""
+                        color: Color.accent
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.body
+                    }
+
+                    Text {
+                        width: parent.width
+                        text: root.benchStats
+                            ? ("best " + root._fmtMs(root.benchStats.best)
+                               + "  \u00b7  median " + root._fmtMs(root.benchStats.median)
+                               + "  \u00b7  worst " + root._fmtMs(root.benchStats.worst)
+                               + "  (" + root.benchStats.n + " values)")
+                            : ""
+                        color: Color.muted
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                    }
+                }
+            }
+
+            Rectangle {
+                visible: root.benchmarkOutput.length > 0 && (root._benchRaw || root.benchStats === null)
                 width: parent.width
                 height: Math.min(benchText.implicitHeight + Style.space(12), 150)
                 radius: Style.cornerRadius
@@ -2245,6 +2566,36 @@ Text {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: parent.clicked()
+        }
+    }
+
+    // Collapsed/raw toggle chip for the Doctor and Benchmark cards — the
+    // parsed summary is the default surface; raw daemon output stays one
+    // click away so nothing is lost.
+    component RawToggle: Rectangle {
+        property bool active: false
+        signal toggled()
+
+        width: rawToggleText.implicitWidth + Style.spacing.controlPaddingX * 2
+        height: Style.spacing.controlHeight
+        radius: Style.cornerRadius
+        color: active
+            ? (Color.accent)
+            : (Style.normalFillFor(root.barForeground, Color.accent, Color.urgent))
+
+        Text {
+            id: rawToggleText
+            anchors.centerIn: parent
+            text: parent.active ? "raw \u25be" : "raw \u25b8"
+            color: parent.active ? (Color.background) : (root.barForeground || "#a9b1d6")
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: parent.toggled()
         }
     }
 

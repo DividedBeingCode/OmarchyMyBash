@@ -25,6 +25,9 @@ pub struct GitStatus {
     pub repo_root: PathBuf,
     pub worktree: Option<String>,
     pub stale: bool,
+    /// URL of the `origin` remote, captured once per cache refresh. None
+    /// when the repo has no origin.
+    pub remote: Option<String>,
 }
 
 impl GitStatus {
@@ -127,6 +130,7 @@ impl GitCache {
         let in_flight = Arc::clone(&self.in_flight);
         let generation = Arc::clone(&self.generation);
         let gen_at_start = generation.load(Ordering::SeqCst);
+        let ttl = self.ttl();
 
         tokio::spawn(async move {
             {
@@ -170,6 +174,28 @@ impl GitCache {
                                 },
                                 fetched_at: Instant::now(),
                             });
+                        }
+                    }
+                }
+            }
+
+            // Bound memory: a long-lived daemon can touch hundreds of repos
+            // over weeks. Expired entries are dead weight (get_status treats
+            // them as stale anyway); drop them when the map overflows the
+            // cap, evicting least-recently-fetched first if still over.
+            const MAX_CACHE_ENTRIES: usize = 256;
+            {
+                let mut c = cache.write().await;
+                if c.len() > MAX_CACHE_ENTRIES {
+                    let now = Instant::now();
+                    c.retain(|_, v| now.duration_since(v.fetched_at) <= ttl);
+                    while c.len() > MAX_CACHE_ENTRIES {
+                        let oldest = c.iter()
+                            .min_by_key(|(_, v)| v.fetched_at)
+                            .map(|(k, _)| k.clone());
+                        match oldest {
+                            Some(k) => { c.remove(&k); }
+                            None => break,
                         }
                     }
                 }
@@ -265,6 +291,21 @@ async fn fetch_git_status(repo_root: &Path) -> Option<GitStatus> {
     status.is_repo = true;
     status.repo_root = repo_root.to_path_buf();
     status.worktree = detect_worktree(repo_root);
+
+    // Origin URL: one extra git call per refresh; the cache makes it free
+    // for warm renders. `remote get-url` resolves insteadOf rewrites and
+    // exits non-zero with empty stdout when no origin is configured.
+    if let Ok(remote_out) = tokio::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(repo_root)
+        .output()
+        .await
+    {
+        let url = String::from_utf8_lossy(&remote_out.stdout).trim().to_string();
+        if remote_out.status.success() && !url.is_empty() {
+            status.remote = Some(url);
+        }
+    }
 
     if let Ok(stash_out) = tokio::process::Command::new("git")
         .args(["stash", "list"])
@@ -405,6 +446,17 @@ mod tests {
         assert_eq!(status.unstaged, 0);
     }
 
+
+    #[test]
+    fn test_parse_leaves_remote_unset_for_default_construction() {
+        // The remote field is additive: porcelain parsing never sets it
+        // (fetch_git_status fills it from `git remote get-url origin`), and
+        // struct constructions elsewhere keep compiling via ..Default::default().
+        let output = "# branch.oid abc1234def567890\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n";
+        let status = parse_porcelain_v2(output);
+        assert_eq!(status.branch, "main");
+        assert_eq!(status.remote, None);
+    }
     #[test]
     fn test_parse_dirty_repo() {
         let output = "# branch.oid abc1234def567890\n# branch.head feature/test\n# branch.upstream origin/feature/test\n# branch.ab +2 -1\n1 .M N... 100644 100644 100644 abc def file.rs\n? newfile.txt\n";

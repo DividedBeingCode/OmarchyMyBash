@@ -1,8 +1,11 @@
 mod bridge;
 mod configure;
 mod doctor;
+mod hook_event;
 mod intro;
+mod layer;
 mod prompt;
+mod script;
 mod statusline;
 mod update;
 
@@ -61,7 +64,13 @@ enum Commands {
         shell: String,
     },
 
-    /// Run diagnostics and report system compatibility
+    /// Show the shell layer claim map (inventory + effective policy)
+    Layer {
+        /// Output as JSON (for the Control Center panel)
+        #[arg(long)]
+        json: bool,
+    },
+
     Doctor,
 
     /// Signal the daemon to reload its configuration
@@ -119,6 +128,22 @@ enum Commands {
     },
 
     /// Run a shell-level end-to-end benchmark measuring real prompt latency
+    /// List and run user-defined quick actions (~/.config/omarchy10k/scripts)
+    Script {
+        /// list | run
+        action: String,
+        /// Script name (required for run)
+        name: Option<String>,
+    },
+
+    /// Dispatch a desktop hook event to Omarchy's hook system
+    HookEvent {
+        /// Event name, e.g. battery-low, post-update, font-set
+        name: String,
+        /// Event arguments (e.g. battery percentage)
+        args: Vec<String>,
+    },
+
     #[command(name = "benchmark-shell", hide = true)]
     BenchmarkShell {
         /// Number of iterations
@@ -165,7 +190,36 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("omarchy10k: only 'bash' is supported (got '{shell}')");
                 std::process::exit(1);
             }
+            let layer_cfg = layer::load_layer_config();
+            if layer_cfg.global != layer::Policy::Extend {
+                eprintln!(
+                    "# [shell.layer] policy = \"{}\" — non-default, baked into this init (see `omarchy10k layer`)",
+                    layer_cfg.global.as_str()
+                );
+            }
+            if !layer_cfg.overrides.is_empty() {
+                let list = layer_cfg
+                    .overrides
+                    .iter()
+                    .map(|(k, v)| format!("{k} = \"{}\"", v.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                eprintln!("# [shell.layer.overrides] {list}");
+            }
+            print!("{}", layer::prelude(&layer_cfg));
             print!("{}", include_str!("../../../shell/omarchy10k.bash"));
+        }
+
+        Commands::Layer { json } => {
+            let layer_cfg = layer::load_layer_config();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&layer::render_json(&layer_cfg))?
+                );
+            } else {
+                print!("{}", layer::render_map(&layer_cfg));
+            }
         }
 
         Commands::Doctor => {
@@ -223,6 +277,14 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Statusline => {
             statusline::run(&socket_path()).await?;
+        }
+
+        Commands::Script { action, name } => {
+            script::run(&socket_path(), &action, name.as_deref()).await?;
+        }
+
+        Commands::HookEvent { name, args } => {
+            hook_event::run(&name, &args, hook_event::find_dispatcher().as_deref(), &hook_event::default_hook_root())?;
         }
 
         Commands::Configure => {

@@ -1,0 +1,53 @@
+#!/bin/bash
+# Omarchy battery-low hook for Omarchy10k
+# Installed to: ~/.config/omarchy/hooks/battery-low.d/omarchy10k
+# Called by Omarchy when the battery crosses the low threshold, $1 = percentage
+
+PCT="${1:-unknown}"
+SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+
+# Best-effort statusline context: ask any live daemon for its status blob so
+# the toast can mention the session (version, uptime) instead of a bare pct.
+CONTEXT=""
+for sock in "$SOCKET_DIR"/omarchy10k-*.sock; do
+    [ -S "$sock" ] || continue
+    MSG='{"command":"status"}'
+    RESP=""
+    if command -v socat &>/dev/null; then
+        RESP=$(echo "$MSG" | socat - UNIX-CONNECT:"$sock" 2>/dev/null || true)
+    elif command -v python3 &>/dev/null; then
+        RESP=$(python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(2)
+s.connect(sys.argv[1])
+s.sendall((sys.argv[2] + "\n").encode())
+try:
+    print(s.recv(65536).decode(errors="replace").strip())
+except Exception:
+    pass
+s.close()
+' "$sock" "$MSG" 2>/dev/null || true)
+    fi
+    if [ -n "$RESP" ] && command -v python3 &>/dev/null; then
+        VER=$(printf '%s' "$RESP" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d.get("version") or d.get("status") or "")
+except Exception:
+    pass
+' 2>/dev/null || true)
+        [ -n "$VER" ] && CONTEXT="omarchy10k $VER"
+    fi
+    [ -n "$CONTEXT" ] && break
+done
+
+if command -v omarchy-notification-send &>/dev/null; then
+    BODY="Battery at ${PCT}%"
+    [ -n "$CONTEXT" ] && BODY="${BODY} — ${CONTEXT}"
+    omarchy-notification-send "Omarchy10k: battery low" "$BODY" 2>/dev/null || true
+fi
+# No omarchy-notification-send → degrade to silent (the statusline battery
+# segment still reflects low battery on its own; the toast is additive).
+exit 0

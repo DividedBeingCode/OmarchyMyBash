@@ -423,48 +423,81 @@ impl<'a> PromptRenderer<'a> {
     ) -> Option<String> {
         let mut parts = Vec::new();
 
-        if !left_names.contains("command_duration")
-            && ctx.config.segments.command_duration.enabled
-            && ctx.cmd_duration_ms >= ctx.config.segments.command_duration.show_above_ms
-        {
-            let secs = ctx.cmd_duration_ms / 1000;
-            let ms = ctx.cmd_duration_ms % 1000;
-            let time_str = if secs >= 60 {
-                format!("{}m{}s", secs / 60, secs % 60)
-            } else if secs > 0 {
-                format!("{secs}.{:01}s", ms / 100)
-            } else {
-                format!("{ms}ms")
-            };
-            parts.push(format!(
-                "{}{}{}",
-                wrap_np(&ctx.palette.muted.fg_escape()),
-                time_str,
-                wrap_np(RESET)
-            ));
-        }
-
-        if !left_names.contains("git")
-            && ctx.git_status.is_repo
-            && (!ctx.git_status.stale || ctx.config.git.stale_display)
-        {
-            let branch_icon = GlyphCatalog::branch_icon(&ctx.config.git.branch_icon);
-            let icon_part = if branch_icon.is_empty() {
-                String::new()
-            } else {
-                format!("{branch_icon} ")
-            };
-            parts.push(format!(
-                "{}{}{}{}",
-                wrap_np(&if ctx.git_status.stale {
-                    ctx.palette.muted.fg_escape()
-                } else {
-                    ctx.palette.accent.fg_escape()
-                }),
-                icon_part,
-                ctx.git_status.branch,
-                wrap_np(RESET)
-            ));
+        // Configurable right rail ([prompt].right_segments); the default
+        // ["command_duration", "git"] preserves the historical hardcoded pair.
+        for seg in crate::layout::resolve_right_rail(&ctx.config.prompt.right_segments) {
+            match seg {
+                crate::layout::RightSegment::CommandDuration => {
+                    if !left_names.contains("command_duration")
+                        && ctx.config.segments.command_duration.enabled
+                        && ctx.cmd_duration_ms >= ctx.config.segments.command_duration.show_above_ms
+                    {
+                        let secs = ctx.cmd_duration_ms / 1000;
+                        let ms = ctx.cmd_duration_ms % 1000;
+                        let time_str = if secs >= 60 {
+                            format!("{}m{}s", secs / 60, secs % 60)
+                        } else if secs > 0 {
+                            format!("{secs}.{:01}s", ms / 100)
+                        } else {
+                            format!("{ms}ms")
+                        };
+                        parts.push(format!(
+                            "{}{}{}",
+                            wrap_np(&ctx.palette.muted.fg_escape()),
+                            time_str,
+                            wrap_np(RESET)
+                        ));
+                    }
+                }
+                crate::layout::RightSegment::Git => {
+                    if !left_names.contains("git")
+                        && ctx.git_status.is_repo
+                        && (!ctx.git_status.stale || ctx.config.git.stale_display)
+                    {
+                        let branch_icon = GlyphCatalog::branch_icon(&ctx.config.git.branch_icon);
+                        let icon_part = if branch_icon.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{branch_icon} ")
+                        };
+                        parts.push(format!(
+                            "{}{}{}{}",
+                            wrap_np(&if ctx.git_status.stale {
+                                ctx.palette.muted.fg_escape()
+                            } else {
+                                ctx.palette.accent.fg_escape()
+                            }),
+                            icon_part,
+                            ctx.git_status.branch,
+                            wrap_np(RESET)
+                        ));
+                    }
+                }
+                crate::layout::RightSegment::Time
+                | crate::layout::RightSegment::Battery
+                | crate::layout::RightSegment::Jobs => {
+                    // Aux segments reuse their left-rail renderers for the
+                    // gating and content; the rail styles them muted like
+                    // command_duration.
+                    let name = seg.name();
+                    if left_names.contains(name) {
+                        continue;
+                    }
+                    let built = match seg {
+                        crate::layout::RightSegment::Time => crate::segments::time::render(ctx),
+                        crate::layout::RightSegment::Battery => crate::segments::battery::render(ctx),
+                        _ => crate::segments::jobs::render(ctx),
+                    };
+                    if let Some(s) = built {
+                        parts.push(format!(
+                            "{}{}{}",
+                            wrap_np(&ctx.palette.muted.fg_escape()),
+                            s.content,
+                            wrap_np(RESET)
+                        ));
+                    }
+                }
+            }
         }
 
         if parts.is_empty() {

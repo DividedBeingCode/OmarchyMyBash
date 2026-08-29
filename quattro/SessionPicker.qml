@@ -32,6 +32,11 @@ Item {
     readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : "community.omarchy10k"
     readonly property bool hyprland: Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE") !== ""
 
+    // Hyprland workspace id per shell pid (String pid → int), refreshed
+    // alongside the session list. Empty when Hyprland is absent or hyprctl
+    // failed — row labels simply omit the workspace suffix then.
+    property var workspaceByPid: ({})
+
     property bool opened: false
     property string page: "sessions"   // "sessions" | "gallery"
     property var rows: []
@@ -101,6 +106,31 @@ Item {
         }
         root.rows = list
         if (root.selectedIndex >= list.length) root.selectedIndex = list.length > 0 ? list.length - 1 : 0
+        root._refreshWorkspaces()
+    }
+
+    // One hyprctl -j clients call per refresh cycle — no timer. Skipped
+    // entirely outside Hyprland; a mid-flight call is never re-spawned.
+    function _refreshWorkspaces() {
+        if (!root.hyprland) { root.workspaceByPid = ({}); return }
+        if (hyprctlClients.running) return
+        hyprctlClients.exec(["hyprctl", "-j", "clients"])
+    }
+
+    function _applyClientsJson(text) {
+        var map = {}
+        try {
+            var clients = JSON.parse(text)
+            if (Array.isArray(clients)) {
+                for (var i = 0; i < clients.length; i++) {
+                    var c = clients[i]
+                    if (!c || c.pid === undefined || c.pid === null) continue
+                    if (!c.workspace || c.workspace.id === undefined || c.workspace.id === null) continue
+                    map[String(c.pid)] = c.workspace.id
+                }
+            }
+        } catch (e) { map = {} }
+        root.workspaceByPid = map
     }
 
     onOpenedChanged: if (opened) refreshRows()
@@ -157,6 +187,15 @@ Item {
 
     Process {
         id: focusLauncher
+    }
+
+    Process {
+        id: hyprctlClients
+        stdout: StdioCollector {
+            // Invalid or failed output (no Hyprland, permission, …) throws in
+            // _applyClientsJson → empty map → no row shows a "ws" suffix.
+            onStreamFinished: root._applyClientsJson(this.text)
+        }
     }
 
     // ── Overlay surface ────────────────────────────────────────────────────
@@ -306,6 +345,8 @@ Item {
                                         var age = root._formatAge(modelData.ageSecs)
                                         if (age) bits.push(age)
                                         if (modelData.pid) bits.push("pid " + modelData.pid)
+                                        var wsNum = root.workspaceByPid[modelData.shellPid]
+                                        if (wsNum !== undefined) bits.push("ws " + wsNum)
                                         return bits.join("  ·  ")
                                     }
                                     color: index === root.selectedIndex ? root.selectedText : root.mutedColor

@@ -20,7 +20,7 @@ pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
     check_hooks();
     check_config();
 
-    println!();
+    check_shell_layer();
     Ok(())
 }
 
@@ -196,6 +196,92 @@ fn check_config() {
         println!("  Config             {}", config_path.display());
     } else {
         println!("  Config                         - using defaults (no config.toml)");
+    }
+}
+
+fn check_shell_layer() {
+    use crate::layer::{effective_action, load_layer_config, CLAIMS};
+    let cfg = load_layer_config();
+    match (&cfg.source, cfg.overrides.is_empty()) {
+        (Some(p), false) => println!(
+            "  Shell layer        policy: {} (overrides: {}), {}",
+            cfg.global.as_str(),
+            cfg.overrides
+                .iter()
+                .map(|(k, v)| format!("{k}={}", v.as_str()))
+                .collect::<Vec<_>>()
+                .join(","),
+            p.display()
+        ),
+        (Some(p), true) => println!(
+            "  Shell layer        policy: {}, {}",
+            cfg.global.as_str(),
+            p.display()
+        ),
+        (None, _) => println!(
+            "  Shell layer        policy: {} (defaults; no config.toml)",
+            cfg.global.as_str()
+        ),
+    }
+    for claim in CLAIMS {
+        println!(
+            "    {:<12}{:<11}{}",
+            claim.name,
+            effective_action(claim, &cfg),
+            claim.note
+        );
+    }
+
+    // The adapter unhooks starship/ghostty from PROMPT_COMMAND at init now;
+    // the old manual surgery in ~/.bashrc is redundant if present.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let bashrc = format!("{home}/.bashrc");
+    match std::fs::read_to_string(&bashrc) {
+        Ok(text)
+            if text.contains("starship_precmd") && text.contains("unset PS0") =>
+        {
+            println!(
+                "  Prompt handoff     ✓ handled by the adapter at init — legacy prompt surgery in ~/.bashrc (starship_precmd substitution + unset PS0) is safe to remove"
+            );
+        }
+        Ok(_) => println!("  Prompt handoff     ✓ no legacy prompt surgery in ~/.bashrc"),
+        Err(_) => println!("  Prompt handoff     ? ~/.bashrc not readable"),
+    }
+    match std::env::var("O10K_PARENT_PID") {
+        Ok(pid) if !pid.is_empty() => {
+            println!("  Prompt ownership   ✓ o10k owns the prompt (starship unhooked at init)");
+        }
+        _ => {
+            println!("  Prompt ownership   ? (adapter not detected — check after init)");
+        }
+    }
+
+    // Terminal include wiring (installed by install.sh, confirmed with TermInc).
+    let ghostty = format!("{home}/.config/ghostty/config");
+    match std::fs::read_to_string(&ghostty) {
+        Ok(text) => {
+            let static_line = "config-file = ?\"~/.config/omarchy10k/ghostty.conf\"";
+            let themed_line =
+                "config-file = ?\"~/.local/state/omarchy/current/theme/o10k-ghostty.conf\"";
+            for (label, line) in [("static", static_line), ("themed", themed_line)] {
+                if text.contains(line) {
+                    println!("  Ghostty include    ✓ {label} wired");
+                } else {
+                    println!(
+                        "  Ghostty include    - {label} missing (run install.sh to add it)"
+                    );
+                }
+            }
+        }
+        Err(_) => println!("  Ghostty include    ? ~/.config/ghostty/config not readable"),
+    }
+    let foot = format!("{home}/.config/foot/foot.ini");
+    match std::fs::read_to_string(&foot) {
+        Ok(text) if text.contains("o10k-foot.ini") => {
+            println!("  Foot include       ✓ wired");
+        }
+        Ok(_) => println!("  Foot include       - missing (run install.sh to add it)"),
+        Err(_) => println!("  Foot include       ? ~/.config/foot/foot.ini not readable"),
     }
 }
 

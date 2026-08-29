@@ -33,6 +33,8 @@ pub struct Config {
     #[serde(default)]
     pub terminal: TerminalConfig,
     #[serde(default)]
+    pub rice: RiceConfig,
+    #[serde(default)]
     pub daemon: DaemonConfig,
     #[serde(default)]
     pub looks: std::collections::BTreeMap<String, LookEntry>,
@@ -125,6 +127,12 @@ pub struct PromptConfig {
     /// p10k PROMPT_ADD_NEWLINE — one blank line before each prompt.
     pub blank_line: bool,
     pub right_prompt: bool,
+    /// Right-prompt rail segment order, rendered left-to-right by
+    /// resolve_right_rail (layout.rs). Valid values: "command_duration",
+    /// "git", "time", "battery", "jobs". Unknown names are skipped with a
+    /// debug log. Defaults to ["command_duration", "git"] — the historical
+    /// hardcoded set.
+    pub right_segments: Vec<String>,
 }
 
 impl Default for PromptConfig {
@@ -135,6 +143,7 @@ impl Default for PromptConfig {
             newline: true,
             blank_line: true,
             right_prompt: true,
+            right_segments: vec!["command_duration".into(), "git".into()],
         }
     }
 }
@@ -370,6 +379,11 @@ pub struct CharacterConfig {
     pub success: String,
     pub error: String,
     pub transient: String,
+    /// Reflect bash vi mode in the prompt character: NORMAL renders a
+    /// distinct glyph (see GlyphCatalog::prompt_char_normal), INSERT keeps
+    /// the configured prompt char. Requires the shell to report KEYMAP via
+    /// the env channel.
+    pub vi_mode: bool,
 }
 
 impl Default for CharacterConfig {
@@ -378,6 +392,7 @@ impl Default for CharacterConfig {
             success: "\u{276f}".into(),
             error: "\u{276f}".into(),
             transient: "\u{276f}".into(),
+            vi_mode: false,
         }
     }
 }
@@ -678,6 +693,34 @@ impl Default for SemanticPromptsConfig {
         Self { enabled: false }
     }
 }
+/// Rice layer (theme-reactive tool config) settings (coexistence spec §6).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RiceConfig {
+    /// bat syntax theme: `"ansi"` (default) inherits the terminal palette
+    /// Omarchy keeps theme-synced; `"themed"` selects a named bundle per
+    /// light/dark mode in the rendered env file. Any other value behaves
+    /// as `ansi` (the rendered template greps for exactly `themed`).
+    pub bat_theme: String,
+    /// Emit the ble.sh face-mapping template (`o10k-blesh.bash.tpl`). Inert
+    /// when ble.sh is not active — the adapter sources it only while
+    /// `BLE_VERSION` is set.
+    pub blesh_faces: bool,
+    /// Emit the delta theme template (`o10k-delta.gitconfig.tpl`). Inert
+    /// until the user includes it from `~/.gitconfig` (opt-in wiring).
+    pub delta: bool,
+}
+
+impl Default for RiceConfig {
+    fn default() -> Self {
+        Self {
+            bat_theme: "ansi".into(),
+            blesh_faces: true,
+            delta: true,
+        }
+    }
+}
+
 
 
 impl Default for Config {
@@ -692,6 +735,7 @@ impl Default for Config {
             segments: SegmentsConfig::default(),
             notifications: NotificationsConfig::default(),
             statusline: StatuslineConfig::default(),
+            rice: RiceConfig::default(),
             terminal: TerminalConfig::default(),
             daemon: DaemonConfig::default(),
             looks: Default::default(),
@@ -787,5 +831,35 @@ mod tests {
         assert!(config.env.watch.keys.contains(&"CLAUDE_CODE_ENTRYPOINT".to_string()));
         assert!(config.env.watch.keys.contains(&"VIRTUAL_ENV".to_string()));
         assert!(config.env.watch.keys.contains(&"KUBECONFIG".to_string()));
+    }
+
+    #[test]
+    fn test_rice_defaults() {
+        let config = Config::default();
+        assert_eq!(config.rice.bat_theme, "ansi");
+        assert!(config.rice.blesh_faces);
+        assert!(config.rice.delta);
+    }
+
+    #[test]
+    fn test_rice_section_is_additive_and_parses_overrides() {
+        // A config without [rice] parses with serde defaults...
+        let config: Config = toml::from_str("[prompt]\nnewline = false\n").unwrap();
+        assert_eq!(config.rice, RiceConfig::default());
+
+        // ...and explicit [rice] overrides land.
+        let config: Config =
+            toml::from_str("[rice]\nbat_theme = \"themed\"\nblesh_faces = false\n").unwrap();
+        assert_eq!(config.rice.bat_theme, "themed");
+        assert!(!config.rice.blesh_faces);
+        assert!(config.rice.delta);
+    }
+
+    #[test]
+    fn test_rice_empty_config_yields_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.rice.bat_theme, "ansi");
+        assert!(config.rice.blesh_faces);
+        assert!(config.rice.delta);
     }
 }

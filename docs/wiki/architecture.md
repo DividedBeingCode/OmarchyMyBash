@@ -39,40 +39,61 @@ Omarchy10k exists because shell prompts are a hot path that most tools treat as 
 ├──────────────────────────────────────────────────────────────────────┤
 │  UNIX SOCKET: $XDG_RUNTIME_DIR/omarchy10k-{$$}.sock                  │
 │  Protocol: Typed NDJSON with version negotiation (type, id fields)   │
+│  64 KiB max NDJSON frame; oversized frames rejected, socket survives │
 ├──────────────────────────────────────────────────────────────────────┤
 │  omarchy10kd (Rust async daemon, one per shell session)               │
 │    ├── Config (TOML, hot-reload via filesystem watcher)              │
 │    ├── ThemePalette (Omarchy colors.toml, hot-reload)                │
 │    ├── TermCaps (per-terminal feature matrix via env detection)      │
-│    ├── GitCache (porcelain v2 parse, worktree detection, TTL)        │
-│    ├── SegmentCollector → LayoutPreset filter → LayoutEngine         │
-│    │    → PromptRenderer (OSC 2 title, OSC 8 links, undercurl)      │
-│    └── Server loop (prompt / preview / palette / config / control)   │
+│    ├── GitCache (porcelain v2 parse, worktree detection, TTL,        │
+│    │            LRU-bounded eviction)                                │
+│    ├── Looks (curated + user [looks.<name>] bundles, palette merge)  │
+│    ├── ScriptExec (~/.config/omarchy10k/scripts, 30s timeout,        │
+│    │            traversal guard)                                     │
+│    ├── SegmentCollector → style-preset filter → LayoutEngine         │
+│    │    → PromptRenderer (OSC 2 title, OSC 8 links, undercurl,       │
+│    │      right rail via resolve_right_rail → render_right)          │
+│    └── Server loop (prompt / preview / config / statusline /         │
+│         control: looks, looks_apply, looks_save, palettes, defaults, │
+│         script_list/run, status, palette, reload, invalidate_git)    │
 ├──────────────────────────────────────────────────────────────────────┤
 │  omarchy10k (Rust CLI, thin client)                                   │
 │    ├── bridge → coprocess mode: stdin JSON, stdout NUL-terminated    │
 │    ├── prompt → socket request → print PS1                           │
 │    ├── init bash → print shell/omarchy10k.bash                       │
+│    ├── look list|apply|save → looks / looks_apply / looks_save       │
+│    ├── script list|run → script_list / script_run (local fallback)   │
+│    ├── hook-event <name> → omarchy-hook or hooks/<event>.d walk      │
+│    ├── statusline → Claude Code statusLine render                    │
+│    ├── intro → first-run themed render; configure → setup wizard     │
 │    ├── doctor → system diagnostics                                   │
 │    ├── reload → send reload_config command                           │
-│    ├── benchmark → repeated prompt requests, latency stats           │
-│    ├── benchmark-shell → end-to-end shell prompt latency             │
+│    ├── benchmark / benchmark-shell → latency stats                   │
 │    ├── debug → send status command                                   │
 │    └── parse-prompt (hidden) → extract left from JSON stdin          │
 ├──────────────────────────────────────────────────────────────────────┤
 │  QUATTRO BAR PLUGIN (QML/JS, desktop integration)                     │
-│    ├── BarWidget.qml → "❯" glyph in system bar                      │
-│    ├── Panel.qml → 4-tab Control Center                             │
-│    │   ├── Config read/write (config_get/config_set via daemon IPC)  │
-│    │   ├── Live preview (preview message, simulated git context)     │
-│    │   ├── Theme preview (palette control command → hex colors)      │
-│    │   ├── Socket discovery + daemon IPC                             │
-│    │   └── Tool detection (command -v)                               │
-│    └── Model.js → stateless TOML parser, protocol helpers            │
+│    ├── BarWidget.qml → "❯" glyph in system bar + bar badges          │
+│    │   (daemon-status dot, git dirty dot, long-cmd chip)             │
+│    ├── Panel.qml → Control Center, 4-bucket rail                     │
+│    │   (LOOKS · STYLE · BEHAVIOR · SYSTEM)                           │
+│    │   ├── Looks cards → looks_apply; Save-as-Look → looks_save      │
+│    │   ├── Config read/write (config_get/config_set, delta saves)    │
+│    │   ├── Live preview (preview message, look dry-run override)     │
+│    │   ├── Palettes/defaults (palette + defaults control verbs)      │
+│    │   └── Socket discovery + daemon IPC (spawns headless daemon)    │
+│    ├── Gallery.qml → full-screen Looks gallery overlay               │
+│    │   (real daemon dry-run renders per card, category filter)       │
+│    ├── SessionPicker.qml → live session list overlay                 │
+│    ├── Service.qml → persistent connection hub for all sockets       │
+│    └── Model.js → TOML parser, CONFIG_MAP, protocol helpers          │
 ├──────────────────────────────────────────────────────────────────────┤
-│  OMARCHY THEME SYSTEM                                                 │
+│  OMARCHY THEME SYSTEM + DESKTOP HOOKS                                 │
 │    ├── templates/omarchy10k.toml.tpl → rendered to colors.toml       │
-│    └── hooks/theme-set → broadcasts reload_theme to all sockets      │
+│    └── hooks/<event>.d/omarchy10k drop-ins:                          │
+│        theme-set / font-set → reload_theme fan-out                   │
+│        post-update → omarchy10k update --no-pull + invalidate_git    │
+│        battery-low → omarchy-notification-send toast                 │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -93,7 +114,9 @@ This is the critical path. Every operation here adds latency the user perceives.
    - cols = $COLUMNS
    - jobs = $(jobs -p | wc -l)
 4. Bash adapter sends JSON prompt request (example payload):
-   {"cwd":"/home/user/project","exit_code":0,"cmd_duration_ms":1200,"cols":120,"jobs":0}
+   {"cwd":"/home/user/project","exit_code":0,"cmd_duration_ms":1200,"cols":120,"jobs":0,
+    "shell_integration":true,"env":{"VIRTUAL_ENV":"~/venv","vi_mode":"insert"}}
+   - `env` is a frozen allowlist built by __o10k_env_json (zero forks); the bash KEYMAP value rides along as vi_mode when the shell reports it
    - **Bridge path (preferred):** request → coproc stdin → bridge forwards to daemon socket → NUL-terminated prompt on coproc stdout → PS1 set directly (no parse-prompt needed)
    - **Fallback path:** JSON over Unix socket via socat or python3
 5. omarchy10kd handle_connection receives the message (typed `prompt` with correlated `id`)
@@ -118,7 +141,7 @@ This is the critical path. Every operation here adds latency the user perceives.
 18. Bash renders the prompt
 ```
 
-**Protocol:** Messages use typed NDJSON with version negotiation. Each message has `type` (`hello`, `control`, `prompt`, `preview`, `config`, `error`), `id` for request/response correlation, and `version` (currently `"0.3"`) exchanged during the `hello` handshake. The `preview` type renders a simulated prompt (no OSC markers) for Quattro live preview. The `palette` control command returns current theme colors as hex.
+**Protocol:** Messages use typed NDJSON with version negotiation. Each message has `type` (`hello`, `prompt`, `preview`, `config`, `statusline`, `control`, `error`), `id` for request/response correlation, and `version` (currently `"0.5"`) exchanged during the `hello` handshake. Prompt requests carry an `env` object — a shell-side allowlist (VIRTUAL_ENV, CONDA_DEFAULT_ENV, MISE_*, IN_NIX_SHELL, …) plus `vi_mode` (the bash `KEYMAP` value) — so environment-derived segments and the vi-mode prompt character track the live shell. The `preview` type renders a simulated prompt (no OSC markers) and accepts a `look` override for Look dry-runs. Control verbs include `palette`, `looks` / `looks_apply` / `looks_save`, `palettes`, `defaults`, `script_list` / `script_run`, `reload`, `invalidate_git`, and the enriched `status` snapshot. Single frames are capped at 64 KiB.
 
 **Latency budget breakdown:**
 - Bridge coprocess path: eliminates fork/exec overhead for socket I/O on every prompt
@@ -156,6 +179,67 @@ Quattro no longer reads or writes the TOML file directly. All config access goes
 7. Next prompt render uses new colors
 ```
 
+## Data Flow: Look Apply (protocol 0.5)
+
+```
+1. User clicks a Look card in Panel.qml or Gallery.qml, or runs `omarchy10k look apply <name>`
+2. The client sends `looks_apply {name, transient}` (the `looks` verb lists curated + user Looks)
+3. looks.rs resolves the Look: user `[looks.<name>]` entries shadow curated names; glyph
+   shortcuts expand and the palette directive merges into a `theme` sub-patch, producing a
+   config_set-shaped patch
+4. Persistent apply: the patch flows through the daemon's atomic config_set path — merged,
+   written to ~/.config/omarchy10k/config.toml, hot-reloaded in memory
+   Transient apply (`--transient` / Try): looks::apply_transient patches the in-memory Config
+   only — no file write; the next config reload reverts it
+5. `looks_save {name, label}` snapshots the current config as a `[looks.<name>]` entry
+   (option fields normalized to preset defaults so the TOML stays valid)
+6. `palettes` returns the curated palette set (moved daemon-side from Model.js); `defaults`
+   returns Config::default() for the panel's modified-vs-default ink bars and per-row reset
+7. Dry-run renders: `preview` accepts a `look` override, so panel and Gallery cards render a
+   Look without applying it
+```
+
+## Data Flow: Quick Actions (User Scripts)
+
+```
+1. User drops executable scripts in ~/.config/omarchy10k/scripts/*.sh
+2. `omarchy10k script list` → daemon `script_list` verb → sorted registry of valid scripts
+3. `omarchy10k script run <name>` → daemon `script_run {name}` → script_exec resolves the path
+   (traversal-guarded: no `/`, no `..`, no leading `.`; must be a regular executable file)
+4. The script runs with a hard 30s timeout by default (`timeout_secs` overridable; killed on
+   expiry); trimmed stdout is returned; non-zero exit carries stderr in the error
+5. No reachable daemon → the CLI falls back to running the script locally
+```
+
+## Data Flow: Desktop Hooks
+
+```
+1. An Omarchy desktop event fires (theme-set, font-set, battery-low, post-update)
+2. Omarchy's hook system runs every consumer in ~/.config/omarchy/hooks/<event>.d/ —
+   install.sh drops hooks/<event> there as <event>.d/omarchy10k
+3. theme-set / font-set → {"command":"reload_theme"} fan-out to every omarchy10k-*.sock
+4. post-update → `omarchy10k update --no-pull` (skipped on TTY or O10K_SKIP_HOOK_UPDATE),
+   then {"command":"invalidate_git"} fan-out so prompts re-query updated repositories
+5. battery-low → omarchy-notification-send toast, enriched with a live daemon `status`
+   blob (crate version) when a daemon answers
+6. Outside the desktop: `omarchy10k hook-event <name> [args]` dispatches via omarchy-hook
+   when present, else walks ~/.config/omarchy/hooks/<event>.d/ directly (individual hook
+   failures are logged and skipped — a desktop event is never dropped by one broken consumer)
+```
+
+## Data Flow: Right Prompt Rail
+
+```
+1. [prompt].right_segments lists rail segments left-to-right
+   (default ["command_duration","git"] — byte-identical to the historical hardcoded pair)
+2. layout.rs resolve_right_rail() maps names → RightSegment (command_duration, git, time,
+   battery, jobs); unknown names are skipped with a debug log
+3. render.rs render_right() composes the rail, skipping entries already drawn inline on the
+   left, and only when prompt.right_prompt is on and the style preset is not framed
+4. Framed presets keep right content on the pre-existing inline path (duration + git only);
+   rail entries apply to non-framed styles
+```
+
 ## Per-Shell Daemon Model
 
 Each Bash session gets its own daemon process and socket. This is a deliberate design choice:
@@ -168,9 +252,9 @@ Each Bash session gets its own daemon process and socket. This is a deliberate d
 | Lifecycle | Tied to shell PID. Auto-cleanup on shell exit | Requires explicit lifecycle management |
 | Resource cost | ~2-4MB RSS per daemon. Trivial on modern systems | Lower total memory |
 
-The daemon starts with `O10K_PARENT_PID=$$` and monitors the parent process via `kill(ppid, 0)` every 2 seconds. When the shell exits, the daemon detects it, removes its socket, and exits cleanly. The Bash adapter also sends `shutdown` on `EXIT` trap as belt-and-suspenders.
+The daemon starts with `O10K_PARENT_PID=$$` and monitors the parent process via `kill(ppid, 0)` every 2 seconds. On Linux it also sets `PR_SET_PDEATHSIG` (SIGTERM) at startup, closing the parent-death PID-recycling race between polls. When the shell exits, the daemon detects it, removes its socket, and exits cleanly. The Bash adapter also sends `shutdown` on `EXIT` trap as belt-and-suspenders, and an idle-shell watchdog respawns a killed daemon within ~10s without any prompt activity.
 
-Socket naming: `$XDG_RUNTIME_DIR/omarchy10k-{shell_pid}.sock`
+Socket naming: `$XDG_RUNTIME_DIR/omarchy10k-{shell_pid}.sock`. A daemon started with `O10K_SOCK_NAME=<name>` binds `omarchy10k-<name>.sock` instead — the headless daemon the Control Center spawns when no shell sessions exist uses this.
 
 ## Segment Plugin Architecture
 
@@ -207,13 +291,15 @@ Current segments and their priorities (collection order in `segments/mod.rs`):
 | Toolchain | 40 | 60 cols | Foreground (Mise env vars: node/python/ruby/go/rust) |
 | Nix | 36 | 50 cols | Blue (IN_NIX_SHELL pure/impure) |
 | K8s | 42 | 60 cols | Blue (kubeconfig current-context) |
+| AI Agent | 38 | 60 cols | Accent (env-only detection: Claude Code / Codex) |
 | Exit Status | 30 | 0 cols | Red; undercurl when TermCaps.has_undercurl |
 | Command Duration | 50 | 40 cols | Yellow |
 | Jobs | 45 | 50 cols | Blue |
 | Time | 55 | 40 cols | Muted (localtime via libc, no chrono) |
 | Battery | 56 | 40 cols | Green/yellow/red by threshold (sysfs BAT0/BAT1) |
+| Load | 55 | 40 cols | Muted (braille sparkline of per-render load ring, opt-in) |
 
-Layout presets (`prompt.layout`) filter which segments appear and control separators. The `omarchy` and `powerline` presets include all segments above; `dense` omits container/python/toolchain/nix/k8s/time/battery; `minimal` is directory-only; `pure` is directory + git. Presets `minimal` and `dense` force single-line mode regardless of `prompt.newline`.
+Style presets (`style.preset`, honoring legacy `prompt.layout` as an input) control separators, frames, and the segment allowlist. `omarchy`, `powerline`, `rainbow`, `gradient`, `framed`, `classic`, `lean`, and `slanted` resolve their segment lists from `ALL_SEGMENTS` in `style.rs` (everything in the table above); `dense` keeps os/ssh/directory/git/exit_status/command_duration/jobs; `minimal` is directory-only; `pure` is directory + git. Presets `minimal` and `dense` force single-line mode regardless of `prompt.newline`.
 
 ## Terminal Capability Detection
 
@@ -230,11 +316,15 @@ The daemon detects the active terminal via environment variables (`TERM_PROGRAM`
 
 Features gate rendering behavior: OSC 8 wraps directory paths in clickable hyperlinks; undercurl (`\x1b[4:3m`) styles exit status and error prompt characters on capable terminals.
 
-## Preview and Palette APIs
+## Preview, Palette, Looks, and Status APIs
 
-**Preview** (`type: "preview"`) renders a prompt with simulated context — no git subprocess, no OSC 133 markers. Quattro sends optional fields (`cwd`, `exit_code`, `git_branch`, `git_staged`, `git_unstaged`, `cols`, `in_ssh`, etc.) to drive live prompt preview in the Control Center.
+**Preview** (`type: "preview"`) renders a prompt with simulated context — no git subprocess, no OSC 133 markers. Quattro sends optional fields (`cwd`, `exit_code`, `git_branch`, `git_staged`, `git_unstaged`, `cols`, `in_ssh`, etc.) to drive live prompt preview in the Control Center, plus an optional `look` name to dry-run a Look without applying it.
 
-**Palette** (`command: "palette"`) returns the daemon's in-memory `ThemePalette` as hex strings (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`). Quattro uses this for theme color swatches without reading `colors.toml` directly.
+**Palette** (`command: "palette"`) returns the daemon's in-memory `ThemePalette` as hex strings (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`). Quattro uses this for theme color swatches without reading `colors.toml` directly. **`palettes`** returns the full curated palette set (moved daemon-side so CLI, panel, and Gallery resolve identically); **`defaults`** returns `Config::default()` for the panel's modified-vs-default ink bars.
+
+**Looks** (`command: "looks"` / `"looks_apply"` / `"looks_save"`) list, apply, and snapshot appearance bundles. `looks_apply` merges the resolved patch through the config_set path, or patches the in-memory config only when `transient` is true. See [Data Flow: Look Apply](#data-flow-look-apply-protocol-05).
+
+**Status** (`command: "status"`) is the ambient snapshot served additively: `pid`, `version`, `protocol_version`, `cwd`, the last render summary (branch, dirty counts, duration, exit code), a live git-cache summary for that cwd, battery (sysfs; `null` on desktops), `last_cmd_duration_ms`, and `session_age_secs`. The BarWidget badges and SessionPicker consume this stream — no new timers.
 
 ## Instant Prompt Caching
 
@@ -254,10 +344,12 @@ Git status fetching now calls `detect_worktree()` after porcelain v2 parse. When
 | `serde` + `serde_json` | 1.0.229 / 1.0.151 | Both | JSON serialization for protocol |
 | `toml` | 0.8.23 | Both | TOML config parsing |
 | `clap` | 4.6.6 | CLI only | Command-line argument parsing |
+| `crossterm` | 0.29.0 | CLI only | Raw-mode terminal interaction for the `configure` wizard |
 | `notify` | 8.2.0 | Daemon only | Filesystem watcher for config/theme hot-reload |
+| `notify-debouncer-full` | 0.5.0 | Daemon only | Debounced filesystem events for config/theme hot-reload |
 | `tracing` + `tracing-subscriber` | 0.1.44 / 0.3.23 | Both | Structured logging |
 | `directories` | 6.0.0 | Both | XDG path resolution |
-| `unicode-width` | 0.2.2 | Daemon only | East Asian width-aware string measurement |
+| `unicode-width` | 0.2.2 | Both | East Asian width-aware string measurement |
 | `thiserror` | 2.0.20 | Both | Typed error definitions |
 | `anyhow` | 1.0.104 | Both | Error propagation |
 
@@ -275,38 +367,40 @@ Git status fetching now calls `detect_worktree()` after porcelain v2 parse. When
 ## Internal Module Graph
 
 ```
-                           ┌─────────┐
-                           │  main   │
-                           └────┬────┘
-                    ┌───────────┼───────────┬───────────┐
-                    ▼           ▼           ▼           ▼
-              ┌──────────┐ ┌────────┐ ┌───────┐ ┌──────────┐
-              │  server   │ │ config │ │ theme │ │ terminal │
-              └─────┬─────┘ └────┬───┘ └───┬───┘ └────┬─────┘
-                    │            │          │          │
-                    ▼            │          │          │
-              ┌──────────┐      │          │          │
-              │  render   │◄────┘──────────┘          │
-              └─────┬─────┘                          │
-           ┌────────┼────────┐                        │
-           ▼        ▼        ▼                        │
-      ┌────────┐ ┌──────┐ ┌────────────┐             │
-      │segments│ │layout│ │    git     │             │
-      │  /mod  │ └──────┘ └────────────┘             │
-      └────┬───┘                                      │
-   ┌───┬───┼───┬───┬───┬───┬───┬───┬───┬───┬───┐     │
-   ▼   ▼   ▼   ▼   ▼   ▼   ▼   ▼   ▼   ▼   ▼   ▼     │
-  os ssh ctr dir git py tc nix k8s exit dur jobs     │
-                                              time bat│
-   character ◄──────────────────────────────────────┘
+                              ┌─────────┐
+                              │  main   │
+                              └────┬────┘
+        ┌───────────┬──────────────┼──────────────┬───────────┬───────────┐
+        ▼           ▼              ▼              ▼           ▼           ▼
+  ┌──────────┐ ┌───────┐ ┌─────────────┐ ┌────────┐ ┌───────┐ ┌──────────┐
+  │  server   │ │ looks │ │ script_exec │ │ config │ │ theme │ │ terminal │
+  └─────┬────┘ └───┬───┘ └──────┬──────┘ └───┬────┘ └───┬───┘ └────┬─────┘
+        │          │            │            │          │          │
+        ▼          │            │            │          │          │
+  ┌──────────┐     │            │            │          │          │
+  │  render   │◄────┴────────────┘            │          │          │
+  └─────┬────┘                               │          │          │
+        │                                    │          │          │
+   ┌────┼──────────┐                         │          │          │
+   ▼    ▼          ▼                         │          │          │
+┌────────┐ ┌──────┐ ┌──────┐                 │          │          │
+│segments│ │layout│ │ git  │                 │          │          │
+└───┬────┘ └──────┘ └──────┘                 │          │          │
+    │                                        │          │          │
+    ├── os ssh container directory git       │          │          │
+    ├── python_env toolchain nix k8s         │          │          │
+    ├── ai exit_status command_duration jobs │          │          │
+    └── time battery load                    │          │          │
+                                             │          │          │
+   character ◄───────────────────────────────┴──────────┴──────────┘
 ```
 
 All modules are private to the daemon binary (no `lib.rs`). This is intentional — the daemon is a self-contained service, not a library.
 
 ## Known Architectural Issues
 
-Two findings from the [Bug Audit](bug-audit.md) are architectural rather than
-local, and are worth reading before planning v0.4.
+Two findings from the [Bug Audit](bug-audit.md) were architectural rather than
+local; one remains open, one is closed as of the env channel.
 
 ### The prompt string is not readline-safe by construction
 
@@ -336,6 +430,10 @@ why the "v0.3 Context Segments" do not track context: activating a venv, switchi
 mise tool versions, or entering a nix shell changes the *shell's* environment, not
 the daemon's.
 
-Closing this requires a protocol change — an `env` allowlist on the `prompt`
-message and a `SegmentContext` that reads from it — plus a `PROTOCOL_VERSION`
-bump. See [Bug Audit #5](bug-audit.md#5-every-environment-derived-segment-is-frozen-at-daemon-start).
+**Closed in v0.4.** The `prompt` message now carries an `env` object — a shell-side
+allowlist built by the adapter's `__o10k_env_json` (zero forks) — and
+`SegmentContext::env_get` reads from it, so `python_env`, `toolchain`, `nix`,
+`container`, `k8s`, and the AI-agent segment track the live shell environment.
+The bash `KEYMAP` value rides the same channel as `vi_mode`, driving the opt-in
+vi-mode prompt character (`[segments.character] vi_mode`). Historical context:
+see [Bug Audit #5](bug-audit.md#5-every-environment-derived-segment-is-frozen-at-daemon-start).

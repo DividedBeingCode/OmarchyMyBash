@@ -1,0 +1,28 @@
+#!/bin/bash
+# Omarchy font-set hook for Omarchy10k
+# Installed to: ~/.config/omarchy/hooks/font-set.d/omarchy10k
+# Called by Omarchy after a font switch with the font name as $1.
+#
+# The daemon stores no font state (fonts are terminal-side; Ghostty/foot apply
+# their own reload), but the palette contrast and any glyph metrics cached
+# during rendering should be re-derived: reload_theme re-resolves the palette
+# and the next prompt re-renders with the new font metrics.
+SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+MSG='{"command":"reload_theme"}'
+
+for sock in "$SOCKET_DIR"/omarchy10k-*.sock; do
+    [ -S "$sock" ] || continue
+    if command -v socat &>/dev/null; then
+        echo "$MSG" | socat - UNIX-CONNECT:"$sock" 2>/dev/null || true
+    elif command -v python3 &>/dev/null; then
+        python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(2)
+s.connect(sys.argv[1])
+s.sendall((sys.argv[2] + "\n").encode())
+s.close()
+' "$sock" "$MSG" 2>/dev/null || true
+    fi
+done
+exit 0

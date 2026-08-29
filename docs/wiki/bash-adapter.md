@@ -22,17 +22,20 @@ __O10K_INITIALIZED=1
 
 After guards pass, the adapter:
 
-1. Sets up path variables (`__O10K_BIN`, `__O10K_DAEMON_BIN`, `__O10K_SOCKET`)
-2. Disables `promptvars` (`shopt -u promptvars`) so PS1 content — daemon/path/branch text — never undergoes parameter or command expansion
+1. Sets up path variables (`__O10K_BIN`, `__O10K_DAEMON_BIN`, `__O10K_SOCKET_DIR`, `__O10K_SOCKET` = `${XDG_RUNTIME_DIR:-/tmp}/omarchy10k-$$.sock`)
+2. Disables `promptvars` (`shopt -u promptvars`) so PS1 content — daemon/path/branch text — never undergoes parameter or command expansion, and binds the Ghostty CSI-u Shift+Enter shim to `accept-line` (see [CSI-u Shift+Enter shim](#csi-u-shiftenter-shim))
 3. Loads instant prompt cache from `${XDG_CACHE_HOME:-$HOME/.cache}/omarchy10k/last_prompt` (if present)
 4. Detects terminal shell integration and sets `__O10K_EMIT_OSC133`, then computes the `__O10K_EMIT_133CD` gate (see [Semantic Prompts](#osc-133cd-semantic-prompts-14))
-5. Declares hook arrays (`__O10K_HOOKS_precmd`, `preexec`, `chpwd`, `shell_exit`)
+5. Declares hook arrays (`__O10K_HOOKS_precmd`, `preexec`, `chpwd`, `shell_exit`) and exports `O10K_PARENT_PID=$$` so CLI children and the daemon resolve the per-shell socket
 6. Registers `EXIT` trap for `__o10k_cleanup`
-7. Creates cache directory (`__O10K_CACHE_DIR`) if missing
-8. Starts the daemon (`__o10k_start_daemon`)
-9. Starts bridge coprocess (`__o10k_start_bridge`)
-10. Installs hooks based on ble.sh availability (`__o10k_install_hooks`)
-11. Launches the one-time intro in the background when the marker file is absent and `O10K_NO_INTRO` is unset (see [First-Run Intro](#first-run-intro))
+7. Registers `__o10k_source_theme_env` as a precmd hook and sources the theme env once (see [Theme Env Re-Source](#theme-env-re-source))
+8. Spawns the idle-shell watchdog (see [Idle-Shell Watchdog](#idle-shell-watchdog))
+9. Sources `~/.config/omarchy10k/tools.sh` unless `O10K_NO_TOOLS=1` is set (see [Modern CLI Layer](#modern-cli-layer))
+10. Creates cache directory (`__O10K_CACHE_DIR`) if missing
+11. Starts the daemon (`__o10k_start_daemon`)
+12. Starts bridge coprocess (`__o10k_start_bridge`)
+13. Installs hooks based on ble.sh availability (`__o10k_install_hooks`)
+14. Launches the one-time intro in the background when the marker file is absent and `O10K_NO_INTRO` is unset (see [First-Run Intro](#first-run-intro))
 
 ## Instant Prompt Cache
 
@@ -50,7 +53,7 @@ fi
 After each successful prompt render (bridge path or socket fallback), the adapter writes the cache atomically in the background:
 
 ```bash
-{ printf '%s' "$PS1" > "$__O10K_CACHE.tmp" && mv "$__O10K_CACHE.tmp" "$__O10K_CACHE"; } 2>/dev/null &
+{ printf '%s' "$PS1" > "$__O10K_CACHE.$$.tmp" && mv "$__O10K_CACHE.$$.tmp" "$__O10K_CACHE"; } 2>/dev/null &
 ```
 
 The cache directory is created during init (`mkdir -p "$__O10K_CACHE_DIR"`). Static fallback PS1 is not cached.
@@ -59,15 +62,18 @@ The cache directory is created during init (`mkdir -p "$__O10K_CACHE_DIR"`). Sta
 
 ### Start (`__o10k_start_daemon`)
 
-1. If socket exists and `status` command succeeds → daemon already running, return
-2. Remove stale socket file
-3. Start daemon: `O10K_PARENT_PID=$$ "$__O10K_DAEMON_BIN" &>/dev/null &` + `disown`
-4. Poll for socket creation: 20 attempts × 100ms sleep (2 second timeout)
+1. If socket exists and a `status` probe succeeds → daemon already running, return (idempotent spawn)
+2. Remove the stale socket file
+3. Start daemon: `O10K_PARENT_PID=$$ "$__O10K_DAEMON_BIN" &>/dev/null &` + `disown` (`O10K_PARENT_PID` itself is `export`ed once at init, so CLI children inherit it)
+4. Write the daemon PID to `${__O10K_SOCKET_DIR}/omarchy10k-$$.pid` — consumed by the [Idle-Shell Watchdog](#idle-shell-watchdog)
+5. Poll for socket creation: 20 attempts × 100ms sleep (2 second timeout)
+6. On failure: print a one-time hint (`Run 'omarchy10k doctor' for diagnostics.`), gated by a `.first-run-hint-shown` marker in the cache dir
 
 ### Stop (`__o10k_stop_daemon`)
 
 1. If socket exists: send `{"command":"shutdown"}`
 2. Remove socket file
+3. Remove `${__O10K_SOCKET_DIR}/omarchy10k-$$.pid`
 
 ### Cleanup (`__o10k_cleanup`)
 
@@ -75,6 +81,17 @@ EXIT trap handler:
 1. `__o10k_dispatch shell_exit` — fires all registered shell_exit hooks
 2. Kills bridge coprocess (`kill "$__O10K_BRIDGE_PID" 2>/dev/null`)
 3. `__o10k_stop_daemon` — graceful daemon shutdown
+
+## Idle-Shell Watchdog
+
+Precmd recovery only fires when a prompt draws, so an idle shell whose daemon
+was killed (crash, deploy, OOM) stays dark and the Control Center bar widget
+reports offline until the user presses a key. `__o10k_watchdog` is spawned
+disowned at init and closes that gap:
+
+- Polls `${__O10K_SOCKET_DIR}/omarchy10k-$$.pid` every 10 s — one `kill -0` builtin per tick, zero forks
+- When the daemon PID is gone: removes the socket and calls `__o10k_start_daemon` — a **daemon-only** respawn, because a bridge started here would live inside the watchdog subshell and orphan; the parent shell's precmd recovery rebuilds its own bridge on the next prompt
+- `$$` inside the subshell is the parent shell's PID, so the loop's `kill -0 $$` self-terminates it when the owning shell exits
 
 ## Bridge Coprocess
 
@@ -107,6 +124,13 @@ Called at init time alongside daemon startup.
    (`__o10k_read_flags`) — the bridge writes it before its response fields,
    so the 133;C/D gate is current without a one-render lag
 8. Writes the instant prompt cache in the background (see [Instant Prompt Cache](#instant-prompt-cache))
+
+**Stream integrity (`__o10k_bridge_drain`):** a failed field read must not
+shift the request/response stream by one on the next request. If the `left`
+read fails, the request is aborted (the caller falls back to socket send)
+after a best-effort drain of late-arriving fields; if the `right` field is
+lost, the remaining threshold/transient fields are drained and skipped.
+Drain reads use a 0.1 s timeout per field.
 
 #### Config-flags side channel
 
@@ -264,15 +288,14 @@ Called from `PROMPT_COMMAND` or ble.sh `PRECMD`:
 8. Emit OSC 9;4;0 (clear progress bar)
 9. If socket exists:
    a. cols=${COLUMNS:-80}
-   b. jobs_count=$(jobs -p | wc -l)
+   b. jobs_count = length of `jobs -p` collected via `mapfile` into an array (no fork)
    c. Build JSON via `printf -v` (no fork):
       {"cwd","exit_code","cmd_duration_ms","cols","jobs","shell_integration","env"}
       — `shell_integration` reflects `__O10K_EMIT_OSC133` (daemon-side 133;A/B);
-      `env` is the frozen allowlist snapshot (12 env keys + the three
-      agent-signal keys `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`,
-      `CODEX_HOME` for the 1.3 ai segment) built with pure parameter
+      `env` is the frozen allowlist snapshot built with pure parameter
       expansions by `__o10k_env_json` (only non-empty values, control chars
-      stripped, backslash/quote escaped via `__o10k_json_escape`)
+      stripped, backslash/quote escaped — see
+      [Env Channel](#env-channel-__o10k_env_json))
    d. Refresh config flags (`__o10k_read_flags`) and re-run the 133;C/D gate
    e. Try bridge first (no fork/exec):
       __o10k_bridge_request "$request" → PS1 set + cache written
@@ -300,6 +323,29 @@ __O10K_FALLBACK_PS1='\[\e[1;34m\]\w\[\e[0m\] \[\e[1;32m\]❯\[\e[0m\] '
 ```
 
 Blue working directory + green `❯`. The shell remains usable.
+
+## Env Channel (`__o10k_env_json`)
+
+Every prompt request carries a fresh env snapshot built by `__o10k_env_json`
+with pure parameter expansions — zero subprocesses. Only non-empty values are
+sent (unset variables are skipped); control characters are stripped and
+backslash/quote escaped inline. The allowlist is frozen:
+
+| Key | Consumer |
+|-----|----------|
+| `VIRTUAL_ENV`, `CONDA_DEFAULT_ENV` | python_env segment |
+| `MISE_NODE_VERSION`, `MISE_PYTHON_VERSION`, `MISE_RUBY_VERSION`, `MISE_GO_VERSION`, `MISE_RUST_VERSION` | toolchain segment |
+| `IN_NIX_SHELL` | nix segment |
+| `DISTROBOX_ENTER_PATH`, `container` | container segment |
+| `KUBECONFIG` | k8s segment |
+| `DIRENV_DIR` | directory segment context (inferred) |
+| `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`, `CODEX_HOME` | 1.3 ai segment (agent signals) |
+| `KEYMAP` → emitted as `"vi_mode"` | prompt character (vi mode) |
+
+The `vi_mode` entry is special-cased after the fixed allowlist loop: Bash
+reports the current readline keymap in `KEYMAP`. ble.sh keeps it set; vanilla
+Bash only populates it inside `bind`-based callbacks — when it is empty
+nothing is emitted and the daemon keeps the default prompt character.
 
 ## Terminal Escape Sequences
 
@@ -494,6 +540,12 @@ Right prompt content typically includes git branch and command duration when `pr
 | `__O10K_FLAGS` | `<socket>.flags` | Bridge config-flags side-channel file |
 | `__O10K_LAST_RIGHT` | `""` | Last right prompt string (for ble.sh `prompt_rps1`) |
 | `__O10K_BRIDGE_PID` | `0` | Bridge coprocess PID |
+| `__O10K_INITIALIZED` | `1` | Double-init guard |
+| `__O10K_PREEXEC_READY` | `0` | Preexec double-fire gate |
+| `__O10K_ENV_JSON` | `{}` | Last env-channel snapshot (rebuilt per render) |
+| `__O10K_FALLBACK_PS1` | blue dir + green `❯` | Static prompt when the daemon is unreachable |
+| `__O10K_LAST_PWD` | `$PWD` at init | Chpwd emulation state |
+| `__O10K_LAST_RESTART_ATTEMPT` | `0` | Epoch timestamp of the last daemon+bridge restart (5 s rate limit) |
 
 ## Path Variables
 
@@ -526,6 +578,12 @@ Right prompt content typically includes git branch and command duration when `pr
 | `O10K_SHELL_INTEGRATION` | OSC 133 emission mode (`auto`, `force`, `off`) |
 | `KITTY_SHELL_INTEGRATION` | Kitty shell integration detection |
 | `O10K_NO_INTRO` | Set to skip the first-run intro launch (CI gate) |
+| `TMUX` | 133;C/D gate — tmux does not forward 133 |
+| `TERM_PROGRAM` | 133;C/D gate (ghostty/foot only) + terminal detection |
+| `GHOSTTY_SHELL_FEATURES`, `GHOSTTY_SHELL_INTEGRATION_FEATURES` | Ghostty auto-injection probe (133;C/D gate yields to it) |
+| `KEYMAP` | Vi-mode signal — read per render, emitted as `vi_mode` in the env channel when non-empty |
+| `O10K_NO_TOOLS` | Set to skip sourcing `tools.sh` |
+| `FZF_DEFAULT_OPTS` | Sanity check after sourcing the theme env (truncated source → stamp not committed) |
 
 ## Runtime Dependencies
 
@@ -535,7 +593,7 @@ Right prompt content typically includes git branch and command duration when `pr
 | `omarchy10k` | Yes | `parse-prompt` subcommand |
 | `socat` | Preferred | Fast socket I/O |
 | `python3` | Fallback | Socket + JSON parsing |
-| `bash` ≥ 4.4 | Required | PS0 preexec, basic functionality |
+| `bash` ≥ 4.3 | Required | Namerefs (`local -n`) in the hook broker and dispatch, basic functionality |
 | `bash` ≥ 5.0 | Recommended | EPOCHREALTIME timing |
 | `bash` ≥ 5.1 | Recommended | Array PROMPT_COMMAND |
 | `ble.sh` (any version with `blehook`) | Optional | Enhanced hooks, transient prompt, right prompt |

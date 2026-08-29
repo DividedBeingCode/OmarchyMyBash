@@ -6,6 +6,8 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 
 **v0.4** adds the env channel (live env-derived segments — python/nix/mise/k8s/agent now respond to `activate`, `mise use`, `nix develop`), real notifications routed through `omarchy-notification-send`, an enriched `status` ambient snapshot, transient prompt wiring via the bridge's 4-field NUL framing, stale-aware git placeholder, true powerline/rainbow background-fill rendering, the `omarchy10k statusline` subcommand for Claude Code, the agent-signal segment, optional OSC 133;C/D semantic prompt emission, Quattro plugin IPC (`omarchy-shell call community.omarchy10k <method>`), a service-kind connection hub, a session-picker overlay, ANSI-colored live panel preview, and the `omarchy10k intro` first-run render. Protocol version is now **0.4**.
 
+**v0.5** adds Looks — atomic appearance bundles in `[looks.<name>]` with 8 curated Looks compiled in (user entries shadow curated names) — exposed through the `looks`, `looks_apply` (persistent, or transient in-memory "Try"), `looks_save`, and `palettes` control verbs plus a `look` override on `preview` for dry-run renders; the enriched `status` snapshot (live git summary, battery, last command duration, session age); a configurable right prompt rail (`[prompt].right_segments`); the vi-mode prompt character delivered over the env channel (`KEYMAP` → `vi_mode`); the quick-action scripts CLI (`omarchy10k script list|run` via the daemon's `script_exec` module) and desktop hook dispatch (`omarchy10k hook-event`); the Quattro Looks Gallery overlay and the 4-bucket Control Center rail; session workspace labels; bar badges; and daemon hardening (64 KiB socket frame cap, LRU-bounded caches, `PR_SET_PDEATHSIG`). Protocol version is now **0.5**, crate version **0.4.0**.
+
 ## Wiki Pages
 
 | Page | Description |
@@ -16,8 +18,7 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 | [Bash Adapter](bash-adapter.md) | Shell integration: hook broker, daemon lifecycle, instant prompt cache, timing, ble.sh mode |
 | [Quattro Plugin](quattro.md) | Desktop Control Center: manifest, QML components, daemon IPC, live preview, theme swatches, config UI |
 | [Configuration](config.md) | Full config key reference with types, defaults, and valid values (incl. Wave 1 visual-depth keys) |
-| [Protocol](protocol.md) | Daemon IPC specification (protocol v0.4): NDJSON over Unix socket, prompt/preview/config/control/statusline messages, env channel, enriched status |
-| [Theme Integration](theme.md) | Omarchy theme bridge: template, hook, palette loading, Palette API for Quattro swatches, rice layer (theme-reactive tool configs) |
+| [Protocol](protocol.md) | Daemon IPC specification (protocol v0.5): NDJSON over Unix socket, prompt/preview/config/control/statusline messages, env channel, Looks verbs, enriched status |
 | [Glossary](glossary.md) | Terms, concepts, environment variables, file paths (includes v0.3 terminal and API terms) |
 | [v0.3 Feature Intel](v03-feature-intel.md) | Research-backed feature catalog that informed v0.3: 30 features, compatibility matrix, priority tiers |
 | [Quattro QoL Intel](quattro-qol-intel.md) | Quality-of-life improvements for Quattro integration: live preview, bar intelligence, notifications |
@@ -37,9 +38,8 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 |----------|-------|
 | Language | Rust (daemon + CLI), Bash (shell adapter), QML/JS (Quattro plugin) |
 | License | MIT |
-| Version | 0.3.0 |
-| Protocol version | 0.3 |
-| Author | Ian Johnston |
+| Version | 0.4.0 |
+| Protocol version | 0.5 |
 | Repository | `github.com/DividedBeingCode/OmarchyMyBash` |
 | Plugin ID | `community.omarchy10k` |
 
@@ -47,26 +47,40 @@ Omarchy10k is a reactive shell UI runtime for Bash, purpose-built for the Omarch
 
 ```
 omarchy10k/
-├── Cargo.toml                    # Workspace manifest
-├── config/default.toml           # Default configuration (embedded in daemon)
+├── Cargo.toml                       # Workspace manifest (crate 0.4.0)
+├── install.sh                       # One-script installer (builds, binaries, shell, Quattro plugin, hooks, rice templates, tools)
 ├── .github/workflows/benchmark.yml  # CI benchmark workflow
+├── config/
+│   ├── default.toml                 # Default configuration (embedded in daemon)
+│   └── tools.sh                     # Modern CLI alias layer (eza/bat/rg/zoxide/fzf/...), sourced by the adapter
 ├── crates/
-│   ├── omarchy10k/               # CLI client binary
-│   │   └── src/{main,prompt,doctor,bridge,update}.rs
-│   └── omarchy10kd/              # Persistent daemon binary
-│       └── src/{main,server,config,git,layout,theme,render,terminal}.rs
-│       └── src/segments/{mod,directory,git,exit_status,command_duration,character,os,ssh,jobs,
-│           container,python_env,toolchain,nix,k8s,time,battery}.rs
-├── shell/omarchy10k.bash         # Bash adapter + hook broker
-├── hooks/theme-set               # Omarchy theme-switch hook
-├── templates/omarchy10k.toml.tpl # Theme bridge template
-├── quattro/                      # Quattro bar plugin
+│   ├── omarchy10k/                  # CLI client binary
+│   │   └── src/{main,prompt,bridge,doctor,configure,intro,script,hook_event,statusline,update}.rs
+│   └── omarchy10kd/                 # Persistent daemon binary
+│       └── src/{main,server,config,git,layout,looks,style,render,script_exec,terminal,theme}.rs
+│       └── src/segments/{mod,ai,battery,character,command_duration,container,directory,exit_status,git,jobs,
+│           k8s,load,nix,os,python_env,ssh,time,toolchain}.rs
+├── shell/omarchy10k.bash            # Bash adapter + hook broker
+├── hooks/                           # Omarchy hook drop-ins (installed to ~/.config/omarchy/hooks/<event>.d/omarchy10k)
+│   ├── theme-set                    # Theme switch → reload_theme fan-out
+│   ├── battery-low                  # Low battery → desktop notification toast
+│   ├── post-update                  # After omarchy update → self-update + invalidate_git fan-out
+│   └── font-set                     # Font switch → reload_theme fan-out
+├── templates/
+│   ├── omarchy10k.toml.tpl          # Theme bridge template
+│   └── themed/                      # Rice-layer templates (o10k-env.sh, lazygit, yazi, cava) for ~/.config/omarchy/themed/
+├── quattro/                         # Quattro bar plugin
 │   ├── manifest.json
-│   ├── BarWidget.qml
-│   ├── Panel.qml
-│   └── Model.js
-├── tests/integration_test.sh     # Integration test suite
-├── docs/wiki/                    # This wiki
+│   ├── BarWidget.qml                # Bar glyph + badges (daemon status, git dirty, long-cmd chip)
+│   ├── Panel.qml                    # Control Center — 4-bucket rail (LOOKS · STYLE · BEHAVIOR · SYSTEM)
+│   ├── Gallery.qml                  # Full-screen Looks gallery overlay (live dry-run renders)
+│   ├── SessionPicker.qml            # Live session picker overlay
+│   ├── Service.qml                  # Persistent connection hub (service-kind plugin)
+│   └── Model.js                     # TOML parser, CONFIG_MAP, protocol helpers
+├── tests/
+│   ├── integration_test.sh          # Integration test suite
+│   └── model_parity_test.js         # Model.js CONFIG_MAP round-trip parity harness
+├── docs/wiki/                       # This wiki
 ├── README.md
 └── LICENSE
 ```
@@ -80,6 +94,15 @@ cd omarchy10k && ./install.sh
 # Update to latest
 omarchy10k update
 
+# Browse and apply Looks (appearance bundles; persistent or try-in-memory)
+omarchy10k look list
+omarchy10k look apply tokyo-rainbow
+omarchy10k look apply omnarchy --transient
+
+# Quick actions and desktop hook events
+omarchy10k script list
+omarchy10k hook-event battery-low 15
+
 # To uninstall
 ./install.sh --uninstall
 ```
@@ -91,9 +114,11 @@ cd omarchy10k && cargo build --release
 cp target/release/omarchy10k target/release/omarchy10kd ~/.local/bin/
 echo 'eval "$(omarchy10k init bash)"' >> ~/.bashrc
 cp -r quattro/ ~/.config/omarchy/plugins/community.omarchy10k/
-mkdir -p ~/.config/omarchy/hooks/theme-set.d
-cp hooks/theme-set ~/.config/omarchy/hooks/theme-set.d/omarchy10k
-chmod +x ~/.config/omarchy/hooks/theme-set.d/omarchy10k
+for event in theme-set battery-low post-update font-set; do
+  mkdir -p ~/.config/omarchy/hooks/$event.d
+  cp hooks/$event ~/.config/omarchy/hooks/$event.d/omarchy10k
+  chmod +x ~/.config/omarchy/hooks/$event.d/omarchy10k
+done
 ```
 
 ## Maintenance

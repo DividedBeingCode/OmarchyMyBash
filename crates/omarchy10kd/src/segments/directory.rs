@@ -177,6 +177,23 @@ fn sibling_tables(cwd: &Path, anchors: &[String]) -> SiblingTables {
         }
     }
     let tables = compute_tables(cwd, anchors);
+    // Bound memory: drop expired entries when the map overflows the cap,
+    // evicting least-recently-stamped first if still over. Entries are
+    // cheap but a weeks-long daemon visiting hundreds of directories adds up.
+    const MAX_SIBLING_ENTRIES: usize = 512;
+    if cache.len() >= MAX_SIBLING_ENTRIES {
+        let now = Instant::now();
+        cache.retain(|_, v| now.duration_since(v.stamp) < SIBLING_TTL);
+        while cache.len() >= MAX_SIBLING_ENTRIES {
+            let oldest = cache.iter()
+                .min_by_key(|(_, v)| v.stamp)
+                .map(|(k, _)| k.clone());
+            match oldest {
+                Some(k) => { cache.remove(&k); }
+                None => break,
+            }
+        }
+    }
     cache.insert(cwd.to_path_buf(), tables.clone());
     tables
 }

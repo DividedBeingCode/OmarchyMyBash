@@ -1,7 +1,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -12,6 +12,11 @@ use crate::render::PromptRenderer;
 use crate::theme::ThemePalette;
 
 pub const PROTOCOL_VERSION: &str = "0.5";
+
+/// Hard cap on a single NDJSON frame from a client. The largest legitimate
+/// message (a preview request) is a few hundred bytes; 64 KiB leaves orders
+/// of magnitude of headroom while bounding attacker-controlled memory.
+const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct PromptRequest {
@@ -103,6 +108,24 @@ pub struct RenderSummary {
     pub stale: bool,
     pub cmd_duration_ms: u64,
     pub exit_code: i32,
+    /// AI-agent detected in the env channel of the last prompt render
+    /// ("claude" | "codex"); `None` when no agent env key was present.
+    pub agent: Option<String>,
+}
+
+/// Detect the AI agent present in a prompt render's env channel. Mirrors
+/// segments/ai.rs detection (CLAUDE_CODE_ENTRYPOINT -> claude; CODEX_SANDBOX
+/// or CODEX_HOME -> codex) so the `status` agent field always agrees with the
+/// prompt's agent segment.
+fn detect_agent(env: Option<&std::collections::HashMap<String, String>>) -> Option<String> {
+    let env = env?;
+    if env.contains_key("CLAUDE_CODE_ENTRYPOINT") {
+        Some("claude".into())
+    } else if env.contains_key("CODEX_SANDBOX") || env.contains_key("CODEX_HOME") {
+        Some("codex".into())
+    } else {
+        None
+    }
 }
 
 pub struct DaemonState {
@@ -255,7 +278,9 @@ async fn write_response(
     request_id: Option<&str>,
 ) -> anyhow::Result<()> {
     if let Some(id) = request_id {
-        resp.as_object_mut().unwrap().insert("id".into(), serde_json::json!(id));
+        if let Some(obj) = resp.as_object_mut() {
+            obj.insert("id".into(), serde_json::json!(id));
+        }
     }
     writer.write_all(resp.to_string().as_bytes()).await?;
     writer.write_all(b"\n").await?;
@@ -399,11 +424,15 @@ async fn handle_control(
                 }), request_id).await?;
             } else {
                 let current = state.config.read().await.clone();
+                // Options must serialize as TOML-safe values: `null` is not
+                // representable and would make the whole looks patch fail to
+                // write. None means "preset default" — capture it as such.
+                let opt_str = |o: &Option<String>| o.clone().unwrap_or_default();
                 let entry_patch = serde_json::json!({
                     "style": {
                         "preset": current.style.preset,
-                        "separators": { "shape": current.style.separators.shape, "left": current.style.separators.left, "right": current.style.separators.right },
-                        "frame": { "enabled": current.style.frame.enabled, "gap_char": current.style.frame.gap_char, "gap_gradient": current.style.frame.gap_gradient },
+                        "separators": { "shape": opt_str(&current.style.separators.shape), "left": opt_str(&current.style.separators.left), "right": opt_str(&current.style.separators.right) },
+                        "frame": { "enabled": current.style.frame.enabled.unwrap_or(true), "gap_char": opt_str(&current.style.frame.gap_char), "gap_gradient": opt_str(&current.style.frame.gap_gradient) },
                     },
                     "glyphs": {
                         "os_icon": current.segments.os.icon,
@@ -430,7 +459,14 @@ async fn handle_control(
                 }
             }
         }
-        "status" => {
+        "script_list" | "script_run" => {
+                write_response(
+                    writer,
+                    crate::script_exec::handle_script_control(command, rest).await,
+                    request_id,
+                ).await?;
+            }
+"status" => {
             let cwd = std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
@@ -452,21 +488,26 @@ async fn handle_control(
                 "protocol_version": PROTOCOL_VERSION,
                 "cwd": cwd,
             });
-            let obj = resp.as_object_mut().unwrap();
-            obj.insert(
-                "git".into(),
-                git_summary_json(last.as_ref(), live_git.as_ref()),
-            );
-            obj.insert(
-                "last_cmd_duration_ms".into(),
-                serde_json::json!(last.as_ref().map(|r| r.cmd_duration_ms).unwrap_or(0)),
-            );
-            obj.insert(
-                "last_exit_code".into(),
-                serde_json::json!(last.as_ref().map(|r| r.exit_code).unwrap_or(0)),
-            );
-            obj.insert("session_age_secs".into(), serde_json::json!(session_age_secs));
-            obj.insert("battery".into(), battery_json(battery_status()));
+            if let Some(obj) = resp.as_object_mut() {
+                obj.insert(
+                    "git".into(),
+                    git_summary_json(last.as_ref(), live_git.as_ref()),
+                );
+                obj.insert(
+                    "last_cmd_duration_ms".into(),
+                    serde_json::json!(last.as_ref().map(|r| r.cmd_duration_ms).unwrap_or(0)),
+                );
+                obj.insert(
+                    "last_exit_code".into(),
+                    serde_json::json!(last.as_ref().map(|r| r.exit_code).unwrap_or(0)),
+                );
+                obj.insert("session_age_secs".into(), serde_json::json!(session_age_secs));
+                obj.insert("battery".into(), battery_json(battery_status()));
+                obj.insert(
+                    "agent".into(),
+                    serde_json::json!(last.as_ref().and_then(|r| r.agent.clone())),
+                );
+            }
             write_response(writer, resp, request_id).await?;
         }
         "palette" => {
@@ -553,12 +594,15 @@ async fn handle_prompt(
         stale: git_status.stale,
         cmd_duration_ms: req.cmd_duration_ms,
         exit_code: req.exit_code,
+        agent: detect_agent(req.env.as_ref()),
     });
 
     debug!("prompt rendered in {:?}", start.elapsed());
 
     let mut resp = serde_json::to_value(&prompt)?;
-    resp.as_object_mut().unwrap().insert("type".into(), serde_json::json!("prompt"));
+    if let Some(obj) = resp.as_object_mut() {
+        obj.insert("type".into(), serde_json::json!("prompt"));
+    }
     write_response(writer, resp, request_id).await
 }
 
@@ -757,10 +801,21 @@ async fn handle_connection(
     state: Arc<DaemonState>,
 ) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
+    // Cap the reader at MAX_FRAME_BYTES: a client streaming bytes without a
+    // newline would otherwise grow `line` unboundedly and OOM the daemon.
+    let mut reader = BufReader::new(reader.take(MAX_FRAME_BYTES as u64));
     let mut line = String::new();
 
     while reader.read_line(&mut line).await? > 0 {
+        if line.len() >= MAX_FRAME_BYTES && !line.ends_with('\n') {
+            warn!("oversized frame rejected (>= {MAX_FRAME_BYTES} bytes)");
+            write_response(
+                &mut writer,
+                serde_json::json!({"type":"error","error": "frame too large"}),
+                None,
+            ).await?;
+            break;
+        }
         let trimmed = line.trim();
 
         let msg: TypedMessage = match serde_json::from_str(trimmed) {
@@ -975,7 +1030,7 @@ async fn write_config_patch(
                         toml_val,
                     );
                 }
-                Err(_) => failed_keys.push(k.clone()),
+                Err(e) => failed_keys.push(format!("{k} ({e})")),
             }
         }
     }
@@ -1039,6 +1094,7 @@ mod tests {
             stale: false,
             cmd_duration_ms: 1500,
             exit_code: 2,
+            agent: None,
         };
         let v = git_summary_json(Some(&last), None);
         assert_eq!(v["branch"], "main");
@@ -1063,6 +1119,38 @@ mod tests {
 
         assert_eq!(battery_json(None), serde_json::Value::Null);
     }
+    #[test]
+    fn test_detect_agent_claude_entrypoint() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("CLAUDE_CODE_ENTRYPOINT".to_string(), "cli".to_string());
+        assert_eq!(detect_agent(Some(&env)).as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn test_detect_agent_codex_vars() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("CODEX_SANDBOX".to_string(), "1".to_string());
+        assert_eq!(detect_agent(Some(&env)).as_deref(), Some("codex"));
+
+        let mut env = std::collections::HashMap::new();
+        env.insert("CODEX_HOME".to_string(), "/tmp/codex".to_string());
+        assert_eq!(detect_agent(Some(&env)).as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn test_detect_agent_none_without_env_keys() {
+        let env: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        assert_eq!(detect_agent(Some(&env)), None);
+        assert_eq!(detect_agent(None), None);
+    }
+
+    #[test]
+    fn test_detect_agent_claude_wins_over_codex() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("CLAUDE_CODE_ENTRYPOINT".to_string(), "cli".to_string());
+        env.insert("CODEX_SANDBOX".to_string(), "1".to_string());
+        assert_eq!(detect_agent(Some(&env)).as_deref(), Some("claude"));
+    }
 
     #[test]
     fn test_render_summary_serializes() {
@@ -1079,9 +1167,11 @@ mod tests {
             stale: true,
             cmd_duration_ms: 42,
             exit_code: 0,
+            agent: Some("claude".into()),
         };
         let v = serde_json::to_value(&last).unwrap();
         assert_eq!(v["cmd_duration_ms"], 42);
         assert_eq!(v["stale"], true);
+        assert_eq!(v["agent"], "claude");
     }
 }

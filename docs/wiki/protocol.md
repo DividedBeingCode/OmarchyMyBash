@@ -2,7 +2,7 @@
 
 [← Index](INDEX.md) | [Daemon](daemon.md) | [Architecture](architecture.md)
 
-Omarchy10k uses **newline-delimited JSON (NDJSON)** over **Unix domain sockets** for all inter-process communication. The protocol uses **typed messages with version negotiation** — clients send a `hello` handshake on connect to learn `protocol_version` and `server_version`. Protocol version **0.4** is current; untagged legacy messages remain supported for backward compatibility.
+Omarchy10k uses **newline-delimited JSON (NDJSON)** over **Unix domain sockets** for all inter-process communication. The protocol uses **typed messages with version negotiation** — clients send a `hello` handshake on connect to learn `protocol_version` and `server_version`. Protocol version **0.5** is current; untagged legacy messages remain supported for backward compatibility.
 
 ## Transport
 
@@ -11,10 +11,11 @@ Omarchy10k uses **newline-delimited JSON (NDJSON)** over **Unix domain sockets**
 | Socket type | Unix domain socket (`AF_UNIX`, `SOCK_STREAM`) |
 | Socket path | `$XDG_RUNTIME_DIR/omarchy10k-{shell_pid}.sock` |
 | Framing | Newline-delimited (`\n`) |
+| Frame limit | 64 KiB per NDJSON frame (`MAX_FRAME_BYTES` in `server.rs`); oversized frames are rejected with `frame too large` and the connection is closed |
 | Encoding | UTF-8 JSON |
 | Connection model | Persistent (server loops on read until EOF) |
 | Timeout | Client-side: 2 seconds (socat `-T2`, python3 `settimeout(2)`) |
-| Protocol version | `0.4` (`PROTOCOL_VERSION` in server) |
+| Protocol version | `0.5` (`PROTOCOL_VERSION` in server) |
 
 ### Socket Path Convention
 
@@ -23,6 +24,20 @@ ${XDG_RUNTIME_DIR:-/tmp}/omarchy10k-${PID}.sock
 ```
 
 Where `PID` is the Bash shell's process ID (`$$`). The daemon receives this via `O10K_PARENT_PID` environment variable at startup. The CLI resolves it from `O10K_PARENT_PID` or `PPID`.
+
+## Frame Limit and Error Responses
+
+The server caps each incoming NDJSON frame at **64 KiB** (`MAX_FRAME_BYTES` in `server.rs`, `64 * 1024`). The socket reader is capped with `AsyncReadExt::take`, so a client streaming bytes without a newline cannot grow daemon memory unboundedly (OOM guard). A legitimate preview request is a few hundred bytes, leaving orders of magnitude of headroom.
+
+Malformed and oversized input get structured errors instead of dropping the daemon:
+
+| Condition | Response | Connection |
+|-----------|----------|------------|
+| Frame ≥ 64 KiB without a newline | `{"type":"error","error":"frame too large"}` | **Closed** |
+| Invalid JSON on a line | `{"type":"error","error":"<serde_json error>"}` | Kept open (next line processed) |
+| Unknown control command | `{"type":"control","status":"error","error":"unknown command: <name>"}` | Kept open |
+| Unknown message `type` | `{"type":"error","error":"unknown message type: <type>"}` | Kept open |
+| `control` message without `command` field | `{"type":"error","error":"control message requires 'command' field"}` | Kept open |
 
 ## Message Format
 
@@ -49,7 +64,7 @@ Handshake. Returns protocol and server version.
 
 **Response:**
 ```json
-{"type":"hello","status":"ok","protocol_version":"0.4","server_version":"0.4.0"}
+{"type":"hello","status":"ok","protocol_version":"0.5","server_version":"0.4.0"}
 ```
 
 **Used by:** Quattro panel (on connect), integration tests.
@@ -86,6 +101,10 @@ Render a prompt with simulated context for live UI preview. Added in v0.3. Unlik
 | `git_staged` | int | No | `0` | Simulated staged file count |
 | `git_unstaged` | int | No | `0` | Simulated unstaged file count |
 | `style_preset` | string | No | `""` | **v0.4 (additive).** Per-request preset override for the Quattro preset gallery: renders this preview with the named preset regardless of `style.preset`. Absent/empty = current config. |
+| `look` | string | No | `""` | **v0.5.** Dry-run render a Look: resolves the named Look (user entries from `[looks.<name>]` shadow curated ones), applies its patch via the transient in-memory merge, and renders the result. Nothing is persisted; an unknown look name silently falls back to the current config. |
+| `style_separators` | string | No | `""` | **v0.5 (configure wizard).** Catalog key applied to both separators for this render only. |
+| `style_frame` | string | No | `""` | **v0.5 (configure wizard).** Frame mode for this render: `none` \| `left` \| `right` \| `full`. |
+| `prompt_newline` | bool | No | `""` | **v0.5 (configure wizard).** Two-line prompt toggle for this render. |
 
 **Response:**
 ```json
@@ -195,6 +214,13 @@ Behavior details:
 | `config_get` | client→daemon | 0.2 | Return full config as JSON (via typed `config` message) |
 | `config_set` | client→daemon | 0.2 | Apply config patch (via typed `config` message) |
 | `statusline` (message) | client→daemon | 0.4 | Render a Claude Code statusLine payload with the active theme (typed message, not a control command) |
+| `looks` | client→daemon | 0.5 | List all Looks (curated + user) as `{name, label, patch}` entries |
+| `looks_apply` | client→daemon | 0.5 | Apply a named Look atomically to disk, or transiently in memory with `transient: true` |
+| `looks_save` | client→daemon | 0.5 | Save the current appearance as a user Look in `[looks.<name>]` |
+| `palettes` | client→daemon | 0.5 | List the 8 curated palette keys with their `theme` patches |
+| `defaults` | client→daemon | 0.5 | Return the full default `Config` as JSON (modified-vs-default comparison) |
+| `script_list` | client→daemon | 0.5 | List executable user scripts in `~/.config/omarchy10k/scripts` |
+| `script_run` | client→daemon | 0.5 | Execute a named user script with a hard timeout (default 30s) |
 
 ### `status`
 
@@ -212,7 +238,7 @@ Health check. Returns daemon metadata.
   "status": "ok",
   "pid": 12345,
   "version": "0.4.0",
-  "protocol_version": "0.4",
+  "protocol_version": "0.5",
   "cwd": "/home/user",
   "git": {"branch": "main", "dirty": true, "staged": 1, "unstaged": 2, "conflicted": 0, "ahead": 0, "behind": 0, "worktree": null, "stale": false},
   "last_cmd_duration_ms": 1200,
@@ -362,7 +388,166 @@ Legacy:
 
 **Used by:** Bash adapter `__o10k_stop_daemon` (EXIT trap).
 
+### `looks` (v0.5)
+
+List all Looks. Returns curated Looks first, then user Looks from `[looks.<name>]` in `config.toml`, sorted by name. A user entry with the same name as a curated Look shadows it (the curated entry is omitted).
+
+**Request:**
+```json
+{"type":"control","command":"looks"}
+```
+
+**Response:**
+```json
+{
+  "type": "control",
+  "status": "ok",
+  "looks": [
+    {"name": "omnarchy", "label": "Omnarchy", "patch": {"style": {"preset": "omarchy"}, "...": "..."}},
+    {"name": "my-look", "label": "My Look", "patch": {"style": {"preset": "framed"}}}
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `looks` | array | `{name, label, patch}` objects. `patch` is `config_set`-shaped (top-level config keys, glyph shortcuts expanded, palette resolved into a `theme` sub-patch), directly applicable via `config_set`. |
+
+The 8 curated Looks are compiled in: `omnarchy`, `tokyo-rainbow`, `framed-gradient`, `lean-pure`, `slanted-owl`, `gruvbox-drift`, `rose-classic`, `polar-lean`.
+
+**Used by:** CLI `look list`, Quattro panel Looks rail, gallery overlay.
+
+### `palettes` (v0.5)
+
+List the curated palettes (moved daemon-side from quattro/Model.js so Looks resolve identically from CLI, gallery, and panel).
+
+**Request:**
+```json
+{"type":"control","command":"palettes"}
+```
+
+**Response:**
+```json
+{
+  "type": "control",
+  "status": "ok",
+  "palettes": [
+    {"key": "tokyo-night", "theme": {"source": "hybrid", "custom": {"accent": "#7aa2f7", "...": "..."}}}
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `palettes` | array | `{key, theme}` objects. `theme` is an `[theme]`-shaped patch: `source: "hybrid"` plus 11 `custom` colors (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `orange`). |
+
+Keys (all always present): `tokyo-night`, `catppuccin`, `gruvbox`, `nord`, `dracula`, `rose-pine`, `everforest`, `kanagawa`.
+
+**Used by:** Quattro panel palette picker, gallery overlay.
+
+### `defaults` (v0.5)
+
+Return the **full default `Config`** (`Config::default()`) as JSON — the current config is not merged in. The panel diffs live config values against this snapshot to draw modified-vs-default ink on settings rows and to offer per-row reset.
+
+**Request:**
+```json
+{"type":"control","command":"defaults"}
+```
+
+**Response:**
+```json
+{"type":"control","status":"ok","config":{"prompt":{"layout":"omarchy","...":"..."},"git":{"enabled":true,"...":"..."}}}
+```
+
+**Used by:** Quattro panel (modified-vs-default ink bars, per-row reset).
+
+### `looks_apply` (v0.5)
+
+Apply a named Look. Resolution uses user shadowing: a `[looks.<name>]` entry wins over a curated Look of the same name.
+
+**Request:**
+```json
+{"type":"control","command":"looks_apply","name":"framed-gradient","transient":true}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | Yes | — | Look name. Missing/empty → `{"status":"error","error":"looks_apply requires 'name'"}`; unknown name → `{"status":"error","error":"unknown look: <name>"}`. |
+| `transient` | bool | No | `false` | Semantics switch, see below. |
+
+**Transient (`transient: true`) — Try mode, in-memory only:**
+
+The look patch is merged into the current **in-memory** config only (via `looks::apply_transient`, no file write), followed by `reload_theme()`. Response: `{"type":"control","status":"ok","transient":true}`. The change reverts the moment anything triggers `reload_config` — the daemon's config watcher on `config.toml`, a `reload_config` control command, a config write, or an atomically applied look. No disk state changes.
+
+**Atomic (`transient: false`, default) — merged to disk:**
+
+The look patch goes through `write_config_patch` — the same code path as `config_set`: recursive JSON→TOML merge into `config.toml`, atomic tmp+rename write, in-memory `reload_config`. Persistent across restarts. Response: `{"type":"control","status":"ok"}`. Errors (TOML syntax in the existing file, unrepresentable patch values, I/O failure) return `{"status":"error","error":...}` and nothing is written.
+
+**Used by:** CLI `look apply <name> [--transient]`, Quattro panel LOOKS cards (Try vs Apply), gallery overlay detail sheet.
+
+### `looks_save` (v0.5)
+
+Save the daemon's **current in-memory appearance** as a user Look. The daemon captures a snapshot of the current style and writes a `[looks.<name>]` entry via the atomic `write_config_patch` path.
+
+**Request:**
+```json
+{"type":"control","command":"looks_save","name":"my-look","label":"My Look"}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | Yes | — | Look key. Missing/empty → `{"status":"error","error":"looks_save requires 'name'"}`. |
+| `label` | string | No | `""` | Display label; empty label falls back to the name at resolution time. |
+
+The captured patch covers: `style.preset`, `style.separators.shape/left/right`, `style.frame.enabled/gap_char/gap_gradient`, glyph shortcuts (`glyphs.os_icon`, `glyphs.character` from `segments.character.success`, `glyphs.git_branch_icon` from `git.branch_icon`), and `prompt.blank_line`. The entry gets the `palette: "keep"` directive (current palette retained). Option fields set to `None` (preset default) are normalized to preset defaults (`""` / `true`) instead of serialized as TOML-invalid `null` — the null would have failed the whole patch write on fresh configs.
+
+**Response:** `{"type":"control","status":"ok"}` on success, `{"status":"error","error":...}` on write failure.
+
+**Used by:** Quattro panel Save-as-Look, CLI `look save <name>`.
+
+### `script_list` (v0.5)
+
+List executable user scripts from `$XDG_CONFIG_HOME/omarchy10k/scripts` (the quick-actions registry). A script is listed only when it is a regular file with the executable bit set and a valid name: non-empty, no `/`, no `..` substring, not starting with `.` (traversal guard). Missing directory → empty list. Output is sorted by name.
+
+**Request:**
+```json
+{"type":"control","command":"script_list"}
+```
+
+**Response:**
+```json
+{
+  "type": "control",
+  "status": "ok",
+  "dir": "/home/user/.config/omarchy10k/scripts",
+  "scripts": [{"name": "backup-notes.sh", "path": "/home/user/.config/omarchy10k/scripts/backup-notes.sh"}]
+}
+```
+
+**Used by:** CLI `script list`, quick actions UI.
+
+### `script_run` (v0.5)
+
+Execute a user script daemon-side with output capture and a hard timeout. Trust model: scripts come only from the user's own config directory — same trust level as `.bashrc`, nothing network-sourced.
+
+**Request:**
+```json
+{"type":"control","command":"script_run","name":"backup-notes.sh","timeout_secs":60}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | Yes | — | Script name (without directory). Resolved via the traversal guard: rejected if it contains `/` or `..` or starts with `.`, is not a regular file, or lacks the executable bit. |
+| `timeout_secs` | int | No | `30` | Hard execution budget. The child process is killed (`kill_on_drop`) when the budget expires. |
+
+**Response (success):** `{"type":"control","status":"ok","name":"<name>","output":"<trimmed stdout>"}`
+
+**Response (failure):** `{"type":"control","status":"error","error":"..."}` — covers invalid/traversal names, missing/non-executable scripts, timeouts (`script timed out after <n>s and was killed`), and non-zero exits (error carries the exit status and trimmed stderr).
+
+**Used by:** CLI `script run <name>`, quick actions UI.
+
 ## Prompt Request/Response
+
 
 ### Request
 
@@ -653,7 +838,33 @@ Quattro Panel          Socket              Daemon
       │                   │                    │
 ```
 
+### Look Apply (transient Try → reload revert, v0.5)
+
+```
+Quattro Panel          Socket              Daemon              config.toml
+      │                   │                    │                     │
+      ├─ looks_apply ────►│                    │                     │
+      │  name, transient:true                  │                     │
+      │                   ├─ resolve look ────►│                     │
+      │                   │                    ├─ apply_transient    │
+      │                   │                    │  (merge into        │
+      │                   │                    │   in-memory config, │
+      │                   │                    │   no disk write)    │
+      │                   │                    ├─ reload_theme       │
+      │                   │◄─ ok, transient:true ──┤                 │
+      │◄─ Try preview ────┤                    │                     │
+      │                   │                    │                     │
+      ├─ reload_config ──►│  (revert: watcher or explicit)           │
+      │                   ├─ re-read config ──►│                     │
+      │                   │                    ├─ update RwLock ◄────┤
+      │                   │◄─ ok ──────────────┤   (disk copy wins)  │
+      │◄─ previous look ──┤                    │                     │
+```
+
+The transient state lives only in `RwLock<Config>`. Any `reload_config` — the config.toml watcher, a `reload_config` control command, a `config_set`, or an atomic `looks_apply` — restores the on-disk config, discarding the Try.
+
 ## Known Issues
+
 
 Recorded by the [Bug Audit](bug-audit.md).
 

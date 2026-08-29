@@ -432,8 +432,9 @@ __o10k_json_escape() {
 
 # Builds the env allowlist JSON (0.1 env channel) with pure parameter
 # expansions — zero subprocesses. Frozen allowlist (12 env keys + the three
-# agent-signal keys for the 1.3 ai segment): only non-empty values are sent;
-# unset variables are skipped. Sets __O10K_ENV_JSON.
+# agent-signal keys for the 1.3 ai segment + the vi-mode key for the prompt
+# character): only non-empty values are sent; unset variables are skipped.
+# Sets __O10K_ENV_JSON.
 __o10k_env_json() {
     local env_json="" k v esc
     for k in VIRTUAL_ENV CONDA_DEFAULT_ENV MISE_NODE_VERSION MISE_PYTHON_VERSION \
@@ -451,6 +452,20 @@ __o10k_env_json() {
             env_json="$env_json,\"$k\":\"$esc\""
         fi
     done
+    # Vi-mode signal (character segment): bash reports the current keymap in
+    # KEYMAP. ble.sh keeps it set; vanilla bash only populates it inside
+    # bind-based callbacks — when it is empty we emit nothing and the daemon
+    # keeps the default prompt character.
+    if [[ -n "${KEYMAP:-}" ]]; then
+        v="${KEYMAP//[[:cntrl:]]/}"
+        v="${v//\\/\\\\}"
+        v="${v//\"/\\\"}"
+        if [[ -z "$env_json" ]]; then
+            env_json="\"vi_mode\":\"$v\""
+        else
+            env_json="$env_json,\"vi_mode\":\"$v\""
+        fi
+    fi
     __O10K_ENV_JSON="{$env_json}"
 }
 
@@ -717,6 +732,92 @@ __o10k_watchdog() {
 
 __o10k_watchdog &
 disown
+# ── Shell Layer (baked policy) ─────────────────────────────────────────────
+# Policy was resolved once by `omarchy10k init bash` from [shell.layer] in
+# config.toml and baked into __O10K_LAYER_POLICY / __O10K_LAYER_OVERRIDES_<name>
+# (printed before this body; defaults to extend when sourced directly). This
+# section applies only the CONTESTED claims: platform signature matched ->
+# defer (the platform owns it); undefined -> define o10k's version; a user
+# definition (non-matching) is always left alone. Nothing is unset or
+# unaliased — only unhooked. `omarchy10k layer` prints the full claim map.
+
+declare -a __O10K_DISPLACED=()
+
+# Prompt handoff at init: unhook starship's and Ghostty's prompt hooks from
+# PROMPT_COMMAND (both array and string shapes) and neutralize PS0, so the
+# first prompt is already ours. Displacements are recorded, nothing is unset
+# — revert by removing the init line from .bashrc (starship takes over).
+__o10k_prompt_handoff() {
+    local i
+    if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
+        for i in "${!PROMPT_COMMAND[@]}"; do
+            if [[ "${PROMPT_COMMAND[$i]}" == *starship_precmd* || "${PROMPT_COMMAND[$i]}" == *__ghostty_hook* ]]; then
+                __O10K_DISPLACED+=("${PROMPT_COMMAND[$i]}")
+                PROMPT_COMMAND[$i]="${PROMPT_COMMAND[$i]//starship_precmd/:}"
+                PROMPT_COMMAND[$i]="${PROMPT_COMMAND[$i]//__ghostty_hook/:}"
+            fi
+        done
+    elif [[ -n "${PROMPT_COMMAND:-}" ]]; then
+        if [[ "${PROMPT_COMMAND}" == *starship_precmd* || "${PROMPT_COMMAND}" == *__ghostty_hook* ]]; then
+            __O10K_DISPLACED+=("${PROMPT_COMMAND}")
+            PROMPT_COMMAND="${PROMPT_COMMAND//starship_precmd/:}"
+            PROMPT_COMMAND="${PROMPT_COMMAND//__ghostty_hook/:}"
+        fi
+    fi
+    # Ghostty's injected hook expands PS0; the adapter owns preexec handling.
+    PS0=''
+}
+
+# ls — extend Omarchy's long-format eza with --git; define o10k's short
+# format only when nothing owns ls; a non-matching (user) alias wins untouched.
+__p="${__O10K_LAYER_OVERRIDES_ls:-${__O10K_LAYER_POLICY:-extend}}"
+if [[ "$__p" != off ]]; then
+    if [[ "${BASH_ALIASES[ls]:-}" == *eza* && "${BASH_ALIASES[ls]:-}" == *--group-directories-first* ]]; then
+        [[ "$__p" == extend ]] && alias ls='eza -lh --group-directories-first --icons=auto --git'
+    elif [[ -z "${BASH_ALIASES[ls]:-}" ]] && command -v eza &>/dev/null; then
+        alias ls='eza --icons=auto --group-directories-first'
+    fi
+fi
+
+# lt — Omarchy's tree alias is strictly richer: defer when defined (platform
+# or user), define o10k's version only when lt is unclaimed.
+__p="${__O10K_LAYER_OVERRIDES_lt:-${__O10K_LAYER_POLICY:-extend}}"
+if [[ "$__p" != off && -z "${BASH_ALIASES[lt]:-}" ]] && command -v eza &>/dev/null; then
+    alias lt='eza --tree --level=2 --icons=auto'
+fi
+
+# cd — Omarchy wraps cd with zd()/zoxide: defer entirely when present,
+# initialize zoxide --cmd cd only when cd is completely unclaimed.
+__p="${__O10K_LAYER_OVERRIDES_cd:-${__O10K_LAYER_POLICY:-extend}}"
+if [[ "$__p" != off ]] && ! declare -F zd &>/dev/null && ! declare -F _zoxide &>/dev/null \
+    && [[ -z "${BASH_ALIASES[cd]:-}" ]] && ! declare -F cd &>/dev/null \
+    && command -v zoxide &>/dev/null; then
+    eval "$(zoxide init bash --cmd cd)"
+fi
+
+# fzf keys — Omarchy sources fzf key-bindings: skip when __fzf_history__ is
+# already bound, wire fzf's integration only when it is not.
+__p="${__O10K_LAYER_OVERRIDES_fzf_keys:-${__O10K_LAYER_POLICY:-extend}}"
+if [[ "$__p" != off ]] && ! declare -F __fzf_history__ &>/dev/null && command -v fzf &>/dev/null; then
+    eval "$(fzf --bash 2>/dev/null)" || true
+fi
+
+# MANPAGER — keep the platform's bat man-pager; define o10k's (with a plain
+# less fallback) only when unset.
+__p="${__O10K_LAYER_OVERRIDES_manpager:-${__O10K_LAYER_POLICY:-extend}}"
+if [[ "$__p" != off && -z "${MANPAGER:-}" ]] && command -v bat &>/dev/null; then
+    export MANPAGER="sh -c 'col -bx | bat -l man -p 2>/dev/null || less'"
+fi
+
+# BAT_THEME — the platform's ansi inherits the theme-synced terminal palette:
+# skip whenever set; fall back to ansi (never a hardcoded theme guess) when
+# unset. The rice layer may still theme it via [rice] bat_theme.
+__p="${__O10K_LAYER_OVERRIDES_bat_theme:-${__O10K_LAYER_POLICY:-extend}}"
+if [[ "$__p" != off && -z "${BAT_THEME:-}" ]] && command -v bat &>/dev/null; then
+    export BAT_THEME=ansi
+fi
+unset __p
+
 # ── Modern CLI Layer ────────────────────────────────────────────────────────
 # Aliases and tool inits (eza/bat/zoxide/atuin/fzf/yazi). Installed by
 # install.sh; set O10K_NO_TOOLS=1 to skip.
@@ -730,6 +831,7 @@ disown
 
 __o10k_start_daemon
 __o10k_start_bridge
+__o10k_prompt_handoff
 __o10k_install_hooks
 
 # First-run intro (3.3): background and non-blocking. Skipped by the marker

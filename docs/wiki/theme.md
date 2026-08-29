@@ -94,6 +94,32 @@ cp hooks/theme-set ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 chmod +x ~/.config/omarchy/hooks/theme-set.d/omarchy10k
 ```
 
+## Font-Set Hook
+
+`hooks/font-set` is installed to `~/.config/omarchy/hooks/font-set.d/omarchy10k` and runs after every Omarchy font switch (font name as `$1`).
+
+The daemon stores no font state — fonts are terminal-side (Ghostty/foot apply their own reload) — but palette contrast and any glyph metrics cached during rendering should be re-derived. So the hook broadcasts the same `{"command":"reload_theme"}` message as theme-set: the daemon re-resolves the palette, and the next prompt re-renders with the new font metrics. Same socat/python3 fire-and-forget fan-out; errors ignored.
+
+## Battery-Low Hook
+
+`hooks/battery-low` is installed to `~/.config/omarchy/hooks/battery-low.d/omarchy10k`; Omarchy calls it when the battery crosses the low threshold (percentage as `$1`).
+
+1. Sends `{"command":"status"}` to each live socket (socat or python3 fallback) and extracts the daemon `version` from the first reply to build a `omarchy10k <version>` context line.
+2. Sends `omarchy-notification-send "Omarchy10k: battery low" "<pct>% — <context>"` when `omarchy-notification-send` exists; without it the hook degrades to silent (the statusline battery segment still reflects low battery on its own; the toast is additive).
+3. Always `exit 0`.
+
+## Post-Update Hook
+
+`hooks/post-update` is installed to `~/.config/omarchy/hooks/post-update.d/omarchy10k` and runs after `omarchy update` completes.
+
+- Guards: exits immediately when attached to a TTY (the desktop updater runs hooks headless) or when `O10K_SKIP_HOOK_UPDATE` is set.
+- Runs `timeout 600 omarchy10k update --no-pull` when the `omarchy10k` binary exists — `--no-pull` avoids nested git operations while the parent update is still finishing; the next interactive `omarchy10k update` picks up newer commits.
+- Then fans out `{"command":"invalidate_git"}` to every live socket (same fire-and-forget pattern as theme-set) so prompts re-query repositories the update touched.
+
+### Hook Installation
+
+`install.sh` step 5 ("Desktop hooks") loops over `theme-set battery-low post-update font-set`, creating `~/.config/omarchy/hooks/<event>.d/` and copying `hooks/<event>` to `<event>.d/omarchy10k` (executable). Uninstall removes all four.
+
 ## Daemon Theme Loading
 
 All palette resolution goes through `ThemePalette::resolve_palette(&config)` — the same unified path used at daemon startup and on `reload_theme`. This respects `theme.source` and re-applies `[theme.custom]` overrides for `custom` and `hybrid` modes.
@@ -177,7 +203,19 @@ The Quattro Control Center displays theme color swatches using the Palette API i
 
 `Panel.qml` stores the response in `paletteColors` and renders a row of 20×20 px swatches for `accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, and `blue`. The swatch row is hidden until the first successful palette response.
 
+The palette reflects whatever `resolve_palette()` produced at startup or last reload, including custom overrides in `hybrid`/`custom` mode. No filesystem read occurs on each request.
+
+
+### Curated Palettes Are Daemon-Side
+
+The curated prompt-palette table that the Looks system resolves against now lives in the daemon (`crates/omarchy10kd/src/looks.rs::curated_palette`) — not in `quattro/Model.js`. Consequences:
+
+- Curated Looks (`looks.rs::curated()`) and user `[looks.<name>]` entries with a `palette` directive resolve identically whether invoked from the CLI, the Looks Gallery, or the panel — there is a single source of truth.
+- The `palettes` control verb returns `{key, theme}` rows built from `curated_palette` (see [Protocol](protocol.md)).
+- `Model.CURATED_PALETTES` still exists client-side, but only to render the Style bucket's palette cards (applying one writes `[theme.custom]` with `source = "hybrid"`); it is no longer authoritative for Looks.
+
 ## ANSI Color Output
+
 
 All colors are emitted as true-color ANSI escape sequences:
 
@@ -231,11 +269,30 @@ foreign symlink is never clobbered. Rendering runs once at install time
 |------|---------|-------|
 | `~/.local/state/omarchy/current/theme/colors.toml` | Generated palette | Omarchy theme engine |
 | `~/.local/state/omarchy/current/theme.name` | Current theme name | Omarchy theme engine |
-| `~/.config/omarchy/hooks/theme-set.d/omarchy10k` | Post-theme-switch hook | User-installed |
-| `templates/omarchy10k.toml.tpl` | Template (in source tree) | Developer |
+| `~/.config/omarchy/hooks/theme-set.d/omarchy10k` | Post-theme-switch hook (reload_theme fan-out) | `install.sh` |
+| `~/.config/omarchy/hooks/font-set.d/omarchy10k` | Post-font-switch hook (reload_theme fan-out) | `install.sh` |
+| `~/.config/omarchy/hooks/battery-low.d/omarchy10k` | Low-battery notification hook | `install.sh` |
+| `~/.config/omarchy/hooks/post-update.d/omarchy10k` | Post-`omarchy update` hook (update --no-pull + invalidate_git fan-out) | `install.sh` |
 | `~/.local/share/omarchy/templates/omarchy10k.toml.tpl` | Deployed template | `install.sh` / `omarchy10k update` |
 | `~/.config/omarchy10k/config.toml` `[theme.custom]` | User color overrides | User |
 | `templates/themed/o10k-*.tpl` | Rice templates (in source tree) | Developer |
 | `~/.config/omarchy/themed/o10k-*.tpl` | Deployed rice templates | `install.sh` |
 | `~/.local/state/omarchy/current/theme/o10k-*` | Rendered rice configs | Omarchy theme engine |
 | `~/.cache/omarchy10k/env.stamp` | Live re-source mtime stamp | Bash adapter |
+
+
+
+## Terminal personality + rice templates (v0.4.1)
+
+Four new themed templates render into `~/.local/state/omarchy/current/theme/` on every theme switch (picked up by install.sh's `o10k-*.tpl` glob):
+
+| Template | Renders | Content |
+|---|---|---|
+| `o10k-ghostty.conf.tpl` | `o10k-ghostty.conf` | `cursor-color = accent` only — never color/palette keys. Wired via `config-file = ?` includes appended to `~/.config/ghostty/config` (positional precedence: later wins). |
+| `o10k-foot.ini.tpl` | `o10k-foot.ini` | `[colors] cursor = accent background` (foot 1.27 keeps cursor colors under [colors]); include appended under `[main]` after Omarchy's theme include — multi-include verified against foot 1.27 man page. |
+| `o10k-blesh.bash` | ble.sh syntax faces mapped to palette roles (command/varname→accent, filename→blue, string→green, number→yellow, comment→muted, error→red, suggestion→muted). Self-gates on `BLE_VERSION`; inert without ble.sh. |
+| `o10k-delta.gitconfig.tpl` | delta theme (opt-in: include from `~/.gitconfig` after your `[delta]` settings). |
+
+`BAT_THEME` regression fixed: the env template no longer emits a hardcoded Catppuccin theme; it emits a BAT_THEME export only when `[rice].bat_theme = "themed"` in the user config (grep-gated at source time — the Omarchy template engine is a flat sed pass with no conditionals). Default `ansi` inherits the theme-synced palette.
+
+The terminal include wiring (static `~/.config/omarchy10k/ghostty.conf` with `shell-integration = none` + the two optional config-file lines) is installed by `install.sh` idempotently, after a timestamped backup, and is removable by `--uninstall`.

@@ -28,6 +28,7 @@
 | **Instant Prompt** | Cached prompt loaded from `~/.cache/omarchy10k/last_prompt` for zero-latency startup. The Bash adapter sets `PS1` from the cache before the daemon is ready; after each successful render, the bridge writes the new prompt atomically (`tmp` + `mv`) in a background subshell. |
 | **Layout engine** | `LayoutEngine` — resolves which segments fit the terminal width using priority-based compression. |
 | **Layout Preset** | Predefined segment ordering and separator style (`omarchy`, `minimal`, `powerline`, `classic`, `pure`, `dense`). Controls which segments appear, their order via `LayoutPreset::segment_order()`, separator character via `LayoutPreset::separator()`, and single-line vs two-line layout via `LayoutPreset::is_single_line()`. Configured by `prompt.layout`. |
+| **Look** | A named appearance bundle: a `config_set`-shaped patch plus a palette directive (`keep` / `theme` / curated palette key). Eight curated Looks are compiled into the daemon; user Looks live in `[looks.<name>]` in `config.toml` and shadow curated names. Applied via `looks_apply` (transient try mode reverts with `reload_config`) and browsed in the gallery overlay. |
 | **NDJSON** | Newline-Delimited JSON — the protocol format. One JSON object per line, terminated by `\n`. |
 | **OSC 7** | Operating System Command for CWD reporting (`\e]7;file://...\a`). Enables terminal CWD tracking for new tab/split behavior. Emitted by the Bash adapter after each successful prompt render. `TermCaps.has_osc7` records terminal support. |
 | **OSC 8** | Hyperlink escape sequence. Wraps text in clickable `file://` URLs (used by the directory segment). Emitted when `TermCaps.has_osc8` is true. |
@@ -40,9 +41,9 @@
 | **Per-shell daemon** | Architecture where each Bash session gets its own `omarchy10kd` process and socket. Provides isolation and automatic cleanup. |
 | **Porcelain v2** | Git's machine-readable status format (`git status --porcelain=v2 --branch`). Used by the daemon for reliable parsing. |
 | **Preexec ready gate** | `__O10K_PREEXEC_READY` flag that prevents the preexec handler from firing multiple times per command line. |
-| **Preview API** | Daemon protocol message (`type: "preview"`) that renders a prompt with simulated context for Quattro live preview. Accepts optional fields (`cwd`, `exit_code`, `git_branch`, `git_staged`, `cols`, etc.). Omits OSC 133 markers and skips git subprocesses. |
+| **Preview API** | Daemon protocol message (`type: "preview"`) that renders a prompt with simulated context for Quattro live preview. Accepts optional fields (`cwd`, `exit_code`, `git_branch`, `git_staged`, `cols`, etc.) plus dry-run overrides: `look` (render with a Look applied — used by the gallery overlay) and `style_preset` (per-card preset previews). Omits OSC 133 markers and skips git subprocesses. |
 | **Priority** | Segment attribute (lower number = more important). The layout engine keeps high-priority segments when space is tight. |
-| **Protocol version** | Version string (currently `"0.3"`) exchanged during `hello` handshake. Enables backward-compatible protocol evolution. |
+| **Protocol version** | Version string (currently `"0.5"`) exchanged during `hello` handshake. Enables backward-compatible protocol evolution. |
 | **Quattro** | The Omarchy desktop bar/panel system built on Quickshell. The Omarchy10k plugin appears as a bar widget. |
 | **Quickshell** | The QML-based desktop shell framework used by Omarchy Quattro. Provides `Process`, `Socket`, bar/panel infrastructure. |
 | **Segment** | A discrete piece of the prompt (directory, git, exit status, command duration). Each is a `render(ctx) -> Option<Segment>` function. |
@@ -50,7 +51,7 @@
 | **Shell integration detection** | The adapter's `__o10k_detect_terminal_integration` function that checks for existing terminal shell integrations (Ghostty, VTE, WezTerm, Kitty) to avoid duplicate OSC 133 emission. Complemented by daemon-side `TermCaps::detect()` for per-terminal feature gating. |
 | **Smart truncation** | Directory segment's algorithm: keeps first and last path components, uses unique prefixes for middle directories, preserves git repo roots. |
 | **Stale-while-revalidate** | Git caching strategy where expired cache entries return immediately (marked `stale: true`) while an async background task refreshes the data. Prevents blocking on git subprocess. |
-| **Socket path** | `$XDG_RUNTIME_DIR/omarchy10k-{shell_pid}.sock` — per-shell daemon socket. |
+| **Socket path** | `$XDG_RUNTIME_DIR/omarchy10k-{ppid}.sock` (fallback `/tmp`) — per-shell daemon socket named after the shell PID (`O10K_PARENT_PID`). Headless daemons bind a fixed name via `O10K_SOCK_NAME` (`omarchy10k-<name>.sock`). |
 | **TermCaps** | Terminal capability detection struct (`terminal.rs`). Identifies the terminal emulator (Ghostty, Foot, Kitty, WezTerm, Alacritty, Unknown) and its supported features: OSC 7/8/52/777, undercurl, sync output (DEC 2026), Kitty graphics, Sixel. Detected via environment variables (`TERM_PROGRAM`, `GHOSTTY_RESOURCES_DIR`, `KITTY_WINDOW_ID`). |
 | **Transient prompt** | Feature where previous prompts are replaced with a minimal `❯` after command execution, reducing visual noise. |
 | **True-color** | 24-bit RGB ANSI color (16 million colors). Omarchy10k uses this exclusively — no 256-color or 16-color fallback. |
@@ -67,6 +68,13 @@
 | `O10K_BIN` | User (optional) | Adapter | Override `omarchy10k` binary path |
 | `O10K_DAEMON_BIN` | User (optional) | Adapter | Override `omarchy10kd` binary path |
 | `O10K_SHELL_INTEGRATION` | User (optional) | Adapter | Control OSC 133 emission: `auto`, `force`, `off` |
+| `O10K_NO_INTRO` | User (optional) | Adapter, CLI (`omarchy10k intro`) | Skip the one-time first-run intro. The `${XDG_STATE_HOME:-$HOME/.local/state}/omarchy10k/intro_shown` marker suppresses it too; `intro --force` bypasses both. |
+| `O10K_SKIP_HOOK_UPDATE` | User (optional) | `hooks/post-update` | Skip the git pull/update step in the post-update hook (already skipped when the hook runs on an interactive terminal). |
+| `O10K_SKIP_TOOLS` | User (optional) | install.sh | Skip installing the modern CLI tools (eza, bat, zoxide, fzf, ...). |
+| `O10K_NO_TOOLS` | User (optional) | Adapter, install.sh | Disable the tools layer entirely — the adapter never sources `~/.config/omarchy10k/tools.sh` and the installer skips the packages. |
+| `__O10K_INITIALIZED` | Adapter (shell variable, not exported) | Adapter | Re-initialization guard: a re-sourced `omarchy10k.bash` returns immediately when it is already set in the shell. |
+| `KEYMAP` | Bash / ble.sh | Adapter (env channel) | Current readline keymap. Forwarded to the daemon as the env-channel key `vi_mode`; when empty (vanilla bash outside bind-based callbacks) nothing is emitted. |
+| `vi_mode` (env-channel key) | Adapter (from `KEYMAP`) | Daemon (`segments/character.rs`) | Vi-mode signal for `[segments.character] vi_mode`. Any value starting with `n`/`N` renders the NORMAL glyph `❮`; INSERT or absent keeps the configured prompt char. |
 | `O10K_NOTIFY_THRESHOLD` | User (optional) | Adapter | Initial desktop notification threshold in ms (default `10000`). Overridden at runtime by `notify_threshold_ms` from daemon prompt response. |
 | `GHOSTTY_RESOURCES_DIR` | Ghostty | Adapter | Ghostty terminal detection |
 | `KITTY_SHELL_INTEGRATION` | Kitty | Adapter | Kitty terminal detection |
@@ -93,11 +101,18 @@
 | Path | Purpose | Created by |
 |------|---------|------------|
 | `~/.config/omarchy10k/config.toml` | User configuration | User or Quattro panel |
+| `~/.config/omarchy10k/scripts/` | Quick-action user scripts (`omarchy10k script list` / `script run <name>`; 30s default timeout, traversal-guarded, local-exec fallback without a daemon) | User |
 | `~/.local/state/omarchy/current/theme/colors.toml` | Generated theme palette | Omarchy theme engine |
 | `~/.local/state/omarchy/current/theme.name` | Current theme name | Omarchy theme engine |
-| `$XDG_RUNTIME_DIR/omarchy10k-{pid}.sock` | Daemon socket | `omarchy10kd` |
+| `$XDG_RUNTIME_DIR/omarchy10k-{ppid}.pid` | Daemon PID file written at spawn | Bash adapter |
+| `$XDG_RUNTIME_DIR/omarchy10k-{ppid}.sock` | Daemon socket — `/run/user/<uid>/omarchy10k-<ppid>.sock` in the default XDG layout (fallback `/tmp`); `<ppid>` is the shell PID, or a fixed `omarchy10k-<name>.sock` when `O10K_SOCK_NAME` is set | `omarchy10kd` |
 | `$XDG_CACHE_HOME/omarchy10k/last_prompt` | Instant prompt cache (default `~/.cache/omarchy10k/last_prompt`) | Bash adapter / bridge |
-| `~/.config/omarchy/plugins/community.omarchy10k/` | Installed Quattro plugin | User (manual copy) |
-| `~/.config/omarchy/hooks/theme-set.d/omarchy10k` | Theme switch hook | User (manual install) |
+| `~/.config/omarchy/plugins/community.omarchy10k/` | Installed Quattro plugin (panel + gallery overlay) | install.sh / User |
+| `~/.config/omarchy/hooks/<event>.d/omarchy10k` | Desktop hook drop-ins for `theme-set` (reload_theme fan-out), `battery-low` (toast with daemon context), `post-update` (update check), and `font-set` (palette reload) | install.sh |
+| `${XDG_STATE_HOME:-$HOME/.local/state}/omarchy10k/intro_shown` | One-time first-run intro marker | CLI (`omarchy10k intro`) |
 | `$XDG_CACHE_HOME/omarchy10k/.first-run-hint-shown` | First-run hint gate flag | Bash adapter |
 | `~/.local/share/blesh/ble.sh` | ble.sh installation | User |
+
+| `~/.config/omarchy10k/ghostty.conf` | Static terminal personality include (`shell-integration = none`); wired into the ghostty config by install.sh |
+| `~/.local/state/omarchy/current/theme/o10k-ghostty.conf` / `o10k-foot.ini` | Theme-rendered non-color terminal personality (cursor accent) from `templates/themed/o10k-*.tpl` |
+| `~/.local/state/omarchy/current/theme/o10k-blesh.bash` / `o10k-delta.gitconfig` | Rendered ble.sh faces / delta theme (self-gating; delta opt-in via gitconfig include) |

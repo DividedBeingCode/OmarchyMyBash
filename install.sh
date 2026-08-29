@@ -13,6 +13,14 @@ HOOK_DIR="${HOME}/.config/omarchy/hooks/theme-set.d"
 TEMPLATE_DIR="${HOME}/.local/share/omarchy/templates"
 BASHRC="${HOME}/.bashrc"
 INIT_LINE='eval "$(omarchy10k init bash)"'
+TERMINAL_STATIC_GHOSTTY="${CONFIG_DIR}/ghostty.conf"
+GHOSTTY_CONFIG="${HOME}/.config/ghostty/config"
+FOOT_CONFIG="${HOME}/.config/foot/foot.ini"
+GHOSTTY_STATIC_LINE='config-file = ?"~/.config/omarchy10k/ghostty.conf"'
+GHOSTTY_THEME_LINE='config-file = ?"~/.local/state/omarchy/current/theme/o10k-ghostty.conf"'
+FOOT_THEME_LINE='include=~/.local/state/omarchy/current/theme/o10k-foot.ini'
+FOOT_OMARCHY_ANCHOR='include=~/.local/state/omarchy/current/theme/foot.ini'
+O10K_FOOT_MARKER='# omarchy10k terminal include'
 UPDATE_MODE=false
 
 C_GREEN='\033[1;32m'
@@ -39,7 +47,7 @@ case "${1:-}" in
             omarchy-shell shell rescanPlugins 2>/dev/null && ok "Quattro plugin rescan triggered" || true
             warn "If the widget was enabled, also remove it from Setup > Plugins (or ~/.config/omarchy/shell.json)."
         fi
-        rm -f "${HOOK_DIR}/omarchy10k" && ok "Removed theme hook" || warn "Hook not found"
+        for HOOK_EVENT in theme-set battery-low post-update font-set; do rm -f "${HOME}/.config/omarchy/hooks/${HOOK_EVENT}.d/omarchy10k"; done && ok "Removed hooks" || warn "Hooks not found"
         rm -f "${TEMPLATE_DIR}/omarchy10k.toml.tpl" && ok "Removed theme template" || true
         rm -rf "${DATA_DIR}" && ok "Removed data directory" || true
 
@@ -52,6 +60,20 @@ case "${1:-}" in
 
         rm -f "${HOME}/.config/omarchy/themed/"o10k-*.tpl && ok "Removed theme rice templates" || true
         rm -f "${CONFIG_DIR}/tools.sh" && ok "Removed modern CLI layer" || true
+        # Terminal include layer: static personality file + appended include lines.
+        rm -f "${TERMINAL_STATIC_GHOSTTY}" && ok "Removed static ghostty personality file" || true
+        if [[ -f "$GHOSTTY_CONFIG" ]] && grep -qF 'omarchy10k' "$GHOSTTY_CONFIG"; then
+            sed -i '\|config-file = ?"~/.config/omarchy10k/ghostty\.conf"|d' "$GHOSTTY_CONFIG"
+            sed -i '\|config-file = ?"~/.local/state/omarchy/current/theme/o10k-ghostty\.conf"|d' "$GHOSTTY_CONFIG"
+            ok "Removed o10k includes from ${GHOSTTY_CONFIG}"
+        fi
+        if [[ -f "$FOOT_CONFIG" ]] && grep -qF 'o10k-foot.ini' "$FOOT_CONFIG"; then
+            sed -i '\|include=.*o10k-foot\.ini|d' "$FOOT_CONFIG"
+            sed -i '\|omarchy10k terminal include|d' "$FOOT_CONFIG"
+            ok "Removed o10k include from ${FOOT_CONFIG}"
+        fi
+        rm -f "${HOME}/.local/state/omarchy/current/theme/o10k-ghostty.conf" \
+              "${HOME}/.local/state/omarchy/current/theme/o10k-foot.ini" && true
         for link in "${HOME}/.config/yazi/theme.toml" "${HOME}/.config/cava/config"; do
             if [[ -L "$link" ]] && [[ "$(readlink "$link")" == *"/current/theme/o10k-"* ]]; then
                 rm -f "$link" && ok "Removed rice link: ${link}"
@@ -233,16 +255,19 @@ else
     warn "Quattro plugin directory not found; skipping"
 fi
 
-# Step 5: Theme hook (optional)
-if [[ -f "${SCRIPT_DIR}/hooks/theme-set" ]]; then
-    info "Installing theme-set hook..."
-    mkdir -p "$HOOK_DIR"
-    cp "${SCRIPT_DIR}/hooks/theme-set" "${HOOK_DIR}/omarchy10k"
-    chmod +x "${HOOK_DIR}/omarchy10k"
-    ok "Theme hook installed"
-else
-    warn "Theme hook not found; skipping"
-fi
+# Step 5: Desktop hooks (optional) — theme fan-out + battery-low, post-update,
+# and font-set reactions. Each installs as a drop-in under its event dir.
+for HOOK_EVENT in theme-set battery-low post-update font-set; do
+    if [[ -f "${SCRIPT_DIR}/hooks/${HOOK_EVENT}" ]]; then
+        EVENT_DIR="${HOME}/.config/omarchy/hooks/${HOOK_EVENT}.d"
+        mkdir -p "$EVENT_DIR"
+        cp "${SCRIPT_DIR}/hooks/${HOOK_EVENT}" "${EVENT_DIR}/omarchy10k"
+        chmod +x "${EVENT_DIR}/omarchy10k"
+        ok "${HOOK_EVENT} hook installed"
+    elif [[ "$HOOK_EVENT" == "theme-set" ]]; then
+        warn "Theme hook not found; skipping"
+    fi
+done
 
 # Step 6: Theme bridge template (optional)
 if [[ -f "${SCRIPT_DIR}/templates/omarchy10k.toml.tpl" ]]; then
@@ -306,6 +331,118 @@ if ls "${SCRIPT_DIR}/templates/themed/"o10k-*.tpl &>/dev/null; then
     o10k_link_rice "${HOME}/.config/cava/config"     "${RICE_STATE_DIR}/o10k-cava.config"
 else
     warn "No rice templates found; skipping"
+fi
+
+# ── Step 8: Terminal include layer ───────────────────────────────────────────
+# Static personality file (installed once, never regenerated) plus optional
+# config-file/include lines appended to the terminal configs. Idempotent:
+# lines already present are never duplicated. A timestamped backup is taken
+# before any modification, and exactly what was added is printed.
+#
+# Precedence is positional: terminal emulators apply later values over
+# earlier ones, so appending at the end gives o10k precedence over Omarchy's
+# static defaults, while any user key placed after these lines still wins.
+
+o10k_backup() {
+    local file="$1"
+    [[ -f "$file" ]] && cp "$file" "${file}.bak.$(date +%Y%m%d-%H%M%S)"
+}
+
+o10k_append_unique() {
+    # $1=file $2=line — append only when absent (fixed-string substring check)
+    if grep -qF "$2" "$1"; then
+        return 0
+    fi
+    printf '%s\n' "$2" >> "$1"
+    ok "Added to $1: $2"
+}
+
+info "Terminal include layer..."
+
+# 8a. Static personality file — holds only theme-invariant settings.
+if [[ ! -f "$TERMINAL_STATIC_GHOSTTY" ]]; then
+    mkdir -p "$CONFIG_DIR"
+    cat > "$TERMINAL_STATIC_GHOSTTY" <<'EOF'
+# Omarchy10k requires ownership of Bash prompt/pre-exec integration.
+# Ghostty's injected Bash hook uses PS0, which Omarchy10k treats as
+# literal prompt text.
+shell-integration = none
+EOF
+    ok "Installed ${TERMINAL_STATIC_GHOSTTY}"
+else
+    ok "Static personality file already present"
+fi
+
+# 8b. Ghostty: append the two optional config-file includes.
+if [[ -f "$GHOSTTY_CONFIG" ]]; then
+    if grep -qF "$GHOSTTY_STATIC_LINE" "$GHOSTTY_CONFIG" && grep -qF "$GHOSTTY_THEME_LINE" "$GHOSTTY_CONFIG"; then
+        ok "Ghostty includes already present"
+    else
+        o10k_backup "$GHOSTTY_CONFIG"
+        o10k_append_unique "$GHOSTTY_CONFIG" "$GHOSTTY_STATIC_LINE"
+        o10k_append_unique "$GHOSTTY_CONFIG" "$GHOSTTY_THEME_LINE"
+    fi
+else
+    warn "Ghostty config not found; skipping include wiring"
+fi
+
+# 8c. foot: multiple include= directives verified against the installed foot
+# (man foot.ini: "Multiple include directives are allowed, but only one path
+# per directive"). If unverifiable, print the snippet for manual addition
+# instead of writing it.
+    # Capture first: `man | grep -q` fails under pipefail when grep exits
+    # early (SIGPIPE). Verification must depend only on the man page text.
+    FOOT_MAN="$(man foot.ini 2>/dev/null || true)"
+    if command -v foot &>/dev/null; then
+        if ! [[ -f "$FOOT_CONFIG" ]]; then
+            warn "foot config not found; skipping include wiring"
+        elif [[ "$FOOT_MAN" == *"Multiple include directives are allowed"* ]]; then
+            if grep -qF "$FOOT_THEME_LINE" "$FOOT_CONFIG"; then
+                ok "foot include already present"
+            else
+            # Must live under [main] and AFTER Omarchy's theme include (later
+            # values win). Insert after the Omarchy include anchor when
+            # present, else directly after the [main] header, else append a
+            # small [main] block.
+            if grep -qF "$FOOT_OMARCHY_ANCHOR" "$FOOT_CONFIG"; then
+                anchor="$FOOT_OMARCHY_ANCHOR"
+            elif grep -q '^\[main\]' "$FOOT_CONFIG"; then
+                anchor='[main]'
+            else
+                anchor=''
+            fi
+            if [[ -n "$anchor" ]]; then
+                awk -v anchor="$anchor" -v line="$FOOT_THEME_LINE" -v marker="$O10K_FOOT_MARKER" '
+                    { print }
+                    !done && $0 == anchor {
+                        print marker
+                        print line
+                        done = 1
+                    }
+                    END {
+                        if (!done && NR > 0) {
+                            print ""
+                            print "[main]"
+                            print marker
+                            print line
+                        }
+                    }
+                ' "$FOOT_CONFIG" > "${FOOT_CONFIG}.tmp" && mv "${FOOT_CONFIG}.tmp" "$FOOT_CONFIG"
+            else
+                {
+                    printf '\n[main]\n%s\n%s\n' "$O10K_FOOT_MARKER" "$FOOT_THEME_LINE"
+                } >> "$FOOT_CONFIG"
+            fi
+            ok "Added to $FOOT_CONFIG: $FOOT_THEME_LINE"
+        fi
+    else
+        warn "Could not verify multiple-include support for the installed foot; add manually:"
+        printf '        (under [main], after Omarchy'\''s theme include)\n'
+        printf '        %s\n' "$O10K_FOOT_MARKER"
+        printf '        %s\n' "$FOOT_THEME_LINE"
+    fi
+else
+    warn "foot not installed; skipping foot include wiring"
 fi
 
 # Modern CLI layer: aliases + tool inits, sourced by the Bash adapter.

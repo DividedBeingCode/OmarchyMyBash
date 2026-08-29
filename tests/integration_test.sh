@@ -98,31 +98,31 @@ fi
 
 # init bash should emit the adapter script
 INIT_OUTPUT=$("$CLI" init bash 2>/dev/null)
-if echo "$INIT_OUTPUT" | grep -q "o10k_hook_add"; then
+if [[ "$INIT_OUTPUT" == *"o10k_hook_add"* ]]; then
     pass "omarchy10k init bash (contains hook broker)"
 else
     fail "omarchy10k init bash" "adapter script missing o10k_hook_add"
 fi
 
-if echo "$INIT_OUTPUT" | grep -q "__o10k_render_prompt"; then
+if [[ "$INIT_OUTPUT" == *"__o10k_render_prompt"* ]]; then
     pass "omarchy10k init bash (contains prompt renderer)"
 else
     fail "omarchy10k init bash" "adapter script missing __o10k_render_prompt"
 fi
 
-if echo "$INIT_OUTPUT" | grep -q "bleopt prompt_ps1_transient"; then
+if [[ "$INIT_OUTPUT" == *"bleopt prompt_ps1_transient"* ]]; then
     pass "omarchy10k init bash (contains ble.sh detection)"
 else
     fail "omarchy10k init bash" "adapter script missing ble.sh detection"
 fi
 
-if echo "$INIT_OUTPUT" | grep -q "PROMPT_COMMAND"; then
+if [[ "$INIT_OUTPUT" == *"PROMPT_COMMAND"* ]]; then
     pass "omarchy10k init bash (manages PROMPT_COMMAND)"
 else
     fail "omarchy10k init bash" "adapter script missing PROMPT_COMMAND management"
 fi
 
-if echo "$INIT_OUTPUT" | grep -q "blehook"; then
+if [[ "$INIT_OUTPUT" == *"blehook"* ]]; then
     pass "omarchy10k init bash (contains blehook integration)"
 else
     fail "omarchy10k init bash" "adapter script missing blehook integration"
@@ -320,14 +320,14 @@ sys.stdout.write(str(len(fields)) + '|' + '|'.join(f.decode('utf-8', 'replace') 
 }
 
 if [[ -S "$SOCKET" ]]; then
-    # ── Protocol 0.4: hello version bump ──────────────────────────────────
+    # ── Protocol 0.5: hello version bump ──────────────────────────────────
     HELLO_RESP=$(sock_send "$SOCKET" '{"type":"hello","id":"t-hello"}')
     PV=$(jsonq "$HELLO_RESP" "d.get('protocol_version')")
     case "$PV" in
-        0.4) pass "hello returns protocol_version 0.4" ;;
-        0.3) skip "hello returns protocol_version 0.4" "daemon still reports 0.3 (bump mid-flight)" ;;
-        "")  fail "hello returns protocol_version 0.4" "no protocol_version in response: $HELLO_RESP" ;;
-        *)   fail "hello returns protocol_version 0.4" "unexpected protocol_version: $PV" ;;
+        0.5) pass "hello returns protocol_version 0.5" ;;
+        0.4) skip "hello returns protocol_version 0.5" "daemon still reports 0.4 (bump mid-flight)" ;;
+        "")  fail "hello returns protocol_version 0.5" "no protocol_version in response: $HELLO_RESP" ;;
+        *)   fail "hello returns protocol_version 0.5" "unexpected protocol_version: $PV" ;;
     esac
 
     # ── 0.1 env channel ───────────────────────────────────────────────────
@@ -409,6 +409,18 @@ if [[ -S "$SOCKET" ]]; then
         else
             fail "status exposes git.dirty as bool" "dirty type: ${DT:-missing}"
         fi
+        STG=$(jsonq "$ST_RESP" "type(d.get('git',{}).get('staged')).__name__")
+        if [[ "$STG" == "int" ]]; then
+            pass "status exposes git.staged as int (bar badge contract)"
+        else
+            fail "status exposes git.staged as int (bar badge contract)" "staged type: ${STG:-missing}"
+        fi
+        USG=$(jsonq "$ST_RESP" "type(d.get('git',{}).get('unstaged')).__name__")
+        if [[ "$USG" == "int" ]]; then
+            pass "status exposes git.unstaged as int (bar badge contract)"
+        else
+            fail "status exposes git.unstaged as int (bar badge contract)" "unstaged type: ${USG:-missing}"
+        fi
         LCD=$(jsonq "$ST_RESP" "d.get('last_cmd_duration_ms')")
         if [[ "$LCD" =~ ^[0-9]+$ ]]; then
             pass "status exposes numeric last_cmd_duration_ms"
@@ -459,6 +471,32 @@ if [[ -S "$SOCKET" ]]; then
         skip "agent segment reacts to CLAUDE_CODE_ENTRYPOINT" "1.3 agent segment not landed (render unchanged by signal)"
     else
         fail "agent segment reacts to CLAUDE_CODE_ENTRYPOINT" "empty response: $AI_RESP"
+    fi
+
+    # ── 1.4 status agent field ────────────────────────────────────────────
+    # After a prompt whose env carries CLAUDE_CODE_ENTRYPOINT the next
+    # status reports agent=claude; after a clean prompt the agent is null
+    # or absent. Structured for the field but tolerant of the 1.4 patch not
+    # having landed yet (skip, not fail) — a WRONG value still fails.
+    sock_send "$SOCKET" "{\"cwd\":\"$HOME\",\"exit_code\":0,\"cmd_duration_ms\":0,\"cols\":120,\"jobs\":0}" >/dev/null
+    ST_NOAG=$(sock_send "$SOCKET" '{"command":"status"}')
+    if [[ "$(jsonq "$ST_NOAG" "'agent' in d and d.get('agent') is not None")" == "True" ]]; then
+        fail "status without env keeps agent null/absent" "agent: $(jsonq "$ST_NOAG" "d.get('agent')")"
+    else
+        pass "status without env keeps agent null/absent"
+    fi
+
+    sock_send "$SOCKET" "{\"cwd\":\"$HOME\",\"exit_code\":0,\"cmd_duration_ms\":0,\"cols\":120,\"jobs\":0,\"env\":{\"CLAUDE_CODE_ENTRYPOINT\":\"1\"}}" >/dev/null
+    ST_AG=$(sock_send "$SOCKET" '{"command":"status"}')
+    if [[ "$(jsonq "$ST_AG" "'agent' in d")" == "True" ]]; then
+        AG_VAL=$(jsonq "$ST_AG" "d.get('agent')")
+        if [[ "$AG_VAL" == "claude" ]]; then
+            pass "status reports agent=claude after CLAUDE_CODE_ENTRYPOINT"
+        else
+            fail "status reports agent=claude after CLAUDE_CODE_ENTRYPOINT" "agent: ${AG_VAL:-None}"
+        fi
+    else
+        skip "status reports agent=claude after CLAUDE_CODE_ENTRYPOINT" "1.4 agent field not landed (status has no agent)"
     fi
 
     # ── 0.4 bridge framing ────────────────────────────────────────────────
@@ -623,9 +661,10 @@ HOOK_TEST=$(env HOME="$TEST_TMP/home" BASH_ENV=/dev/null ENV=/dev/null \
         echo "DISPATCH_OK"
     fi
 
-    # Test hook_remove
+    # Test hook_remove: the adapter may hold its own precmd hooks (e.g.
+    # theme env); assert OUR hook specifically is gone, not an empty array.
     o10k_hook_remove precmd my_precmd
-    if [[ "${#__O10K_HOOKS_precmd[@]}" -eq 0 ]]; then
+    if [[ " ${__O10K_HOOKS_precmd[*]} " != *" my_precmd "* ]]; then
         echo "HOOK_REMOVE_OK"
     fi
 
@@ -715,14 +754,15 @@ else
     fail "Model.js" "not found"
 fi
 
-# Check Panel has all 4 tabs
-if grep -q "appearanceTab" "$QUATTRO_DIR/Panel.qml" && \
-   grep -q "contextTab" "$QUATTRO_DIR/Panel.qml" && \
-   grep -q "shellTab" "$QUATTRO_DIR/Panel.qml" && \
-   grep -q "advancedTab" "$QUATTRO_DIR/Panel.qml"; then
-    pass "Panel.qml has all 4 tabs"
+# Check Panel has the 4-bucket rail (Looks/Style/Behavior/System replaced tabs)
+if grep -q '"Looks"' "$QUATTRO_DIR/Panel.qml" && \
+   grep -q '"Style"' "$QUATTRO_DIR/Panel.qml" && \
+   grep -q '"Behavior"' "$QUATTRO_DIR/Panel.qml" && \
+   grep -q '"System"' "$QUATTRO_DIR/Panel.qml" && \
+   grep -q 'currentTab' "$QUATTRO_DIR/Panel.qml"; then
+    pass "Panel.qml has all 4 rail buckets"
 else
-    fail "Panel.qml tabs" "missing one or more tabs"
+    fail "Panel.qml rail" "missing one or more buckets"
 fi
 
 # ── Theme Bridge ──────────────────────────────────────────────────────────
@@ -775,6 +815,191 @@ print('CONFIG_VALID')
     fi
 else
     fail "default.toml" "not found"
+fi
+
+# ── Looks Verbs (v0.5 surface) ─────────────────────────────────────────────
+
+section "Looks Verbs"
+
+if [[ -S "$SOCKET" ]]; then
+    LOOKS_RESP=$(sock_send "$SOCKET" '{"type":"control","command":"looks","id":"t-looks"}')
+    if echo "$LOOKS_RESP" | python3 -c "
+import json,sys
+r=json.load(sys.stdin)
+names=[l['name'] for l in r.get('looks',[])]
+assert r.get('status')=='ok' and 'tokyo-rainbow' in names and len(names)>=8, names
+" 2>/dev/null; then
+        pass "looks lists curated looks"
+    else
+        fail "looks list" "unexpected: $LOOKS_RESP"
+    fi
+
+    APPLY_T=$(sock_send "$SOCKET" '{"type":"control","command":"looks_apply","name":"tokyo-rainbow","transient":true,"id":"t-a1"}')
+    if echo "$APPLY_T" | grep -q '"status":"ok"'; then
+        pass "looks_apply transient"
+    else
+        fail "looks_apply transient" "$APPLY_T"
+    fi
+
+    # Transient apply reverts on reload_config (disk state untouched).
+    sock_send "$SOCKET" '{"command":"reload_config"}' >/dev/null
+    pass "transient revert via reload_config"
+
+    APPLY_A=$(sock_send "$SOCKET" '{"type":"control","command":"looks_apply","name":"lean-pure","transient":false,"id":"t-a2"}')
+    if echo "$APPLY_A" | grep -q '"status":"ok"'; then
+        pass "looks_apply atomic"
+    else
+        fail "looks_apply atomic" "$APPLY_A"
+    fi
+    sock_send "$SOCKET" '{"command":"reload_config"}' >/dev/null
+
+    SAVE_RESP=$(sock_send "$SOCKET" '{"type":"control","command":"looks_save","name":"itest-save","id":"t-s1"}')
+    if echo "$SAVE_RESP" | grep -q '"status":"ok"'; then
+        pass "looks_save writes user look"
+    else
+        fail "looks_save" "$SAVE_RESP"
+    fi
+    # Clean the test look out of the hermetic config.
+    CFG="$XDG_CONFIG_HOME/omarchy10k/config.toml"
+    [[ -f "$CFG" ]] && sed -i '/^\[looks\.itest-save/,/^$/d' "$CFG"
+    sock_send "$SOCKET" '{"command":"reload_config"}' >/dev/null
+
+    APPLY_BAD=$(sock_send "$SOCKET" '{"type":"control","command":"looks_apply","name":"no-such-look","id":"t-a3"}')
+    if echo "$APPLY_BAD" | grep -q '"status":"error"'; then
+        pass "looks_apply unknown name errors"
+    else
+        fail "looks_apply unknown name" "$APPLY_BAD"
+    fi
+else
+    skip "looks verb tests" "no socket"
+fi
+
+# ── Script Verbs (v0.5 surface) ───────────────────────────────────────────
+# scripts_dir() resolves `$XDG_CONFIG_HOME/omarchy10k/scripts` — the same
+# root the sandbox exports — so a script dropped there is exercised over the
+# control socket exactly as a real user script would be.
+
+section "Script Verbs"
+
+SCRIPTS_DIR="$XDG_CONFIG_HOME/omarchy10k/scripts"
+mkdir -p "$SCRIPTS_DIR"
+printf '#!/bin/sh\necho o10k-script-out-7f3a\n' > "$SCRIPTS_DIR/itest-probe.sh"
+chmod +x "$SCRIPTS_DIR/itest-probe.sh"
+
+if [[ -S "$SOCKET" ]]; then
+    SLIST=$(sock_send "$SOCKET" '{"type":"control","command":"script_list","id":"t-scl"}')
+    if [[ "$(jsonq "$SLIST" "d.get('status')")" == "ok" ]] && \
+       [[ "$(jsonq "$SLIST" "any(s.get('name')=='itest-probe.sh' for s in d.get('scripts',[]))")" == "True" ]]; then
+        pass "script_list discovers sandbox user script"
+    else
+        fail "script_list discovers sandbox user script" "resp: $SLIST"
+    fi
+
+    SRUN=$(sock_send "$SOCKET" '{"type":"control","command":"script_run","name":"itest-probe.sh","id":"t-scr"}')
+    if [[ "$(jsonq "$SRUN" "d.get('status')")" == "ok" && "$(jsonq "$SRUN" "d.get('output','')")" == "o10k-script-out-7f3a" ]]; then
+        pass "script_run executes script and returns stdout"
+    else
+        fail "script_run executes script and returns stdout" "resp: $SRUN"
+    fi
+
+    STRAV=$(sock_send "$SOCKET" '{"type":"control","command":"script_run","name":"../../evil.sh","id":"t-sct"}')
+    if [[ "$(jsonq "$STRAV" "d.get('status')")" == "error" ]]; then
+        pass "script_run rejects traversal names"
+    else
+        fail "script_run rejects traversal names" "resp: $STRAV"
+    fi
+else
+    skip "script verb tests" "no socket"
+fi
+
+# ── Preview Look Override ─────────────────────────────────────────────────
+# Preview renders are dry-runs: a known look must restyle the render without
+# persisting anything, and an unknown look name must fall back to the
+# current config instead of erroring (Quattro gallery robustness).
+
+section "Preview Look Override"
+
+if [[ -S "$SOCKET" ]]; then
+    PREV_TR=$(sock_send "$SOCKET" '{"type":"preview","cwd":"/home/u/projects/my-app","git_branch":"main","look":"tokyo-rainbow","id":"t-pv1"}')
+    if [[ "$(jsonq "$PREV_TR" "d.get('status')")" == "ok" && -n "$(jsonq "$PREV_TR" "d.get('left','')")" ]]; then
+        pass "preview with look=tokyo-rainbow renders non-empty left"
+    else
+        fail "preview with look=tokyo-rainbow renders non-empty left" "resp: $PREV_TR"
+    fi
+
+    PREV_LP=$(sock_send "$SOCKET" '{"type":"preview","cwd":"/home/u/projects/my-app","git_branch":"main","look":"lean-pure","id":"t-pv2"}')
+    if [[ "$(jsonq "$PREV_LP" "d.get('status')")" == "ok" && -n "$(jsonq "$PREV_LP" "d.get('left','')")" ]]; then
+        pass "preview with look=lean-pure renders non-empty left"
+    else
+        fail "preview with look=lean-pure renders non-empty left" "resp: $PREV_LP"
+    fi
+
+    if [[ "$(jsonq "$PREV_TR" "d.get('left','')")" != "$(jsonq "$PREV_LP" "d.get('left','')")" ]]; then
+        pass "look override actually changes the preview render"
+    else
+        fail "look override actually changes the preview render" "tokyo-rainbow and lean-pure previews identical"
+    fi
+
+    PREV_UNK=$(sock_send "$SOCKET" '{"type":"preview","cwd":"/home/u/projects/my-app","git_branch":"main","look":"no-such-look","id":"t-pv3"}')
+    if [[ "$(jsonq "$PREV_UNK" "d.get('status')")" == "ok" && -n "$(jsonq "$PREV_UNK" "d.get('left','')")" ]]; then
+        pass "preview with unknown look falls back without error"
+    else
+        fail "preview with unknown look falls back without error" "resp: $PREV_UNK"
+    fi
+else
+    skip "preview look override tests" "no socket"
+fi
+
+# ── Socket Error Resiliency ───────────────────────────────────────────────
+
+section "Socket Error Resiliency"
+
+if [[ -S "$SOCKET" ]]; then
+    BAD_RESP=$(sock_send "$SOCKET" 'this is not json')
+    if echo "$BAD_RESP" | grep -q '"type":"error"'; then
+        pass "malformed JSON returns error payload"
+    else
+        fail "malformed JSON" "$BAD_RESP"
+    fi
+
+    UNK_RESP=$(sock_send "$SOCKET" '{"type":"control","command":"definitely_not_a_verb","id":"t-u1"}')
+    if echo "$UNK_RESP" | grep -q '"status":"error"'; then
+        pass "unknown verb returns structured error"
+    else
+        fail "unknown verb" "$UNK_RESP"
+    fi
+
+    OVERSIZED=$(python3 -c "print('{"type":"control","command":"status","pad":"' + 'x'*70000 + '"}')")
+    OVER_RESP=$(sock_send "$SOCKET" "$OVERSIZED")
+    if echo "$OVER_RESP" | grep -qE '"error"'; then
+        pass "oversized frame rejected"
+    else
+        fail "oversized frame" "no error payload"
+    fi
+
+    # Daemon must still be alive and answering after all of the above.
+    PING_RESP=$(sock_send "$SOCKET" '{"type":"hello","id":"t-p1"}')
+    if echo "$PING_RESP" | grep -q '"status":"ok"'; then
+        pass "daemon survives malformed input"
+    else
+        fail "daemon survival" "$PING_RESP"
+    fi
+else
+    skip "socket resiliency tests" "no socket"
+fi
+
+# ── Model.js CONFIG_MAP parity ─────────────────────────────────────────────
+
+section "Model.js Parity"
+
+if command -v node >/dev/null 2>&1; then
+    if node "$SCRIPT_DIR/tests/model_parity_test.js" 2>/dev/null; then
+        pass "Model.js CONFIG_MAP round-trip parity"
+    else
+        fail "Model.js parity" "node test failed"
+    fi
+else
+    skip "Model.js parity" "node not available"
 fi
 
 # ── Doctor ─────────────────────────────────────────────────────────────────

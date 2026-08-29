@@ -22,13 +22,21 @@ export LESS_TERMCAP_so=$'\e[48;2;{{ lighter_background_rgb }}m\e[38;2;{{ bright_
 export LESS_TERMCAP_se=$'\e[0m'
 
 # ── bat ─────────────────────────────────────────────────────────────────────
-# bat syntax themes are named bundles, not palettes — pick the closest match
-# for the theme's light/dark mode. True per-theme syntax bundles are a later
-# generator feature.
-if [[ "{{ mode }}" == "light" ]]; then
-    export BAT_THEME="Catppuccin Latte"
-else
-    export BAT_THEME="Catppuccin Mocha"
+# Omarchy deliberately sets BAT_THEME=ansi so bat inherits the terminal
+# palette it already keeps theme-synced. o10k only overrides that when the
+# user opted into named syntax bundles ([rice] bat_theme = "themed" in
+# config.toml). Default (ansi) emits NO BAT_THEME line here — the platform
+# default stands. The engine has no template conditionals, so the gate is
+# a shell-side grep, evaluated at source time only (init + theme switches).
+if grep -qsE '^\s*bat_theme\s*=\s*"themed"' \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy10k/config.toml"; then
+    # bat syntax themes are named bundles, not palettes — pick the closest
+    # match for the theme's light/dark mode.
+    if [[ "{{ mode }}" == "light" ]]; then
+        export BAT_THEME="Catppuccin Latte"
+    else
+        export BAT_THEME="Catppuccin Mocha"
+    fi
 fi
 
 # ── lazygit ──────────────────────────────────────────────────────────────────

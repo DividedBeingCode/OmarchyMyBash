@@ -46,6 +46,8 @@ source = "omarchy"         # omarchy | custom | hybrid | terminal
 strategy = "smart"          # smart | full | truncate
 max_length = 40
 repo_root_style = "bold"
+unique = false              # truncate_to_unique: shortest unambiguous path components
+anchors = [".git", "Cargo.toml", "package.json", "pyproject.toml", "go.mod", "Gemfile", "flake.nix", "README.md"]
 
 [git]
 enabled = true
@@ -99,7 +101,6 @@ show_namespace = true
 enabled = false             # shows current time in prompt
 format = "%H:%M"            # %H:%M | %H:%M:%S | %I:%M %p
 
-[directory]                 # TOP-LEVEL table (not [segments.directory])
 strategy = "smart"          # smart | flat | compact
 max_length = 40
 repo_root_style = "bold"
@@ -157,3 +158,32 @@ log_level = "warn"          # trace | debug | info | warn | error
 # signal segment.
 [env.watch]
 keys = ["VIRTUAL_ENV", "CONDA_DEFAULT_ENV", "MISE_NODE_VERSION", "MISE_PYTHON_VERSION", "MISE_RUBY_VERSION", "MISE_GO_VERSION", "MISE_RUST_VERSION", "IN_NIX_SHELL", "DISTROBOX_ENTER_PATH", "container", "KUBECONFIG", "DIRENV_DIR", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_HOME"]
+
+# ── Shell Layer (platform coexistence, wave C2) ──────────────────────────
+# Claim policy for shell-layer items (ls, lt, cd/zoxide, fzf keys, MANPAGER,
+# grep, …). Resolved once at `omarchy10k init bash` and baked into the
+# emitted adapter — no runtime config reads in the shell. User definitions
+# ALWAYS win and are not configurable. Defaults live in the CLI
+# (crates/omarchy10k, serde/toml-side), not here — this file is
+# documentation and is not parsed.
+#
+# [shell.layer]
+# policy = "extend"          # extend | defer | own | off — global default
+#
+# [shell.layer.overrides]    # per-claim override of the global policy
+# ls = "extend"              # keep Omarchy's eza flags, append --git
+# grep = "defer"             # opt out of the rg-for-grep substitution
+
+# ── Rice Layer (theme-reactive tool configs) ─────────────────────────────
+# Defaults live in serde (crates/omarchy10kd/src/config.rs RiceConfig);
+# this file is documentation and is not parsed.
+#
+# [rice]
+# bat_theme = "ansi"         # ansi | themed — "ansi" (default) defers to
+#                            # Omarchy's BAT_THEME=ansi (bat inherits the
+#                            # theme-synced terminal palette); "themed"
+#                            # picks a named bat bundle per light/dark mode
+# blesh_faces = true         # emit ble.sh face mapping (o10k-blesh.bash.tpl;
+#                            # inert unless ble.sh is active)
+# delta = true               # emit delta theme (o10k-delta.gitconfig.tpl;
+#                            # inert until included from ~/.gitconfig)

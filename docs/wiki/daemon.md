@@ -8,7 +8,7 @@ The daemon is the computational core of Omarchy10k. It holds all state, renders 
 
 Bootstraps everything: config loading, tracing initialization, theme palette, shared state, filesystem watchers, parent-process monitor, and the socket server.
 
-Module tree: `config`, `git`, `layout`, `render`, `segments`, `server`, `style`, `theme`, `terminal`.
+Module tree (declaration order in `main.rs`): `config`, `git`, `looks`, `layout`, `render`, `segments`, `script_exec`, `server`, `style`, `theme`, `terminal`.
 
 ### Startup Sequence
 
@@ -32,6 +32,9 @@ async fn monitor_parent() {
     // If parent is gone: remove socket, exit(0)
 }
 ```
+
+On Linux the daemon additionally calls `prctl(PR_SET_PDEATHSIG, SIGTERM)` at startup (`libc` shim in `main.rs`): the kernel delivers SIGTERM the instant the parent shell dies, closing the PID-recycling race that the `kill(ppid, 0)` poll cannot close (a recycled PID would keep the poll alive indefinitely). The 2-second poll remains as a fallback for non-Linux builds and for a parent that died before the prctl call ran.
+
 
 ### Signal Handlers
 
@@ -57,7 +60,7 @@ The `notify-debouncer-full` crate is declared as a dependency but not imported o
 ## Server (`src/server.rs`)
 
 ```rust
-pub const PROTOCOL_VERSION: &str = "0.3";
+pub const PROTOCOL_VERSION: &str = "0.5";
 ```
 
 ### TypedMessage
@@ -86,6 +89,8 @@ pub struct DaemonState {
     pub git_cache: GitCache,
     pub config_path: PathBuf,
     pub socket_path: PathBuf,
+    pub last_render: RwLock<Option<RenderSummary>>,  // cwd/branch/dirty/counts/duration/exit of the last prompt render (status enrichment)
+    pub started_at: std::time::Instant,              // feeds status.session_age_secs
 }
 ```
 
@@ -106,6 +111,10 @@ run_server(socket_path, state):
         accept connection → spawn handle_connection task
 
 handle_connection(stream, state):
+    reader capped at MAX_FRAME_BYTES (64 KiB, AsyncReadExt::take) — OOM guard
+    loop over lines:
+        line ≥ 64 KiB without newline → {"type":"error","error":"frame too large"}, close connection
+        invalid JSON → {"type":"error","error":<serde msg>}, continue
     parse line as TypedMessage
     match msg.type:
         "hello"     → return protocol_version + server_version
@@ -131,6 +140,7 @@ Connections are persistent — the server reads lines in a loop until EOF. This 
 | `prompt` | Prompt render request (fields in flattened `rest`) |
 | `preview` | Simulated prompt render for Quattro live preview (no git subprocess, no OSC 133) |
 | `config` | Config read/write API |
+| `statusline` | Claude Code statusLine render (no OSC 133, left-only) |
 | *(untagged)* | Backward-compatible: legacy `{"command":"..."}` or bare prompt JSON |
 
 ### Control Commands
@@ -141,15 +151,30 @@ Connections are persistent — the server reads lines in a loop until EOF. This 
 | `reload_theme` | `state.reload_theme()` | Calls `ThemePalette::resolve_palette(&config)`, updates `RwLock<ThemePalette>` |
 | `invalidate_git` | `state.git_cache.invalidate_all()` | Clears all cached git statuses |
 | `shutdown` | Responds `{"status":"bye"}`, removes socket file via `remove_socket_file()` (only if still a socket owned by the current uid), calls `exit(0)` | Clean shutdown with ownership-checked socket cleanup |
-| `status` | Reads process info | Returns `status`, `pid`, `version`, `protocol_version`, `cwd` |
+| `status` | Reads process info + last render summary + live git cache + battery sysfs | Returns `status`, `pid`, `version`, `protocol_version`, `cwd`, plus enrichment: `git` object, `last_cmd_duration_ms`, `last_exit_code`, `session_age_secs`, `battery` |
 | `palette` | Reads in-memory palette | Returns theme colors as hex (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`) |
 | `config_get` | Serializes in-memory config | Returns full config as JSON (requires `Serialize` on Config) |
 | `config_set` | *(via typed `config` message)* | Accepts JSON patch in `rest.config`, recursively merges into TOML on disk (atomic write via tmp+rename), creates file/dirs if missing, returns structured error on TOML parse failure, auto-calls `reload_theme()` when patch touches `[theme]` |
+| `looks` | `looks::all(&config)` | Returns curated + user Looks as `{name, label, patch}` entries; user entries shadow curated names |
+| `looks_apply` | `looks::resolve` → `apply_transient` or `write_config_patch` | Applies a named Look; `transient: true` = in-memory only (revert via `reload_config`), default = atomic disk merge |
+| `looks_save` | snapshot of in-memory config → `write_config_patch` | Writes a `[looks.<name>]` entry (style/glyph/prompt.blank_line snapshot, `palette: "keep"`) |
+| `palettes` | `looks::curated_palette` | Returns the 8 curated palette keys with their `[theme]` patches |
+| `defaults` | `Config::default()` | Returns the full default config as JSON (modified-vs-default comparison) |
+| `script_list` | `script_exec::list_scripts` | Lists executable scripts in `~/.config/omarchy10k/scripts` (traversal-guarded names) |
+| `script_run` | `script_exec::resolve_script` + `run_script` | Executes a named script with a hard timeout (default 30s, `timeout_secs` override) and output capture |
+
+### Hardening (v0.5)
+
+- **64 KiB frame cap** — `const MAX_FRAME_BYTES: usize = 64 * 1024` in `server.rs`. The socket reader is capped via `AsyncReadExt::take(MAX_FRAME_BYTES)`; a line reaching the cap without a newline is answered with `{"type":"error","error":"frame too large"}` and the connection is closed. Prevents a client from growing daemon memory unboundedly (OOM guard).
+- **GitCache size bound** — `git.rs` `schedule_refresh` bounds the repo→status map at `MAX_CACHE_ENTRIES` (256). When the map overflows: expired entries (older than the TTL) are dropped first, then least-recently-fetched entries are evicted until under the cap. Weeks-long sessions visiting hundreds of repos no longer grow the cache unbounded.
+- **Sibling-directory cache size bound** — `segments/directory.rs` bounds its cwd-keyed cache at `MAX_SIBLING_ENTRIES` (512) with the same expired-then-least-recently-stamped eviction policy (see [Wave 1 Internals](#wave-1-internals)).
+- **`PR_SET_PDEATHSIG`** — kernel-enforced parent death signal (see [Parent Process Monitor](#parent-process-monitor)).
+- **`write_config_patch` errors name the cause** — unrepresentable patch values list each failing key with its serde error; the shared patch path serves both `config_set` and `looks_apply`.
 
 ### Hello Response
 
 ```json
-{"type":"hello","status":"ok","protocol_version":"0.3","server_version":"0.2.0"}
+{"type":"hello","status":"ok","protocol_version":"0.5","server_version":"0.4.0"}
 ```
 
 ### Preview Request / Response
@@ -165,6 +190,9 @@ Response omits OSC 133 markers and uses a synthetic `GitStatus` (no subprocess):
 ```json
 {"type":"preview","status":"ok","left":"<ansi prompt>","right":null,"id":"1"}
 ```
+
+
+v0.5 adds a `look` field to the preview request (plus `style_separators`, `style_frame`, `prompt_newline` for the configure wizard). With `look`, the daemon resolves the named Look (user entries shadow curated ones), applies its patch via the transient in-memory merge, and renders that — a dry run; nothing is persisted. An unknown look name falls back to the current config.
 
 Default preview cwd is `~/projects/my-app`; default cols is 120.
 
@@ -245,6 +273,50 @@ The `LayoutPreset` struct in `layout.rs` is retained but no longer called from t
 - If `style.preset` is explicitly set to anything other than `"omarchy"`, it takes precedence
 - If `style.preset` is at its default (`"omarchy"`) and `prompt.layout` is set to a different value, `prompt.layout` drives the style
 - Existing configs with `prompt.layout = "powerline"` continue to work identically
+
+## Looks (`src/looks.rs`)
+
+Added in v0.5. The Look registry: named, atomic appearance bundles. A Look is a named patch over the config tree plus a palette directive. Patches use the same shape as `config_set` payloads, so applying a Look reuses the daemon's atomic single-patch merge (`write_config_patch`).
+
+```rust
+pub struct LookDef {
+    pub name: String,
+    pub label: String,
+    pub patch: serde_json::Value,  // config_set-shaped; glyph shortcuts expanded, palette resolved into a theme sub-patch
+}
+```
+
+### Curated Looks
+
+Eight compiled-in Looks (`looks::curated()`): `omnarchy`, `tokyo-rainbow`, `framed-gradient`, `lean-pure`, `slanted-owl`, `gruvbox-drift`, `rose-classic`, `polar-lean`. Each bundles a style preset, separators, OS icon, prompt characters, git branch icon, frame/gap settings, and (for most) a curated palette patch.
+
+`looks::curated_palette(key)` holds the 8 curated palettes (tokyo-night, catppuccin, gruvbox, nord, dracula, rose-pine, everforest, kanagawa), each a `[theme]` patch (`source: "hybrid"` + 11 custom colors). Moved daemon-side from quattro/Model.js so Looks resolve identically from CLI, gallery, and panel.
+
+### User Looks and Shadowing
+
+User Looks live in `[looks.<name>]` tables in `config.toml` with `label`, `palette`, and `patch` keys. `looks::resolve(name, config)` prefers the user entry over a curated Look of the same name (user shadows curated), expands `glyphs` shortcuts (`os_icon` → `segments.os.icon`, `character` → `segments.character.{success,error,transient}`, `git_branch_icon` → `git.branch_icon`), and applies the `palette` directive:
+
+| Directive | Effect |
+|-----------|--------|
+| `"keep"` (or absent) | Current palette retained |
+| `"theme"` | `theme.source = "omarchy"` |
+| curated key (e.g. `"gruvbox"`) | The curated palette's `theme` patch merged in |
+
+`looks::all(config)` lists curated first (minus shadowed names), then user entries sorted by name — this is the `looks` control verb.
+
+### Transient Apply
+
+`looks::apply_transient(current, patch)` merges the patch into the current **in-memory** config only (JSON→TOML merge + re-serialize round-trip, no file write). `looks_apply` with `transient: true` uses this, then calls `reload_theme()`. The change reverts on any `reload_config` (watcher, control command, config write, or atomic look apply) — disk state is untouched.
+
+## Script Execution (`src/script_exec.rs`)
+
+Added in v0.5. Daemon-side user-script registry and runner for the quick-actions feature (`omarchy10k script`).
+
+- Scripts live in `$XDG_CONFIG_HOME/omarchy10k/scripts` (`scripts_dir()`), must be executable regular files. Trust model: user's own config directory — same trust level as `.bashrc`, nothing network-sourced.
+- `valid_name()` traversal guard: non-empty, no `/`, no `..` substring, does not start with `.`. `resolve_script()` applies it plus regular-file and executable-bit checks.
+- `list_scripts(dir)` returns `{name, path}` entries sorted by name; missing directory → empty list.
+- `run_script(path, timeout_secs)` spawns the script (stdin nulled, stdout/stderr piped, `kill_on_drop`), enforces a hard timeout (`DEFAULT_SCRIPT_TIMEOUT_SECS = 30`), and returns trimmed stdout; non-zero exits carry status + trimmed stderr in the error.
+- `handle_script_control(command, rest)` serves the `script_list` and `script_run` control verbs, sharing the daemon's `{"type":"control", ...}` response shape.
 
 ## Config (`src/config.rs`)
 
@@ -863,6 +935,6 @@ The following issues identified by the [Bug Audit](bug-audit.md) have been fixed
 
 ## Wave 1 Internals
 
-- **Sibling cache** (`segments/directory.rs`): process-local `LazyLock<Mutex<HashMap<PathBuf, SiblingTables>>>`, keyed by cwd, 30s TTL. Each entry caches per-ancestor sibling directory lists + anchor flags, so warm renders with `unique = true` do zero filesystem reads.
+- **Sibling cache** (`segments/directory.rs`): process-local `LazyLock<Mutex<HashMap<PathBuf, SiblingTables>>>`, keyed by cwd, 30s TTL. Each entry caches per-ancestor sibling directory lists + anchor flags, so warm renders with `unique = true` do zero filesystem reads. Size-bounded: when the map reaches `MAX_SIBLING_ENTRIES` (512), expired entries are dropped first, then the least-recently-stamped entries are evicted until under the cap.
 - **Load ring** (`segments/load.rs`): process-local `LazyLock<Mutex<VecDeque<f32>>>`, 16 slots, pushed once per render. Idle shells freeze history by design.
 - **Gradient math** (`theme.rs`): `AnsiColor::lerp(a, b, t)` + `ThemePalette::ramp_color(t)` (two-stage accent→magenta→cyan) + `gap_gradient_endpoints(mode)` (complement rule: blue ≥ red accent → magenta, else cyan). `AnsiColor` is now `Copy`.

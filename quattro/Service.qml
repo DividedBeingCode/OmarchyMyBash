@@ -15,6 +15,7 @@ import "Model.js" as Model
 //   - daemonStatus: "running" | "not running" (mirrors BarWidget semantics)
 //   - sessions: [{ path, shellPid, pid, cwd, branch, dirty, lastCmdMs, ageSecs }]
 //   - lastStatus: enriched `status` response of the primary session
+//   - notifyThresholdMs: [notifications].threshold_ms from cached config (0 = off)
 //   - eventReceived(var event): signal bus for daemon-side push events
 //   - IpcHandler target "community.omarchy10k" (omarchy-shell call …)
 //
@@ -34,6 +35,18 @@ Item {
     property string daemonStatus: "not running"
     property var sessions: []
     property var lastStatus: ({})
+    // Notification threshold in ms from the daemon config ([notifications]
+    // with the deprecated [segments.notification] alias). 0 = notifications
+    // off; 10000 (the daemon default) until the first config_get lands.
+    readonly property int notifyThresholdMs: {
+        var cfg = service._cfgFlat || {}
+        if (cfg["notifications.enabled"] === false) return 0
+        var t = cfg["notifications.threshold_ms"] !== undefined
+            ? cfg["notifications.threshold_ms"]
+            : cfg["segments.notification.threshold_ms"]
+        var n = parseInt(t, 10)
+        return n > 0 ? n : 10000
+    }
     signal eventReceived(var event)
 
     // ── Internal ───────────────────────────────────────────────────────────
@@ -214,6 +227,7 @@ Item {
                     protocol_version: s.protocol_version || null,
                     cwd: s.cwd || null,
                     git: s.git || null,
+                    agent: s.agent || null,
                     last_cmd_duration_ms: s.last_cmd_duration_ms || 0,
                     last_exit_code: s.last_exit_code !== undefined ? s.last_exit_code : null,
                     session_age_secs: s.session_age_secs || 0,
