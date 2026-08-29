@@ -96,13 +96,31 @@ pub async fn run_script(path: &Path, timeout_secs: u64) -> Result<String> {
         // Distinguish from spawn failure for clearer daemon errors.
         bail!("script not found: {}", path.display());
     }
-    let mut child = tokio::process::Command::new(path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .with_context(|| format!("failed to spawn {}", path.display()))?;
+    // A script the user just dropped into the scripts directory can still be
+    // held open for write by the writing process, and exec'ing it then fails
+    // with ETXTBSY ("Text file busy"). That is transient by nature and is
+    // exactly the run-it-right-after-saving case, so retry briefly rather
+    // than reporting a spawn failure. `hook_event.rs` does the same for
+    // freshly-installed hooks.
+    let mut attempt = 0u32;
+    let mut child = loop {
+        let spawned = tokio::process::Command::new(path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn();
+        match spawned {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 5 => {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(10 * attempt as u64)).await;
+            }
+            other => {
+                break other
+                    .with_context(|| format!("failed to spawn {}", path.display()))?
+            }
+        }
+    };
 
     let output = match tokio::time::timeout(
         Duration::from_secs(timeout_secs),
@@ -196,9 +214,19 @@ mod tests {
 
     fn make_script(dir: &Path, name: &str, body: &str, exec: bool) -> PathBuf {
         let path = dir.join(name);
-        std::fs::write(&path, body).unwrap();
+        // Write to a temp name, chmod, then rename into place.
+        //
+        // Exec'ing a file that was just written can fail with ETXTBSY ("Text
+        // file busy") while the writing handle is still being torn down —
+        // observed here as a ~1-in-3 flake ("failed to spawn ... slow.sh").
+        // The rename swaps in a complete inode, so the final path is never
+        // open for write when the runner spawns it. Same fix already applied
+        // to the hook_event tests.
+        let tmp = path.with_extension("o10k-tmp");
+        std::fs::write(&tmp, body).unwrap();
         let mode = if exec { 0o755 } else { 0o644 };
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode)).unwrap();
+        std::fs::rename(&tmp, &path).unwrap();
         path
     }
 
