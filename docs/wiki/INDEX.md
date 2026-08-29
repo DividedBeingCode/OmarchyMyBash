@@ -35,6 +35,7 @@ and the rice layer's include wiring. A daemon watcher feedback loop that leaked
 | [v0.3 Feature Intel](v03-feature-intel.md) | Research-backed feature catalog that informed v0.3: 30 features, compatibility matrix, priority tiers |
 | [Quattro QoL Intel](quattro-qol-intel.md) | Quality-of-life improvements for Quattro integration: live preview, bar intelligence, notifications |
 | [Bug Audit](bug-audit.md) | Correctness audit of v0.3.0: 20 findings ranked by severity, with reproductions and fix directions |
+| [Ricing Intel 2026](ricing-intel-2026.md) | What 2026 terminal ricing does that we do not: unused Kitty-graphics/OSC 52 capabilities, the glyph situation (animals fixed, anime honestly assessed), and a ranked order |
 | [v0.4 Feature Intel](v04-feature-intel.md) | Next-release feature catalog: foundations, headliners, Omarchy desktop integration, onboarding — plus a ratified kill list and watch list |
 
 > **Current known issues:** a full correctness audit of v0.3.0 is recorded in
