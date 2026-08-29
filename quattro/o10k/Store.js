@@ -142,3 +142,59 @@ function undoPop(undo) {
         return null;
     return undo.entries.pop();
 }
+
+// ── Theme bind state ───────────────────────────────────────────────────────
+//
+// Whether the terminal's colors follow the Omarchy desktop theme or are
+// pinned to an override. The daemon already models this through the Look
+// schema's `palette` directive ("theme" | "keep" | <curated key>); what was
+// missing is any way for a surface to SHOW the state, so applying a palette
+// silently desynced the terminal from the desktop with no road back.
+//
+// Returns:
+//   state        "bound" | "pinned" | "index"
+//   desktopTheme the active Omarchy theme name (always reported, so a
+//                pinned surface can show what it is diverging FROM)
+//   palette      curated palette key when the pin is recognisable, else null
+//   paletteLabel display label, "Custom" for hand-set colors
+//   syncPatch    the config_set patch that returns to bound
+function themeBindState(cfgFlat, curatedPalettes, desktopTheme) {
+    var flat = cfgFlat || {};
+    var source = flat['theme.source'];
+    var out = {
+        state: 'bound',
+        desktopTheme: desktopTheme || '',
+        palette: null,
+        paletteLabel: '',
+        syncPatch: { theme: { source: 'omarchy' } }
+    };
+
+    // A fresh config has no [theme] table at all; that is bound, not broken.
+    if (!source || source === 'omarchy')
+        return out;
+
+    if (source === 'terminal') {
+        out.state = 'index';
+        return out;
+    }
+
+    // Anything else ("hybrid", "custom") means the terminal is pinned away
+    // from the desktop theme.
+    out.state = 'pinned';
+    out.paletteLabel = 'Custom';
+
+    var accent = flat['theme.custom.accent'];
+    if (accent && curatedPalettes) {
+        var target = String(accent).toLowerCase();
+        var keys = Object.keys(curatedPalettes);
+        for (var i = 0; i < keys.length; i++) {
+            var p = curatedPalettes[keys[i]];
+            if (p && p.accent && String(p.accent).toLowerCase() === target) {
+                out.palette = keys[i];
+                out.paletteLabel = p.label || keys[i];
+                break;
+            }
+        }
+    }
+    return out;
+}

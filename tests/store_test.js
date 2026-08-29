@@ -160,6 +160,63 @@ U.undoPush(u3, live);
 live.nested.v = 'after';
 check('snapshot is deep-copied', U.undoPop(u3).nested.v, 'before');
 
+// ── Theme bind state ───────────────────────────────────────────────────────
+const T = new Function(src + '\n;return { themeBindState };')();
+
+const PALETTES = {
+    'gruvbox':    { label: 'Gruvbox',    accent: '#83a598' },
+    'tokyo-night':{ label: 'Tokyo Night', accent: '#7aa2f7' }
+};
+
+// Bound: colors follow the Omarchy desktop theme. This is the default and
+// the state the project's stated principle asks for.
+let t = T.themeBindState({ 'theme.source': 'omarchy' }, PALETTES, 'kanagawa');
+check('omarchy source is bound', t.state, 'bound');
+check('bound reports the desktop theme', t.desktopTheme, 'kanagawa');
+check('bound has no pinned palette', t.palette, null);
+
+// Absent source is also bound — a fresh config has no [theme] table.
+check('absent source is bound',
+    T.themeBindState({}, PALETTES, 'kanagawa').state, 'bound');
+
+// Pinned to a recognised curated palette.
+t = T.themeBindState({
+    'theme.source': 'hybrid', 'theme.custom.accent': '#83a598'
+}, PALETTES, 'kanagawa');
+check('hybrid source is pinned', t.state, 'pinned');
+check('pinned identifies the palette', t.palette, 'gruvbox');
+check('pinned reports its label', t.paletteLabel, 'Gruvbox');
+// The desktop theme is still reported while pinned — that contrast is the
+// whole point of the indicator.
+check('pinned still reports the desktop theme', t.desktopTheme, 'kanagawa');
+
+// Accent matching must be case-insensitive; TOML may carry either case.
+check('accent match ignores case',
+    T.themeBindState({ 'theme.source': 'hybrid', 'theme.custom.accent': '#83A598' },
+        PALETTES, 'x').palette, 'gruvbox');
+
+// Pinned to hand-set colors that match no curated palette.
+t = T.themeBindState({
+    'theme.source': 'hybrid', 'theme.custom.accent': '#123456'
+}, PALETTES, 'kanagawa');
+check('unrecognised accent is pinned', t.state, 'pinned');
+check('unrecognised accent has no palette key', t.palette, null);
+check('unrecognised accent labels as custom', t.paletteLabel, 'Custom');
+
+// custom source with no accent at all is still pinned, not bound.
+check('custom source without accent is pinned',
+    T.themeBindState({ 'theme.source': 'custom' }, PALETTES, 'x').state, 'pinned');
+
+// Index-palette mode is its own state, not a pin.
+t = T.themeBindState({ 'theme.source': 'terminal' }, PALETTES, 'kanagawa');
+check('terminal source is index mode', t.state, 'index');
+check('index mode has no palette', t.palette, null);
+
+// The resync patch must be exactly what the daemon expects.
+check('sync patch targets theme.source',
+    JSON.stringify(T.themeBindState({ 'theme.source': 'hybrid' }, PALETTES, 'x').syncPatch),
+    JSON.stringify({ theme: { source: 'omarchy' } }));
+
 if (failures > 0) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);
