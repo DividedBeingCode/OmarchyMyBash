@@ -324,14 +324,65 @@ today, so the gates are the risk control:
 | New headless QML smoke harness | Instantiates every kit component and every Studio tab, so a rename cannot silently break a tab nobody opened |
 | `tests/integration_test.sh` extended | Daemon verbs the UI newly depends on: `looks_delete`, `palettes`, `defaults`, `script_list`, plugin verbs |
 
-**Build order** (each step leaves the plugin loading and validating):
-`o10k/` kit → service state ownership → Quick Panel → Studio tabs → Rice and
-Theme tabs → wizard → install.sh native paths.
+Build order is specified in [Build increments](#build-increments). This is
+deliberately one design, not one implementation plan: planning should
+decompose along those eight increments, with the kit and service-ownership
+steps landing first — they are what every later step depends on, and where a
+mistake is most expensive to unwind.
 
-This is deliberately one design, not one implementation plan. The work is
-large enough that planning should decompose it along that build order, with
-the kit and service-ownership steps landing first — they are what every later
-step depends on, and they are where a mistake is most expensive to unwind.
+## File migration map
+
+Nothing is deleted until its replacement passes the gates. Target layout:
+
+| Today | After | Disposition |
+|---|---|---|
+| `Service.qml` (393) | `Service.qml` | **Grows** — gains config/looks/palettes/defaults/preview-broker/undo/headless ownership |
+| `Panel.qml` (1277) | `QuickPanel.qml` | **Shrinks hard** — state moves to the service; keeps only the quick-tweak view |
+| `PanelLooks.qml` (112) | folded into `QuickPanel` + Studio Looks tab | **Deleted** — its hardcoded Look list is the bug being fixed |
+| `PanelStyle.qml` (304)<br>`PanelBehavior.qml` (330) | Studio `Prompt` tab | **Merged** — the Style/Behavior split is an artifact of a 360 px column |
+| `PanelSystem.qml` (531) | Studio `System` tab | **Moves**, gains plugins + shell-layer map |
+| `PanelKit.qml` (284) | `o10k/` kit | **Replaced** — hand-rolled controls become first-party wrappers |
+| `Gallery.qml` (1545) | Studio `Looks` tab | **Split** — grid, detail sheet, and ramp designer become separate files; its socket/cache logic moves to the service |
+| `SessionPicker.qml` (391) | `SessionPicker.qml` | **Simplified** — stops being a page router once the Studio owns the `panel` entry point |
+| `Model.js` (428) | `Model.js` | **Kept** — pure library, parity-gated; CONFIG_MAP extended |
+| — | `Studio.qml` + tab files | **New** |
+| — | `o10k/Fx.qml`, `o10k/Motion.qml`, `o10k/SettingRow.qml` + wrappers | **New** |
+
+`Gallery.qml` at 1545 lines is the single largest file and does list, filter,
+detail sheet, editor, ramp designer, save/delete and socket I/O. Splitting it
+is not optional polish — it is what makes the Looks tab reviewable.
+
+## Performance budget
+
+The prompt has a stated sub-5 ms budget; the panel has never had one. It
+shares a Quickshell process with Spatial UX on a ThinkPad T480 / UHD 620
+target, so:
+
+| Budget | Value |
+|---|---|
+| `layer.enabled` uses | **0** (standing constraint, currently met) |
+| Surface shadows | `RectangularShadow` only — one analytic quad, no offscreen buffer |
+| Preview requests per config change | **1** per visible surface, coalesced by the broker (today: ~10 preset previews + 1, per surface) |
+| Sockets | **1** (today: 3) |
+| Per-frame work | None. Color composites evaluate on change, never in a binding re-evaluated per frame |
+| Studio open → first paint | Tabs load lazily; only the active tab instantiates |
+
+## Build increments
+
+Each increment leaves the plugin loading, `omarchy plugin validate` passing,
+and the existing surfaces usable. This is the decomposition the implementation
+plan should follow.
+
+| # | Increment | Done when |
+|---|---|---|
+| 1 | `o10k/` kit — `Fx`, `Motion`, `SettingRow`, first-party wrappers | Smoke harness instantiates every component headless; a demo tab renders them with rounded corners and elevation on a stock (`cornerRadius = 0`) install |
+| 2 | Service state ownership | One socket; config/looks/palettes/defaults/undo served from `Service.qml`; preview broker coalesces; existing Panel and Gallery still work, now as consumers |
+| 3 | `QuickPanel` | Replaces `Panel.qml` as the bar surface; Looks strip driven by the real `looks` verb (user Looks appear); theme bind indicator + Sync; quick actions from `script_list` |
+| 4 | `Studio` shell + `panel` kind | `omarchy-shell shell summon community.omarchy10k` opens it; tabs lazy-load; `SessionPicker` stops routing |
+| 5 | Looks, Prompt, System tabs | Gallery split and folded in; import/export wired; plugins + shell-layer map present |
+| 6 | Rice + Theme tabs | Template wiring detection with one-click include fix; Omarchy theme browser; bind state machine complete |
+| 7 | Wizard + `configure --describe` | Studio wizard renders CLI-owned step data; three finish paths work |
+| 8 | `install.sh` native paths | Prefers `omarchy plugin add` / `omarchy hook install`, falls back to current behavior |
 
 ## Relationship to prior specs
 
