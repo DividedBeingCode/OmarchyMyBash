@@ -16,6 +16,8 @@ GPU. Every claim below was verified on this machine, not taken from the web.
 | Nerd Fonts glyph index | 10,996 named glyphs (`glyphnames.json`) |
 | Animal glyphs renderable in that font | **56** (project offered 23, of which 22 were mislabelled — now fixed at 38) |
 | Anime/manga/kawaii/chibi glyphs | **none exist** in any Nerd Fonts collection |
+| Anime-adjacent Unicode emoji | all present via Noto Color Emoji (installed) |
+| Half-block sprite pipeline | verified: 22×24 px → 12 rows of pure ANSI |
 | `TermCaps` capabilities detected but **never consumed** | `has_kitty_graphics`, `has_sixel`, `has_osc52` |
 
 ## 1. Inline graphics (Kitty protocol) — the biggest unused lever
@@ -109,6 +111,59 @@ custom glyphs in the Private Use Area) but is a distribution problem, not a
 code problem, and it breaks the moment the user picks another font. Not
 recommended; the existing "custom string" escape hatch covers the same need.
 
+### Other glyph libraries, surveyed
+
+The question "is there another anime glyph library?" splits in two, because
+the terminal and the Quattro GUI have completely different constraints. The
+terminal can only render **font glyphs**; QML can render **any SVG**.
+
+| Source | Anime content | Terminal? | Quattro GUI? | Verdict |
+|--------|---------------|-----------|--------------|---------|
+| Nerd Fonts (all 6 collections) | none | ✅ font | ✅ | Already used. No anime, 22 JP-adjacent glyphs verified |
+| **Unicode emoji** (Noto Color Emoji, installed) | ⛩ 🏯 🎌 🍥 👘 🎎 🎏 👺 🦊 🌸 — **all verified present** | ✅ | ✅ | Real option, real caveats — see below |
+| **Iconify** — [game-icons](https://icon-sets.iconify.design/game-icons/), 4,133 icons, CC BY 4.0 | Creatures, dragons, masks, katana — fantasy not anime | ❌ SVG only | ✅ | Best GUI-side option. Attribution required |
+| Flaticon / IconScout / SVGRepo | Genuine anime characters | ❌ SVG only | ⚠ licence | Attribution-or-paid, per-icon terms. Not worth the compliance burden for a shipped default |
+| **Half-block sprite rendering** | **anything**, including real anime art | ✅ pure ANSI | ✅ | The actual answer — see below |
+
+**Unicode emoji caveats** (why they are not the default): they are
+double-width, their colour is baked into the font so they ignore the theme
+palette entirely — breaking the project's whole theme-native premise — and a
+colour emoji font next to JetBrainsMono looks pasted-on. Fine as an opt-in
+catalog; wrong as a default.
+
+### Half-block sprites — the real way to get anime into a terminal
+
+The ricing community solved this years ago and it is not a font problem.
+`krabby`, `kingler`, `pokescript` and `pokeget` (all **Rust**) print Pokémon
+sprites by converting a small PNG into coloured Unicode half-blocks: one `▀`
+per character cell, foreground = upper pixel, background = lower pixel. It is
+**pure ANSI text** — no graphics protocol, works over SSH, works in every
+truecolor terminal.
+
+Verified locally: a 22×24 px image becomes 12 rows × 22 columns of ANSI. The
+technique generalises to *any* image, so "put my favourite character in the
+terminal" is a sprite pipeline, not a glyph hunt.
+
+Where it fits here:
+
+- **`omarchy10k intro`** — a mascot on first run. Rendered once, off the hot
+  path, and it degrades to nothing on a non-truecolor terminal.
+- **Looks Gallery cards** — same half-block encoder covers the thumbnail idea
+  in §1 *without* needing the Kitty protocol at all, which makes it work on
+  Foot and Alacritty too. This is a better first step than Kitty graphics.
+- **Not the prompt.** A 12-row sprite in `PS1` is unusable regardless of how
+  cheap the encoding is.
+
+Cost is small and self-contained: the encoder is ~40 lines against `image`,
+or take `ratatui-image`'s, which picks Kitty/Sixel/iTerm2/half-blocks by
+capability — and `TermCaps` already has the matrix to drive that choice.
+
+**Licensing reality:** shipping actual anime sprites is a copyright question,
+not a technical one. The defensible shape is what krabby does — ship the
+*renderer*, let the user point it at their own image (`[intro] sprite =
+"~/.config/omarchy10k/mascot.png"`), and ship at most a small
+originally-drawn or permissively-licensed default.
+
 ## 4. A glyph browser in the Studio
 
 We have 10,996 glyph names and the font locally. A searchable picker — type
@@ -152,6 +207,9 @@ Starship importer did.
 
 1. **Glyph browser** in the Studio (highest value per line; prevents a whole bug class)
 2. **Kaomoji + JP-adjacent glyph sets** (zero new machinery, pure catalog)
+2b. **Half-block sprite encoder** — user-supplied image for `intro` and Gallery
+    thumbnails. Works on every truecolor terminal, no graphics protocol, and
+    supersedes the Kitty-thumbnail item below as the first step
 3. **OSC 52** for `look export --clipboard` (small, fixes a real SSH gap)
 4. **Kitty-graphics thumbnails** in the Gallery (visible payoff; strictly off the prompt path)
 5. **oh-my-posh import** (on-ramp)
@@ -164,5 +222,9 @@ Starship importer did.
 - [Kitty graphics protocol — terminal support matrix](https://terminfo.dev/extensions/kitty-graphics-protocol)
 - [Terminal graphics protocols: Kitty, Sixel, iTerm2 and beyond](https://akmatori.com/blog/terminal-graphics-protocols)
 - [ratatui-image (Kitty/Sixel/iTerm2/half-blocks in Rust)](https://github.com/ratatui/ratatui-image)
+- [krabby — Pokémon sprites in the terminal, Rust](https://github.com/yannjor/krabby)
+- [pokeget — faster sprite renderer, Rust](https://lib.rs/crates/pokeget)
+- [Iconify game-icons — 4,133 CC BY 4.0 icons](https://icon-sets.iconify.design/game-icons/)
+- [Iconify icon-sets — 200+ open source collections](https://github.com/iconify/icon-sets)
 - [Terminal & shell tools 2026 deep dive](https://www.youngju.dev/blog/culture/2026-05-16-terminal-shell-tools-2026-ghostty-wezterm-alacritty-warp-fish-4-nushell-zellij-starship-deep-dive.en)
 - [State of Linux terminal emulators in 2026](https://dev.to/shrsv/state-of-linux-terminal-emulators-in-2026-1gh5)
