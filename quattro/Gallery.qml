@@ -933,7 +933,12 @@ Item {
                         Flickable {
                             id: detailScroll
                             width: parent.width
-                            height: parent.height - headerHeightD - Style.space(12)
+                            // Qualified: headerHeightD is declared on
+                            // detailSheet, and the scope chain does not
+                            // reach it from inside this Flickable — the
+                            // unqualified form threw ReferenceError at
+                            // runtime and collapsed the detail sheet.
+                            height: parent.height - detailSheet.headerHeightD - Style.space(12)
                             contentHeight: detailContent.height
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds

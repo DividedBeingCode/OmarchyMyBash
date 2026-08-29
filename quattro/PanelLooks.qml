@@ -7,6 +7,7 @@ import QtQuick.Controls
 import qs.Commons
 import qs.Ui
 import "o10k"
+import "Model.js" as Model
 
 Column {
     id: looksBucket
@@ -37,8 +38,14 @@ Column {
     ThemeBindRow {
         width: parent.width
         cfgFlat: looksBucket.panel._configFlat
-        palettes: looksBucket.panel.omarchyService
-            ? looksBucket.panel.omarchyService.palettes : ({})
+        // Model.js already ships the curated table, so the pinned palette
+        // resolves to its name immediately instead of reading "Custom"
+        // until the service's `palettes` fetch lands.
+        palettes: (looksBucket.panel.omarchyService
+                   && looksBucket.panel.omarchyService.palettes
+                   && Object.keys(looksBucket.panel.omarchyService.palettes).length > 0)
+            ? looksBucket.panel.omarchyService.palettes
+            : Model.CURATED_PALETTES
         desktopTheme: looksBucket.panel.omarchyService
             ? looksBucket.panel.omarchyService.desktopTheme : ""
         // Returning to the desktop theme is a config write like any other,
