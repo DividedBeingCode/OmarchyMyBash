@@ -42,7 +42,8 @@ Item {
         { key: "prompt",   label: "Prompt" },
         { key: "rice",     label: "Rice" },
         { key: "theme",    label: "Theme" },
-        { key: "system",   label: "System" }
+        { key: "system",   label: "System" },
+        { key: "setup",    label: "Setup" }
     ]
 
     // ── Panel entry-point contract ─────────────────────────────────────────
@@ -218,6 +219,7 @@ Item {
                                 case "system": return systemPage
                                 case "rice":   return ricePage
                                 case "theme":  return themePage
+                                case "setup":  return wizardPage
                                 default:       return pendingPage
                             }
                         }
@@ -340,6 +342,14 @@ Item {
     Component {
         id: themePage
         StudioTheme { service: studio.service }
+    }
+
+    Component {
+        id: wizardPage
+        StudioWizard {
+            service: studio.service
+            onFinished: studio.currentTab = 0
+        }
     }
 
     // Tabs whose content lands in later increments. Named honestly rather

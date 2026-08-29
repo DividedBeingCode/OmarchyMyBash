@@ -151,7 +151,13 @@ enum Commands {
 
     /// Interactive setup wizard — pick style, separators, frame, and icons
     /// with a live prompt preview
-    Configure,
+    Configure {
+        /// Print the wizard's step data as JSON and exit (consumed by the
+        /// Quattro Studio's graphical wizard, so the options live in one
+        /// place instead of being restated in QML)
+        #[arg(long)]
+        describe: bool,
+    },
 
     /// Extract the left prompt from a JSON daemon response (used internally)
     #[command(name = "parse-prompt", hide = true)]
@@ -341,8 +347,12 @@ async fn main() -> anyhow::Result<()> {
             hook_event::run(&name, &args, hook_event::find_dispatcher().as_deref(), &hook_event::default_hook_root())?;
         }
 
-        Commands::Configure => {
-            configure::run().await?;
+        Commands::Configure { describe } => {
+            if describe {
+                println!("{}", serde_json::to_string_pretty(&configure::describe())?);
+            } else {
+                configure::run().await?;
+            }
         }
 
         Commands::Intro { force } => {

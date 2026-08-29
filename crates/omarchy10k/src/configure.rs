@@ -544,6 +544,37 @@ async fn ask_index(
 
 // ── Steps ──────────────────────────────────────────────────────────────────
 
+/// Emit the wizard's step data as JSON.
+///
+/// The catalogs below are the single source of truth for what the wizard
+/// offers. The graphical wizard in the Quattro Studio consumes THIS rather
+/// than restating the options in QML — the CLI wizard has already drifted
+/// once (segment toggles wrote config paths the daemon does not read, the
+/// prompt-character step fell out of the chain, `q` stopped quitting),
+/// precisely because nothing else read this data and nothing checked it.
+pub fn describe() -> serde_json::Value {
+    serde_json::json!({
+        "version": 1,
+        "steps": [
+            { "key": "preset",     "label": "Style preset",     "options": STYLE_KEYS },
+            { "key": "separator",  "label": "Separator",        "options": SEPARATOR_KEYS },
+            { "key": "frame",      "label": "Frame",            "options": FRAME_KEYS },
+            { "key": "gap_char",   "label": "Gap fill",         "options": GAP_KEYS },
+            { "key": "prompt_char","label": "Prompt character", "options": CHAR_KEYS },
+            { "key": "os_icon",    "label": "OS icon",          "options": ICON_KEYS }
+        ],
+        "segments": {
+            "all": WIZARD_SEGMENTS,
+            "default_on": WIZARD_SEGMENTS_DEFAULT_ON,
+            // Exec-tier segments spawn a subprocess per TTL window and a
+            // project profile may not enable them at all; a UI should say so
+            // rather than offering them as ordinary toggles.
+            "exec_tier": EXEC_SEGMENTS
+        },
+        "finish_paths": ["config", "look", "profile"]
+    })
+}
+
 const STYLE_KEYS: &[&str] = &["rainbow", "powerline", "lean", "classic", "framed"];
 const SEPARATOR_KEYS: &[&str] = &[
     "powerline", "powerline_thin", "slanted", "round", "vertical", "fade", "fade_rev",
@@ -1217,6 +1248,46 @@ mod tests {
         let patch = full_patch_value(&c);
         assert_eq!(patch["style"]["frame"]["enabled"], false);
         assert!(patch["style"]["frame"].get("gap_char").is_none());
+    }
+
+    #[test]
+    fn describe_exposes_every_catalog_the_wizard_offers() {
+        let d = describe();
+        // The Studio renders these; a step silently dropped from the JSON is
+        // a step that disappears from the graphical wizard.
+        let steps = d["steps"].as_array().expect("steps array");
+        let keys: Vec<&str> = steps
+            .iter()
+            .map(|s| s["key"].as_str().unwrap_or(""))
+            .collect();
+        for expected in [
+            "preset", "separator", "frame", "gap_char", "prompt_char", "os_icon",
+        ] {
+            assert!(keys.contains(&expected), "describe() must expose `{expected}`");
+        }
+        for step in steps {
+            assert!(
+                step["options"].as_array().is_some_and(|o| !o.is_empty()),
+                "step {} has no options",
+                step["key"]
+            );
+        }
+
+        // Segment metadata the UI needs to behave correctly.
+        assert_eq!(
+            d["segments"]["all"].as_array().map(|a| a.len()),
+            Some(WIZARD_SEGMENTS.len())
+        );
+        let exec = d["segments"]["exec_tier"].as_array().expect("exec_tier");
+        assert_eq!(exec.len(), EXEC_SEGMENTS.len());
+        // Default-on must stay a strict subset of the catalog, or the UI
+        // pre-checks something it cannot show.
+        for on in d["segments"]["default_on"].as_array().expect("default_on") {
+            assert!(
+                WIZARD_SEGMENTS.contains(&on.as_str().unwrap_or("")),
+                "default-on segment {on} is not in the catalog"
+            );
+        }
     }
 
     #[test]
