@@ -78,7 +78,55 @@ pub struct PreviewRequest {
     /// the effective config (base → Look → patch; patch wins) before render.
     #[serde(default)]
     pub patch: Option<serde_json::Value>,
+    /// Studio terminal mock: render the SAME config against several different
+    /// shell states in one request.
+    ///
+    /// A prompt has to survive a dirty repo, a failed command, an SSH host and
+    /// a deep path, and a preview that shows only the happy case is not a
+    /// preview. Six separate requests would be six round-trips and six
+    /// cache entries in the Quattro preview broker, so they ride together.
+    ///
+    /// Omitting this field preserves the single-render response shape exactly,
+    /// which is what the CLI and the bar panel still use.
+    #[serde(default)]
+    pub scenes: Option<Vec<PreviewScene>>,
 }
+
+/// One shell state to render the previewed config against.
+///
+/// Every field defaults, so a scene may specify only what it varies — a
+/// caller asking for a failed command writes `{"exit_code": 127}` and inherits
+/// the request's `cwd` and column count.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PreviewScene {
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub cmd_duration_ms: Option<u64>,
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub jobs: Option<u32>,
+    #[serde(default)]
+    pub in_ssh: Option<bool>,
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    #[serde(default)]
+    pub git_staged: Option<u32>,
+    #[serde(default)]
+    pub git_unstaged: Option<u32>,
+    /// Free-form label echoed back so the UI can caption the row without
+    /// having to re-derive what it asked for.
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// Cap on scenes per request. The terminal mock uses six; this only exists so
+/// a malformed client cannot ask for ten thousand prompt renders on the
+/// daemon's single request path.
+const MAX_PREVIEW_SCENES: usize = 12;
 
 fn default_preview_cwd() -> String {
     "~/projects/my-app".into()
@@ -406,16 +454,10 @@ async fn handle_control(
             }), request_id).await?;
         }
         "palettes" => {
-            let palettes: Vec<serde_json::Value> = ["tokyo-night", "catppuccin", "gruvbox",
-                "nord", "dracula", "rose-pine", "everforest", "kanagawa"]
-                .iter()
-                .filter_map(|k| crate::looks::curated_palette(k)
-                    .map(|v| serde_json::json!({ "key": k, "theme": v["theme"].clone() })))
-                .collect();
             write_response(writer, serde_json::json!({
                 "type": "control",
                 "status": "ok",
-                "palettes": palettes,
+                "palettes": collect_palettes(),
             }), request_id).await?;
         }
         "looks_apply" => {
@@ -821,43 +863,199 @@ async fn handle_preview(
     };
     let palette = state.palette.read().await;
 
-    let git_status = crate::git::GitStatus {
-        is_repo: !req.git_branch.is_empty(),
-        branch: if req.git_branch.is_empty() {
-            "main".into()
-        } else {
-            req.git_branch.clone()
-        },
-        staged: req.git_staged,
-        unstaged: req.git_unstaged,
-        ..Default::default()
-    };
-
+    // One renderer, reused across every scene: building the effective config
+    // is the expensive half, and the whole point of `scenes` is to pay it
+    // once. A single render is the same work the shell does on every prompt,
+    // against a 5ms budget, so a six-scene mock stays well inside a frame.
     let renderer = PromptRenderer::new(config, &palette);
-    let prompt = renderer.render_with_ssh(
-        &req.cwd,
-        req.exit_code,
-        req.cmd_duration_ms,
-        req.cols,
-        req.jobs,
-        &git_status,
-        false, // no shell integration for preview
-        Some(req.in_ssh),
-        None,
-        Vec::new(),
-    );
 
-    write_response(
-        writer,
+    let render_one = |scene: &PreviewScene| -> serde_json::Value {
+        let cwd = scene.cwd.clone().unwrap_or_else(|| req.cwd.clone());
+        let branch = scene.git_branch.clone().unwrap_or_else(|| req.git_branch.clone());
+        let git_status = crate::git::GitStatus {
+            is_repo: !branch.is_empty(),
+            branch: if branch.is_empty() { "main".into() } else { branch },
+            staged: scene.git_staged.unwrap_or(req.git_staged),
+            unstaged: scene.git_unstaged.unwrap_or(req.git_unstaged),
+            ..Default::default()
+        };
+        let prompt = renderer.render_with_ssh(
+            &cwd,
+            scene.exit_code.unwrap_or(req.exit_code),
+            scene.cmd_duration_ms.unwrap_or(req.cmd_duration_ms),
+            scene.cols.unwrap_or(req.cols),
+            scene.jobs.unwrap_or(req.jobs),
+            &git_status,
+            false, // no shell integration for preview
+            Some(scene.in_ssh.unwrap_or(req.in_ssh)),
+            None,
+            Vec::new(),
+        );
         serde_json::json!({
-            "type": "preview",
-            "status": "ok",
+            "label": scene.label,
             "left": strip_np(&prompt.left),
             "right": prompt.right.as_deref().map(strip_np),
-        }),
-        request_id,
-    )
-    .await
+        })
+    };
+
+    // The request's own fields ARE a scene — the single-render path is the
+    // multi-scene path with one all-defaults entry, so there is only one
+    // render code path to keep correct.
+    let base_scene = PreviewScene {
+        cwd: None,
+        exit_code: None,
+        cmd_duration_ms: None,
+        cols: None,
+        jobs: None,
+        in_ssh: None,
+        git_branch: None,
+        git_staged: None,
+        git_unstaged: None,
+        label: None,
+    };
+    let base = render_one(&base_scene);
+
+    let mut resp = serde_json::json!({
+        "type": "preview",
+        "status": "ok",
+        // Always present, so every existing client — the CLI, the bar panel,
+        // the configure wizard — is untouched by this addition.
+        "left": base["left"].clone(),
+        "right": base["right"].clone(),
+    });
+
+    if let Some(scenes) = &req.scenes {
+        let renders: Vec<serde_json::Value> = scenes
+            .iter()
+            .take(MAX_PREVIEW_SCENES)
+            .map(&render_one)
+            .collect();
+        resp["renders"] = serde_json::Value::Array(renders);
+    }
+
+    write_response(writer, resp, request_id).await
+}
+
+/// Every palette a surface can offer: the curated table first, then one
+/// derived from each installed Omarchy theme that has no curated entry.
+///
+/// This is what closes the 8-palettes-for-22-themes gap. Entries carry flat
+/// `colors` alongside the `theme` patch so a UI can draw swatches without
+/// reconstructing them, and a `source` so it can say which are hand-tuned.
+///
+/// Reading the theme directory is I/O on a control-verb path, but `palettes`
+/// is fetched once per connection and refreshed only when the config changes
+/// — not on the prompt path.
+fn collect_palettes() -> Vec<serde_json::Value> {
+    use crate::palette_derive;
+
+    let entry = |key: &str,
+                 label: &str,
+                 blurb: &str,
+                 source: &str,
+                 colors: serde_json::Value,
+                 theme: serde_json::Value,
+                 low_contrast: bool| {
+        serde_json::json!({
+            "key": key,
+            "label": label,
+            "blurb": blurb,
+            "source": source,
+            "colors": colors,
+            "theme": theme,
+            "low_contrast": low_contrast,
+        })
+    };
+
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for p in crate::looks::curated_palettes() {
+        let colors: serde_json::Map<String, serde_json::Value> = crate::looks::ROLE_ORDER
+            .iter()
+            .zip(p.colors.iter())
+            .map(|(r, h)| (r.to_string(), serde_json::json!(h)))
+            .collect();
+        let theme = crate::looks::curated_palette(p.key)
+            .map(|v| v["theme"].clone())
+            .unwrap_or_else(|| serde_json::json!({}));
+        seen.insert(p.key.to_string());
+        out.push(entry(
+            p.key,
+            p.label,
+            p.blurb,
+            "curated",
+            serde_json::Value::Object(colors),
+            theme,
+            false,
+        ));
+    }
+
+    // Derived: one per installed theme without a curated palette of the same
+    // name. Missing directory is not an error — a machine without Omarchy
+    // installed simply gets the curated set.
+    let themes_dir = std::path::Path::new("/usr/share/omarchy/themes");
+    let Ok(entries) = std::fs::read_dir(themes_dir) else {
+        return out;
+    };
+    let mut derived: Vec<serde_json::Value> = Vec::new();
+    for e in entries.flatten() {
+        let key = e.file_name().to_string_lossy().to_string();
+        if seen.contains(&key) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(e.path().join("colors.toml")) else {
+            continue;
+        };
+        let (colors, mode) = palette_derive::parse_colors_toml(&text);
+        let Some(p) = palette_derive::derive(&colors, &mode) else {
+            continue;
+        };
+        let flat: serde_json::Map<String, serde_json::Value> = p
+            .colors
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::json!(v)))
+            .collect();
+        let label = title_case(&key);
+        let blurb = if p.repaired.is_empty() {
+            format!("Derived from the {label} theme.")
+        } else {
+            format!(
+                "Derived from the {label} theme, with {} adjusted for contrast.",
+                p.repaired.join(", ")
+            )
+        };
+        derived.push(entry(
+            &key,
+            &label,
+            &blurb,
+            "derived",
+            serde_json::Value::Object(flat),
+            p.to_theme_patch()["theme"].clone(),
+            !p.shortfall.is_empty(),
+        ));
+    }
+    // read_dir order is arbitrary; a picker that reshuffles between opens is
+    // disorienting.
+    derived.sort_by(|a, b| a["key"].as_str().cmp(&b["key"].as_str()));
+    out.extend(derived);
+    out
+}
+
+/// `rose-pine` → `Rose Pine`. Theme directory names are the only label a
+/// derived palette has.
+fn title_case(key: &str) -> String {
+    key.split(['-', '_'])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Build the effective config for a preview render: base config, then the
@@ -1447,7 +1645,7 @@ mod tests {
     }
 
     /// Minimal fully-specified PreviewRequest for override tests.
-    fn preview_req(patch: Option<serde_json::Value>, look: Option<&str>) -> PreviewRequest {
+    pub(super) fn preview_req(patch: Option<serde_json::Value>, look: Option<&str>) -> PreviewRequest {
         PreviewRequest {
             cwd: "~/projects/my-app".into(),
             exit_code: 0,
@@ -1464,6 +1662,7 @@ mod tests {
             style_frame: None,
             prompt_newline: None,
             patch,
+            scenes: None,
         }
     }
 
@@ -1773,5 +1972,159 @@ mod tests {
 
         let err = delete_user_look(&state, "mine").await.unwrap_err();
         assert!(err.contains("unknown look"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod preview_scene_tests {
+    use super::tests::preview_req;
+    use super::*;
+
+    fn scene(label: &str) -> PreviewScene {
+        PreviewScene {
+            cwd: None,
+            exit_code: None,
+            cmd_duration_ms: None,
+            cols: None,
+            jobs: None,
+            in_ssh: None,
+            git_branch: None,
+            git_staged: None,
+            git_unstaged: None,
+            label: Some(label.into()),
+        }
+    }
+
+    #[test]
+    fn a_request_without_scenes_deserializes_with_none() {
+        // The compatibility guarantee, from the wire in: every existing
+        // client omits this field entirely.
+        let req: PreviewRequest =
+            serde_json::from_value(serde_json::json!({ "cwd": "~/x" })).unwrap();
+        assert!(req.scenes.is_none());
+        assert_eq!(req.cwd, "~/x");
+    }
+
+    #[test]
+    fn a_scene_may_specify_only_what_it_varies() {
+        let req: PreviewRequest = serde_json::from_value(serde_json::json!({
+            "scenes": [{ "exit_code": 127 }, { "in_ssh": true, "label": "remote" }]
+        }))
+        .unwrap();
+        let scenes = req.scenes.expect("scenes parsed");
+        assert_eq!(scenes.len(), 2);
+        assert_eq!(scenes[0].exit_code, Some(127));
+        // Unspecified fields stay None so the request's values show through.
+        assert!(scenes[0].cwd.is_none());
+        assert!(scenes[0].label.is_none());
+        assert_eq!(scenes[1].label.as_deref(), Some("remote"));
+    }
+
+    #[test]
+    fn scene_fields_override_the_request_and_fall_back_to_it() {
+        let mut s = scene("override");
+        s.cwd = Some("~/elsewhere".into());
+        s.git_staged = Some(3);
+
+        let req = preview_req(None, None);
+        // The resolution rules handle_preview applies, asserted directly so a
+        // change to them cannot pass unnoticed.
+        assert_eq!(
+            s.cwd.clone().unwrap_or_else(|| req.cwd.clone()),
+            "~/elsewhere"
+        );
+        assert_eq!(s.git_staged.unwrap_or(req.git_staged), 3);
+        assert_eq!(s.cols.unwrap_or(req.cols), 120, "unset falls back");
+        assert_eq!(s.exit_code.unwrap_or(req.exit_code), 0);
+    }
+
+    #[test]
+    fn the_scene_cap_is_enforceable() {
+        let scenes: Vec<PreviewScene> = (0..50).map(|i| scene(&i.to_string())).collect();
+        assert_eq!(scenes.iter().take(MAX_PREVIEW_SCENES).count(), MAX_PREVIEW_SCENES);
+    }
+}
+
+#[cfg(test)]
+mod palette_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn title_cases_theme_directory_names() {
+        assert_eq!(title_case("rose-pine"), "Rose Pine");
+        assert_eq!(title_case("tokyo_night"), "Tokyo Night");
+        assert_eq!(title_case("gruvbox"), "Gruvbox");
+        assert_eq!(title_case(""), "");
+    }
+
+    #[test]
+    fn the_catalog_carries_every_curated_palette_with_swatches() {
+        let all = collect_palettes();
+        assert!(all.len() >= 16, "expected at least the curated set");
+
+        for p in &all {
+            assert!(!p["key"].as_str().unwrap().is_empty());
+            assert!(!p["label"].as_str().unwrap().is_empty());
+            assert!(!p["blurb"].as_str().unwrap().is_empty());
+            // Swatches must be drawable without reconstructing them from the
+            // theme patch — that reconstruction is what the UI should not do.
+            let colors = p["colors"].as_object().expect("flat colors present");
+            for role in ["background", "foreground", "accent"] {
+                assert!(
+                    colors.contains_key(role),
+                    "{} is missing role {role}",
+                    p["key"]
+                );
+            }
+            assert!(p["theme"]["custom"].is_object(), "{} has no theme patch", p["key"]);
+        }
+    }
+
+    #[test]
+    fn palette_keys_are_unique_across_curated_and_derived() {
+        let all = collect_palettes();
+        let mut keys: Vec<&str> = all.iter().map(|p| p["key"].as_str().unwrap()).collect();
+        keys.sort_unstable();
+        let before = keys.len();
+        keys.dedup();
+        assert_eq!(before, keys.len(), "a derived palette shadowed a curated key");
+    }
+
+    #[test]
+    fn curated_palettes_come_first_and_are_labelled_as_such() {
+        let all = collect_palettes();
+        let first_derived = all.iter().position(|p| p["source"] == "derived");
+        if let Some(i) = first_derived {
+            assert!(
+                all[..i].iter().all(|p| p["source"] == "curated"),
+                "curated entries must lead the list"
+            );
+            assert!(
+                all[i..].iter().all(|p| p["source"] == "derived"),
+                "the two sources must not interleave"
+            );
+        }
+    }
+
+    #[test]
+    fn derived_palettes_cover_the_themes_curation_missed() {
+        if !std::path::Path::new("/usr/share/omarchy/themes").is_dir() {
+            eprintln!("skipping: Omarchy themes not installed");
+            return;
+        }
+        let all = collect_palettes();
+        let derived: Vec<&str> = all
+            .iter()
+            .filter(|p| p["source"] == "derived")
+            .map(|p| p["key"].as_str().unwrap())
+            .collect();
+        assert!(
+            !derived.is_empty(),
+            "22 installed themes and 16 curated palettes should leave some to derive"
+        );
+        // Sorted, so a picker does not reshuffle between opens.
+        let mut sorted = derived.clone();
+        sorted.sort_unstable();
+        assert_eq!(derived, sorted, "derived palettes must be in a stable order");
     }
 }
