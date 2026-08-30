@@ -7,6 +7,7 @@ import QtQuick.Controls
 import qs.Commons
 import qs.Ui
 import "o10k"
+import "o10k/Preview.js" as Preview
 import "Model.js" as Model
 
 Column {
@@ -34,6 +35,47 @@ Column {
     }
 
     spacing: Style.space(12)
+
+    // ── Live preview ───────────────────────────────────────────────────────
+    //
+    // The bar panel had no preview at all: you changed a preset here and
+    // found out what it did by opening a new shell. Two scenes at 40 columns
+    // is what fits in a 360px popout; the Studio's Looks tab is where the
+    // full six-scene mock lives.
+    function refreshPreview() {
+        var svc = looksBucket.panel.omarchyService
+        if (!svc || !svc.requestPreview) return
+        looksBucket.previewColors = svc.currentPaletteColors()
+        looksBucket.previewState = "loading"
+        svc.requestPreview(null, null, Preview.PANEL_SCENES, true, function (res) {
+            looksBucket.previewState = res.state
+            looksBucket.previewRenders = res.renders
+        })
+    }
+
+    property var previewRenders: []
+    property var previewColors: ({})
+    property string previewState: "empty"
+
+    Component.onCompleted: looksBucket.refreshPreview()
+
+    // Applying a Look or a palette changes what the preview should show.
+    Connections {
+        target: looksBucket.panel.omarchyService
+        ignoreUnknownSignals: true
+        function onCfgFlatChanged() { looksBucket.refreshPreview() }
+    }
+
+    TerminalPreview {
+        width: parent.width
+        caption: "your prompt"
+        cols: 40
+        showLabels: false
+        fontSize: Style.font.caption
+        renders: looksBucket.previewRenders
+        colors: looksBucket.previewColors
+        renderState: looksBucket.previewState
+    }
 
     ThemeBindRow {
         width: parent.width
@@ -88,20 +130,43 @@ Column {
             delegate: Rectangle {
                 id: lookCard
                 required property var modelData
+                readonly property var lookColors:
+                    lookCard.modelData.patch && lookCard.modelData.patch.theme
+                    && lookCard.modelData.patch.theme.custom
+                        ? lookCard.modelData.patch.theme.custom : null
                 width: (parent.width - Style.space(8)) / 2
-                height: lookLabel.implicitHeight + Style.spacing.panelGap
+                height: lookLabel.implicitHeight * 2 + Style.spacing.panelGap
                 radius: Style.cornerRadius
                 color: Style.normalFillFor(looksBucket.panel.barForeground, Color.accent, Color.urgent)
 
-                Text {
-                    id: lookLabel
+                Column {
                     anchors.centerIn: parent
-                    text: lookCard.modelData.label && lookCard.modelData.label.length > 0
-                        ? lookCard.modelData.label
-                        : lookCard.modelData.name
-                    color: looksBucket.panel.barForeground
-                    font.family: looksBucket.panel.bar ? looksBucket.panel.bar.fontFamily : Style.font.family
-                    font.pixelSize: Style.font.body
+                    width: parent.width - Style.space(12)
+                    spacing: Style.space(3)
+
+                    Text {
+                        id: lookLabel
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                        text: lookCard.modelData.label && lookCard.modelData.label.length > 0
+                            ? lookCard.modelData.label
+                            : lookCard.modelData.name
+                        color: looksBucket.panel.barForeground
+                        font.family: looksBucket.panel.bar ? looksBucket.panel.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                        elide: Text.ElideRight
+                    }
+
+                    // A `complete` Look brings its own colors; showing them is
+                    // the difference between eight names and eight choices.
+                    Swatches {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: lookCard.lookColors
+                                 && Object.keys(lookCard.lookColors).length > 0
+                        colors: lookCard.lookColors ? lookCard.lookColors : ({})
+                        dotSize: Style.space(7)
+                        joined: true
+                    }
                 }
 
                 MouseArea {

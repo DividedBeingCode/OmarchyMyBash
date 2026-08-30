@@ -5,6 +5,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "o10k"
 import "Model.js" as Model
 
 Column {
@@ -192,11 +193,26 @@ Column {
         width: parent.width
 
         Repeater {
+            // Sourced from the service, which serves 16 curated palettes plus
+            // one derived from every installed Omarchy theme. This list used
+            // to be the 8 hardcoded entries in Model.js, so the bar panel
+            // offered 8 palettes while the Studio offered 30 -- the same
+            // drift that had the panel showing a stale Look list.
+            // Model.CURATED_PALETTES survives as the offline fallback.
             model: {
                 var cards = [{ key: "theme", label: "Omarchy Theme", p: null }]
+                var svc = styleBucket.panel.omarchyService
+                if (svc && svc.paletteList && svc.paletteList.length > 0) {
+                    for (var i = 0; i < svc.paletteList.length; i++) {
+                        var e = svc.paletteList[i]
+                        cards.push({ key: e.key, label: e.label, p: e.colors })
+                    }
+                    return cards
+                }
                 var keys = Object.keys(Model.CURATED_PALETTES)
-                for (var i = 0; i < keys.length; i++) {
-                    cards.push({ key: keys[i], label: Model.CURATED_PALETTES[keys[i]].label, p: Model.CURATED_PALETTES[keys[i]] })
+                for (var j = 0; j < keys.length; j++) {
+                    cards.push({ key: keys[j], label: Model.CURATED_PALETTES[keys[j]].label,
+                                 p: Model.CURATED_PALETTES[keys[j]] })
                 }
                 return cards
             }
@@ -219,19 +235,12 @@ Column {
                     anchors.centerIn: parent
                     spacing: Style.space(4)
 
-                    Row {
-                        spacing: 2
+                    Swatches {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        Repeater {
-                            model: palCard.pal ? ["accent", "red", "green", "yellow", "blue"] : []
-                            delegate: Rectangle {
-                                required property string modelData
-                                width: Style.space(11)
-                                height: Style.space(11)
-                                radius: Style.cornerRadius
-                                color: palCard.pal ? palCard.pal[modelData] : "transparent"
-                            }
-                        }
+                        visible: !!palCard.pal
+                        colors: palCard.pal ? palCard.pal : ({})
+                        dotSize: Style.space(7)
+                        joined: true
                     }
 
                     Text {

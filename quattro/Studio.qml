@@ -196,7 +196,10 @@ Item {
 
                         Text {
                             anchors.right: parent.right
-                            anchors.verticalCenter: title.verticalCenter
+                            // parent, not `title`: title lives inside the Row
+                            // above, so it is a nephew rather than a sibling
+                            // and the anchor silently does nothing.
+                            anchors.verticalCenter: parent.verticalCenter
                             text: "esc to close"
                             color: Color.muted
                             font.family: Style.font.family

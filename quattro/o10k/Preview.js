@@ -81,6 +81,15 @@ var CARD_SCENES = [{
     cols: 44
 }];
 
+/// Two scenes at bar-popout width. The bar panel is 360px wide, so the
+/// Studio's six rows at 88 columns do not fit; these two cover the states
+/// worth seeing in a glance-sized surface.
+var PANEL_SCENES = [
+    { key: "clean", label: "clean", git_branch: "main", exit_code: 0, cols: 40 },
+    { key: "dirty", label: "dirty", git_branch: "main",
+      git_staged: 2, git_unstaged: 1, exit_code: 0, cols: 40 }
+];
+
 /// Fields a scene may carry. Anything else is dropped rather than sent, so a
 /// typo in a scene definition fails here instead of being silently ignored by
 /// the daemon's `#[serde(default)]` fields.
