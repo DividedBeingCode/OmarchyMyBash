@@ -18,7 +18,7 @@ A reactive shell prompt and desktop-control layer for [Omarchy](https://github.c
 On Omarchy:
 
 ```bash
-git clone https://github.com/<you>/omarchy10k.git && cd omarchy10k
+git clone https://github.com/DividedBeingCode/OmarchyMyBash.git && cd OmarchyMyBash
 ./install.sh
 ```
 
@@ -35,7 +35,7 @@ eval "$(omarchy10k init bash)"
 The repo is a valid Omarchy plugin, so the QML half can be added directly:
 
 ```bash
-omarchy plugin add <repo-url> --enable --yes
+omarchy plugin add https://github.com/DividedBeingCode/OmarchyMyBash.git --enable --yes
 ```
 
 **This installs the plugin only.** `omarchy plugin add` never builds anything
