@@ -175,6 +175,15 @@ pub struct ThemeConfig {
     /// Art-directed ramp override: exactly two hex colors, start → end.
     /// Wins over `gradient` unless that is "off".
     pub ramp: Option<Vec<String>>,
+    /// Lock the prompt's colors to the Omarchy desktop theme.
+    ///
+    /// A Look is a complete definition and normally sets colors along with
+    /// everything else. With this on, applying a Look takes its shape,
+    /// glyphs and framing but leaves the palette bound to the desktop.
+    ///
+    /// Deliberately NOT in `looks::LOOK_OWNED`: it is a standing preference,
+    /// so no Look can clear it.
+    pub follow_desktop: bool,
 }
 
 impl Default for ThemeConfig {
@@ -184,6 +193,7 @@ impl Default for ThemeConfig {
             custom: None,
             gradient: None,
             ramp: None,
+            follow_desktop: false,
         }
     }
 }

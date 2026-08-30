@@ -215,10 +215,7 @@ pub fn curated_palette(key: &str) -> Option<serde_json::Value> {
 
 /// The closed tag vocabulary. Closed so the UI can build filter chips from a
 /// known set instead of whatever strings happen to appear in the table.
-pub const TAGS: [&str; 10] = [
-    // Does the Look bring its own colors, or respect yours?
-    "structure",
-    "complete",
+pub const TAGS: [&str; 8] = [
     // Density and shape.
     "minimal",
     "dense",
@@ -275,7 +272,7 @@ pub fn curated() -> Vec<LookDef> {
         // ── Structure: respect the user's palette ──────────────────────────
         look("omnarchy", "Omnarchy",
             "The house style. Follows your Omarchy theme exactly.",
-            &["structure", "nerd-font"],
+            &["nerd-font"],
             serde_json::json!({
                 "style": { "preset": "omarchy", "separators": { "shape": "auto" }, "frame": { "enabled": false, "gap_char": "", "gap_gradient": "off" } },
                 "segments": { "os": { "icon": "arch" },
@@ -285,75 +282,75 @@ pub fn curated() -> Vec<LookDef> {
             })),
         look("lean-pure", "Lean Pure",
             "No icons, no fills. Just the path, the branch and a lambda.",
-            &["structure", "minimal", "ascii-safe"],
-            serde_json::json!({
+            &["minimal", "ascii-safe"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "pure", "separators": { "shape": "auto" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "lambda", "error": "lambda", "transient": "lambda" } },
                 "git": { "branch_icon": "text" },
-            })),
+            }), "everforest")),
         look("mono-minimal", "Mono Minimal",
             "The smallest prompt that still tells you where you are.",
-            &["structure", "minimal", "ascii-safe"],
-            serde_json::json!({
+            &["minimal", "ascii-safe"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "minimal", "separators": { "shape": "none" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "dollar", "error": "dollar", "transient": "dollar" } },
                 "git": { "branch_icon": "text" },
                 "prompt": { "newline": false },
-            })),
+            }), "oxocarbon")),
         look("powerline-classic", "Powerline Classic",
             "The arrows everyone knows, on your own colors.",
-            &["structure", "powerline", "nerd-font"],
-            serde_json::json!({
+            &["powerline", "nerd-font"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "powerline", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "arch" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
-            })),
+            }), "tokyo-night")),
         look("two-line-focus", "Two-Line Focus",
             "Context above, a clean line to type on below.",
-            &["structure", "two-line", "nerd-font"],
-            serde_json::json!({
+            &["two-line", "nerd-font"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "nerd" },
                 "prompt": { "newline": true },
-            })),
+            }), "catppuccin")),
         look("dot-matrix", "Dot Matrix",
             "Dense segments separated by dots. A lot of state, little width.",
-            &["structure", "dense", "nerd-font"],
-            serde_json::json!({
+            &["dense", "nerd-font"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "dense", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "linux" },
                               "character": { "success": "angle", "error": "angle", "transient": "angle" } },
                 "git": { "branch_icon": "octicon" },
-            })),
+            }), "blue-matrix")),
         look("zen-fade", "Zen Fade",
             "Segments that dissolve into each other instead of butting up.",
-            &["structure", "nerd-font"],
-            serde_json::json!({
+            &["nerd-font"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "gradient", "separators": { "shape": "fade" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "triangle", "error": "triangle", "transient": "triangle" } },
                 "git": { "branch_icon": "nerd" },
-            })),
+            }), "poimandres")),
         look("framed-focus", "Framed Focus",
             "A rule across the terminal that separates every command.",
-            &["structure", "framed", "two-line"],
-            serde_json::json!({
+            &["framed", "two-line"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "framed", "separators": { "shape": "auto" }, "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "off" } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "text" },
                 "prompt": { "newline": true },
-            })),
+            }), "nord")),
 
         // ── Complete: bring their own palette ──────────────────────────────
         look("tokyo-rainbow", "Tokyo Rainbow",
             "p10k's signature rainbow, in Tokyo Night indigo.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "arch" },
@@ -362,7 +359,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "tokyo-night")),
         look("framed-gradient", "Framed Gradient",
             "A full-width gradient rule above every prompt.",
-            &["complete", "framed", "nerd-font"],
+            &["framed", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "framed", "separators": { "shape": "auto" }, "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "full" } },
                 "segments": { "os": { "icon": "none" },
@@ -371,7 +368,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "tokyo-night")),
         look("slanted-owl", "Slanted Owl",
             "Forest greens, slanted cuts, and an owl watching your errors.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "slanted", "separators": { "shape": "slanted" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "owl" },
@@ -380,7 +377,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "everforest")),
         look("gruvbox-drift", "Gruvbox Drift",
             "Rust and mustard with flame-cut separators.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "gradient", "separators": { "shape": "flame" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "paw" },
@@ -389,7 +386,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "gruvbox")),
         look("rose-classic", "Rosé Classic",
             "Soft rose, plain bars, and a bear who disapproves of failures.",
-            &["complete", "nerd-font"],
+            &["nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "classic", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -398,7 +395,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "rose-pine")),
         look("polar-lean", "Polar Lean",
             "Arctic blues, rounded caps, and a penguin.",
-            &["complete", "nerd-font"],
+            &["nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "round" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "penguin" },
@@ -407,7 +404,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "nord")),
         look("midnight-metro", "Midnight Metro",
             "Catppuccin pastels in full powerline, like a transit map.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "arch" },
@@ -417,7 +414,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "catppuccin")),
         look("dracula-dense", "Dracula Dense",
             "Neon on violet, packed tight with trapezoid cuts.",
-            &["complete", "dense", "nerd-font"],
+            &["dense", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "dense", "separators": { "shape": "trapezoid" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -426,7 +423,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "dracula")),
         look("kanagawa-wave", "Kanagawa Wave",
             "Ink-wash blues, slanted like a brush stroke.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "slanted", "separators": { "shape": "slanted" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -435,7 +432,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "kanagawa")),
         look("solarized-lean", "Solarized Lean",
             "The calibrated classic, kept deliberately plain.",
-            &["complete", "minimal", "ascii-safe"],
+            &["minimal", "ascii-safe"],
             with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -445,7 +442,7 @@ pub fn curated() -> Vec<LookDef> {
         // ── Neon / cyberpunk ──────────────────────────────────────────────
         look("neon-grid", "Neon Grid",
             "Full rainbow powerline in electric cyan and magenta.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -455,7 +452,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "neon")),
         look("outrun", "Outrun",
             "Flame-cut segments and a chrome horizon. Drive.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "gradient", "separators": { "shape": "flame" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -464,7 +461,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "outrun-electric")),
         look("synthwave", "Synthwave",
             "A gradient rule across the grid, purple all the way down.",
-            &["complete", "framed", "two-line", "nerd-font"],
+            &["framed", "two-line", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "framed", "separators": { "shape": "slanted" }, "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "full" } },
                 "segments": { "os": { "icon": "none" },
@@ -474,7 +471,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "synthwave-alpha")),
         look("scarlet-protocol", "Scarlet Protocol",
             "Dense trapezoid segments, scarlet on black. Reads like a HUD.",
-            &["complete", "dense", "nerd-font"],
+            &["dense", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "dense", "separators": { "shape": "trapezoid" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -483,7 +480,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "scarlet-protocol")),
         look("matrix-rain", "Matrix Rain",
             "Terminal green on cold blue, stripped to nothing but the path.",
-            &["complete", "minimal", "ascii-safe"],
+            &["minimal", "ascii-safe"],
             with_palette(serde_json::json!({
                 "style": { "preset": "minimal", "separators": { "shape": "none" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -493,7 +490,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "blue-matrix")),
         look("laser-focus", "Laser Focus",
             "Magenta ink, one clean line to type on.",
-            &["complete", "two-line", "minimal"],
+            &["two-line", "minimal"],
             with_palette(serde_json::json!({
                 "style": { "preset": "pure", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -503,7 +500,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "laser")),
         look("vapor-drift", "Vapor Drift",
             "Segments that fade into twilight. Hot pink over deep purple.",
-            &["complete", "nerd-font"],
+            &["nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "gradient", "separators": { "shape": "fade" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -512,7 +509,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "vaporwave-sunset")),
         look("cobalt-hazard", "Cobalt Hazard",
             "Cobalt blue with hazard-yellow highlights.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "powerline", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -523,7 +520,7 @@ pub fn curated() -> Vec<LookDef> {
         // ── Quieter additions ─────────────────────────────────────────────
         look("night-owl-lean", "Night Owl Lean",
             "For 2am: low glare, nothing shouting.",
-            &["complete", "minimal", "nerd-font"],
+            &["minimal", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -532,7 +529,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "night-owl")),
         look("poimandres-zen", "Poimandres Zen",
             "Desaturated teal and mist. As calm as a prompt gets.",
-            &["complete", "minimal", "ascii-safe"],
+            &["minimal", "ascii-safe"],
             with_palette(serde_json::json!({
                 "style": { "preset": "pure", "separators": { "shape": "none" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -541,7 +538,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "poimandres")),
                 look("daylight-latte", "Daylight Latte",
             "For terminals in the sun: light background, dark ink.",
-            &["complete", "minimal"],
+            &["minimal"],
             with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -552,7 +549,7 @@ pub fn curated() -> Vec<LookDef> {
         // ── Ukiyo: the Japan glyph family, unused until now ───────────────
         look("torii-dusk", "Torii Dusk",
             "Ink-wash blues and a gate at the end of the path.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "slanted", "separators": { "shape": "slanted" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -561,7 +558,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "kanagawa")),
         look("sushi-bar", "Sushi Bar",
             "Muted rose, plain bars, one piece at a time.",
-            &["complete", "minimal", "nerd-font"],
+            &["minimal", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "classic", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -570,7 +567,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "rose-pine")),
         look("ramen-shop", "Ramen Shop",
             "Warm broth colors, dense as a full counter.",
-            &["complete", "dense", "nerd-font"],
+            &["dense", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "dense", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -579,7 +576,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "gruvbox")),
         look("sakura-drift", "Sakura Drift",
             "Petals dissolving between segments.",
-            &["complete", "nerd-font"],
+            &["nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "gradient", "separators": { "shape": "fade" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -588,7 +585,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "rose-pine-moon")),
         look("tea-house", "Tea House",
             "Green-grey calm and nothing you did not ask for.",
-            &["complete", "minimal", "nerd-font"],
+            &["minimal", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -597,7 +594,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "everforest")),
         look("steel-katana", "Steel Katana",
             "Cold blue-grey with a flame-cut edge.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "powerline", "separators": { "shape": "flame" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -606,7 +603,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "iceberg")),
         look("noh-mask", "Noh Mask",
             "Muted stage colors behind a framed rule.",
-            &["complete", "framed", "two-line", "nerd-font"],
+            &["framed", "two-line", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "framed", "separators": { "shape": "slanted" }, "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "subtle" } },
                 "segments": { "os": { "icon": "none" },
@@ -618,7 +615,7 @@ pub fn curated() -> Vec<LookDef> {
         // ── Sci-fi ────────────────────────────────────────────────────────
         look("xenomorph", "Xenomorph",
             "Acid green on black, flame-cut. Something is in the vents.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "gradient", "separators": { "shape": "flame" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -627,7 +624,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "scarlet-protocol")),
         look("bot-farm", "Bot Farm",
             "Flat IBM Carbon, arrows, and no personality whatsoever.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "powerline", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -636,7 +633,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "oxocarbon")),
         look("ghost-shell", "Ghost Shell",
             "Segments that fade out before you finish reading them.",
-            &["complete", "nerd-font"],
+            &["nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "gradient", "separators": { "shape": "fade" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -645,7 +642,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "poimandres")),
         look("blue-cascade", "Blue Cascade",
             "Falling green on blue-black. Dense and unblinking.",
-            &["complete", "dense"],
+            &["dense"],
             with_palette(serde_json::json!({
                 "style": { "preset": "dense", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -654,7 +651,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "blue-matrix")),
         look("deep-space", "Deep Space",
             "Navy with a magenta pulse, full rainbow segments.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -666,7 +663,7 @@ pub fn curated() -> Vec<LookDef> {
         // ── Expressive: the kaomoji family ────────────────────────────────
         look("shrug-life", "Shrug Life",
             "Bright and friendly, and completely unbothered by exit 1.",
-            &["complete", "minimal"],
+            &["minimal"],
             with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -675,7 +672,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "snazzy")),
         look("sleepy-dev", "Sleepy Dev",
             "Dusky blues for the 2am session.",
-            &["complete", "minimal", "two-line"],
+            &["minimal", "two-line"],
             with_palette(serde_json::json!({
                 "style": { "preset": "pure", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -685,7 +682,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "nightfox")),
         look("hype-machine", "Hype Machine",
             "Maximum voltage and a prompt that is thrilled for you.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -694,7 +691,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "neon")),
         look("zen-mode", "Zen Mode",
             "The least prompt that is still a prompt.",
-            &["complete", "minimal"],
+            &["minimal"],
             with_palette(serde_json::json!({
                 "style": { "preset": "minimal", "separators": { "shape": "none" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -705,7 +702,7 @@ pub fn curated() -> Vec<LookDef> {
         // ── Regal ─────────────────────────────────────────────────────────
         look("crown-jewels", "Crown Jewels",
             "Saturated violet with rounded caps.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "powerline", "separators": { "shape": "round" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -714,7 +711,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "aura")),
         look("swordsman", "Swordsman",
             "Hot coral, slanted cuts, one clean stroke.",
-            &["complete", "powerline", "nerd-font"],
+            &["powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "slanted", "separators": { "shape": "slanted" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -725,50 +722,50 @@ pub fn curated() -> Vec<LookDef> {
         // ── Structure only: your palette, a different shape ───────────────
         look("ascii-only", "ASCII Only",
             "No Nerd Font anywhere. For a console, an SSH session, or a tmux that lies about its font.",
-            &["structure", "ascii-safe", "minimal"],
-            serde_json::json!({
+            &["ascii-safe", "minimal"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "classic", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "dollar", "error": "dollar", "transient": "dollar" } },
                 "git": { "branch_icon": "text" },
-            })),
+            }), "solarized-dark")),
         look("single-line", "Single Line",
             "Everything on one row, no blank line above it.",
-            &["structure", "minimal", "nerd-font"],
-            serde_json::json!({
+            &["minimal", "nerd-font"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "octicon" },
                 "prompt": { "newline": false, "blank_line": false },
-            })),
+            }), "gruvbox")),
         look("wide-load", "Wide Load",
             "Every segment, packed tight, thin arrows between.",
-            &["structure", "dense", "powerline", "nerd-font"],
-            serde_json::json!({
+            &["dense", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "dense", "separators": { "shape": "powerline_thin" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "linux" },
                               "character": { "success": "angle", "error": "angle", "transient": "angle" } },
                 "git": { "branch_icon": "octicon" },
-            })),
+            }), "monokai")),
         look("round-trip", "Round Trip",
             "Powerline with rounded caps instead of arrows.",
-            &["structure", "powerline", "nerd-font"],
-            serde_json::json!({
+            &["powerline", "nerd-font"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "powerline", "separators": { "shape": "round" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
-            })),
+            }), "rose-pine")),
         look("diamond-cut", "Diamond Cut",
             "Faceted separators. Sharper than round, softer than flame.",
-            &["structure", "powerline", "nerd-font"],
-            serde_json::json!({
+            &["powerline", "nerd-font"],
+            with_palette(serde_json::json!({
                 "style": { "preset": "powerline", "separators": { "shape": "diamond" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "triangle", "error": "triangle", "transient": "triangle" } },
                 "git": { "branch_icon": "powerline" },
-            })),
+            }), "iceberg")),
     ]
 }
 
@@ -884,6 +881,17 @@ pub const LOOK_OWNED: &[&str] = &[
     "segments.character.error",
     "segments.character.transient",
     "git.branch_icon",
+    // Colors. A Look is a complete definition: applying one resets the
+    // palette along with the shape, so what you get is exactly the Look and
+    // never a blend with whatever preceded it.
+    //
+    // Listed leaf-by-leaf rather than as a bare "theme" so that
+    // `theme.follow_desktop` -- a standing user preference, not part of any
+    // Look -- survives every apply.
+    "theme.source",
+    "theme.custom",
+    "theme.ramp",
+    "theme.gradient",
 ];
 
 /// Remove the Look-owned paths from a config table.
@@ -951,6 +959,39 @@ pub fn clear_replaced_palette(doc: &mut toml::Table, patch: &toml::Value) {
     }
 }
 
+/// Ready a config table to receive a Look's patch atomically, and return the
+/// patch that should actually be merged into it.
+///
+/// The ONE place the atomic-apply rules live. They previously sat in the
+/// in-memory merge only, so the on-disk write — the path behind the Apply
+/// button — silently skipped them: the desktop lock was honoured in a preview
+/// and ignored the moment you committed. Both callers now go through here.
+///
+/// Reads `theme.follow_desktop` off the table rather than a `Config`, because
+/// the disk path only ever has the raw TOML.
+pub fn prepare_atomic_apply(doc: &mut toml::Table, patch: toml::Value) -> toml::Value {
+    let locked = doc
+        .get("theme")
+        .and_then(|t| t.get("follow_desktop"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if locked {
+        // Everything except color: the Look brings its shape, glyphs and
+        // framing, the palette stays bound to the desktop.
+        for path in LOOK_OWNED.iter().filter(|p| !p.starts_with("theme.")) {
+            clear_path(doc, path);
+        }
+        let mut stripped = patch;
+        if let Some(t) = stripped.as_table_mut() {
+            t.remove("theme");
+        }
+        stripped
+    } else {
+        clear_look_owned(doc);
+        patch
+    }
+}
+
 fn merge_patch(
     current: &Config,
     patch: &serde_json::Value,
@@ -964,9 +1005,11 @@ fn merge_patch(
         Some(t) => t.clone(),
         None => toml::Table::new(),
     };
-    if atomic {
-        clear_look_owned(&mut doc);
-    }
+    let patch_val = if atomic {
+        prepare_atomic_apply(&mut doc, patch_val)
+    } else {
+        patch_val
+    };
     clear_replaced_palette(&mut doc, &patch_val);
     if let Some(obj) = patch_val.as_table() {
         for (k, v) in obj {
@@ -1275,6 +1318,91 @@ mod tests {
         }
         assert_eq!(curated().len(), 52, "expected 52 curated Looks");
     }
+
+    // ── A Look is a complete definition ────────────────────────────────────
+
+    fn pinned_to(accent: &str) -> Config {
+        let mut c = Config::default();
+        c.theme.source = "hybrid".into();
+        c.theme.custom = Some(crate::config::CustomPalette {
+            accent: Some(accent.into()),
+            foreground: None, muted: None, background: None,
+            red: None, green: None, yellow: None, blue: None,
+            magenta: None, cyan: None, orange: None,
+        });
+        c
+    }
+
+    #[test]
+    fn applying_a_look_replaces_the_palette_you_had_pinned() {
+        // A Look sets everything, colors included. Previously a `structure`
+        // Look left your pinned palette alone, so what you got depended on
+        // what you were already on.
+        let base = pinned_to("#ff0000");
+        let l = resolve("framed-focus", &base).expect("curated");
+        let after = apply_look(&base, &l.patch).expect("apply");
+        let accent = after.theme.custom.as_ref().and_then(|c| c.accent.clone());
+        assert_ne!(accent.as_deref(), Some("#ff0000"),
+                   "the Look did not replace the pinned palette");
+    }
+
+    #[test]
+    fn the_desktop_lock_keeps_your_colors_through_any_look() {
+        let mut base = Config::default();
+        base.theme.follow_desktop = true;
+        for def in curated() {
+            let after = apply_look(&base, &def.patch).expect("apply");
+            assert!(after.theme.follow_desktop,
+                    "{}: cleared the desktop lock", def.name);
+            assert_eq!(after.theme.source, "omarchy",
+                       "{}: changed the color source while locked", def.name);
+            assert!(after.theme.custom.is_none(),
+                    "{}: wrote a palette while locked", def.name);
+        }
+    }
+
+    #[test]
+    fn the_desktop_lock_still_lets_a_look_change_its_shape() {
+        // Locking colors must not turn Apply into a no-op.
+        let mut base = Config::default();
+        base.theme.follow_desktop = true;
+        let l = resolve("framed-focus", &base).expect("curated");
+        let after = apply_look(&base, &l.patch).expect("apply");
+        assert_eq!(after.style.frame.enabled, Some(true),
+                   "the lock swallowed the Look's structure too");
+    }
+
+    #[test]
+    fn the_desktop_lock_is_not_something_a_look_can_set() {
+        // It is a standing preference. A Look writing it would let a preset
+        // silently opt you into or out of desktop-bound colors.
+        for def in curated() {
+            let t = def.patch.get("theme").and_then(|t| t.get("follow_desktop"));
+            assert!(t.is_none(), "{} writes theme.follow_desktop", def.name);
+        }
+    }
+
+    #[test]
+    fn every_look_defines_its_own_colors() {
+        // The contract: a Look is complete. One that names no palette would
+        // inherit whatever you were on, which is the ambiguity this model
+        // exists to remove.
+        let all = curated();
+        let missing: Vec<&str> = all
+            .iter()
+            .filter(|l| {
+                let theme = l.patch.get("theme");
+                let has_custom = theme.and_then(|t| t.get("custom")).is_some();
+                let tracks_desktop = theme
+                    .and_then(|t| t.get("source"))
+                    .and_then(|s| s.as_str())
+                    == Some("omarchy");
+                !has_custom && !tracks_desktop
+            })
+            .map(|l| l.name.as_str())
+            .collect();
+        assert!(missing.is_empty(), "Looks that define no colors: {missing:?}");
+    }
 }
 
 #[cfg(test)]
@@ -1318,51 +1446,11 @@ mod preset_tests {
                     look.name
                 );
             }
-            let kinds = look.tags.iter().filter(|t| *t == "structure" || *t == "complete").count();
-            assert_eq!(
-                kinds, 1,
-                "{} must be tagged exactly one of structure/complete, got {:?}",
-                look.name, look.tags
-            );
         }
     }
 
     /// A `structure` Look promises to respect whatever palette you are on.
     /// Shipping one that quietly carries `theme.custom` would break that
-    /// promise silently — you would pick "respects your colors" and watch
-    /// your colors change.
-    #[test]
-    fn structure_looks_do_not_carry_their_own_colors() {
-        for look in curated() {
-            if !look.tags.iter().any(|t| t == "structure") {
-                continue;
-            }
-            let has_custom = look
-                .patch
-                .get("theme")
-                .and_then(|t| t.get("custom"))
-                .is_some();
-            assert!(
-                !has_custom,
-                "{} is tagged `structure` but carries theme.custom",
-                look.name
-            );
-        }
-    }
-
-    #[test]
-    fn complete_looks_actually_bring_a_palette() {
-        for look in curated() {
-            if !look.tags.iter().any(|t| t == "complete") {
-                continue;
-            }
-            assert!(
-                look.patch.get("theme").and_then(|t| t.get("custom")).is_some(),
-                "{} is tagged `complete` but brings no palette",
-                look.name
-            );
-        }
-    }
 
     #[test]
     fn every_curated_palette_is_described() {

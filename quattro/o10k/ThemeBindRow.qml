@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Ui
 import "Fx.js" as Fx
 import "Store.js" as Store
 
@@ -21,6 +22,11 @@ Item {
     property var palettes: ({})
     // Active Omarchy theme name, for naming what we diverge from.
     property string desktopTheme: ""
+    /// Whether colors are LOCKED to the desktop theme, as opposed to merely
+    /// happening to match it right now. A lock survives applying a Look.
+    property bool locked: false
+
+    signal lockToggled(bool on)
 
     readonly property var _bind: Store.themeBindState(bindRow.cfgFlat,
                                                       bindRow.palettes,
@@ -67,7 +73,7 @@ Item {
         id: label
         anchors.left: glyphText.right
         anchors.leftMargin: Style.space(6)
-        anchors.right: syncChip.left
+        anchors.right: lockChip.left
         anchors.rightMargin: Style.space(8)
         anchors.verticalCenter: parent.verticalCenter
         text: bindRow.summary
@@ -76,6 +82,46 @@ Item {
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         elide: Text.ElideRight
+    }
+
+    // The lock. Distinct from the bound/pinned STATE above: that says what
+    // your colors happen to be right now, this says they must stay that way
+    // through every Look you apply.
+    Rectangle {
+        id: lockChip
+        anchors.right: syncChip.visible ? syncChip.left : parent.right
+        anchors.rightMargin: syncChip.visible ? Style.space(6) : 0
+        anchors.verticalCenter: parent.verticalCenter
+        width: lockLabel.implicitWidth + Style.space(14)
+        height: lockLabel.implicitHeight + Style.space(6)
+        radius: Fx.radius(Style.cornerRadius) / 2
+        color: bindRow.locked
+            ? Color.accent
+            : (lockArea.containsMouse ? Style.hoverFill : Style.normalFill)
+
+        Text {
+            id: lockLabel
+            anchors.centerIn: parent
+            text: bindRow.locked ? "Locked to desktop \u{1F512}" : "Lock to desktop"
+            color: bindRow.locked ? Color.background : Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+        }
+
+        MouseArea {
+            id: lockArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: bindRow.lockToggled(!bindRow.locked)
+        }
+
+        PanelToolTip {
+            visible: lockArea.containsMouse
+            text: bindRow.locked
+                ? "Applying a Look will change its shape but keep these colors."
+                : "Keep these colors through every Look you apply."
+        }
     }
 
     Rectangle {

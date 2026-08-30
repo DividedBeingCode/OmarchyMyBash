@@ -184,9 +184,14 @@ Flickable {
             cfgFlat: themeTab.cfg
             palettes: themeTab.palettes
             desktopTheme: themeTab.service ? themeTab.service.desktopTheme : themeTab.current
+            locked: String(themeTab.cfg["theme.follow_desktop"]) === "true"
             onSyncRequested: {
                 if (themeTab.service && themeTab.service.applyPaletteTheme)
                     themeTab.service.applyPaletteTheme()
+            }
+            onLockToggled: (on) => {
+                if (themeTab.service && themeTab.service.setFollowDesktop)
+                    themeTab.service.setFollowDesktop(on)
             }
         }
 

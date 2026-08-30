@@ -482,6 +482,25 @@ Item {
 
     // Return terminal colors to the Omarchy desktop theme — the resync half
     // of the bind indicator.
+    /// Lock the prompt's colors to the Omarchy desktop theme.
+    ///
+    /// A Look is a complete definition and normally brings its own palette.
+    /// With this on, applying a Look takes its shape, glyphs and framing and
+    /// leaves the colors bound to the desktop. No Look can clear it — it is
+    /// deliberately outside `LOOK_OWNED` daemon-side.
+    function setFollowDesktop(on) {
+        var id = "svc-follow-desktop"
+        var patch = on
+            ? { theme: { follow_desktop: true, source: "omarchy" } }
+            : { theme: { follow_desktop: false } }
+        var msg = JSON.stringify({
+            type: "config", command: "set", config: patch, id: id
+        }) + "\n"
+        return service._rpc(msg, id, function () {
+            service.invalidateDerived()
+        })
+    }
+
     function applyPaletteTheme() {
         var id = "svc-sync-theme"
         var msg = JSON.stringify({

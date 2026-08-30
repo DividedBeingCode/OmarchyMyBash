@@ -111,16 +111,22 @@ from the control you are turning.
 
 ![The Theme tab — 53 palettes, each showing the colors it will apply](docs/img/studio-theme.png)
 
-### Presets come in two flavours
+### A Look is a complete definition
 
-Every curated Look is tagged **`structure`** or **`complete`**:
+Applying a Look sets **everything**: colors, style preset, separators, frame,
+glyphs, prompt characters, line count. It is a whole design, not a patch over
+whatever you were already on — so what you get is the Look, never a blend with
+the last one you tried.
 
-- **`structure`** changes separators, frames, glyphs and layout, and **respects
-  whatever palette you are on**.
-- **`complete`** brings its own colors too.
+Colors, framing and glyphs are then separate controls for deviating from it.
+Applying another Look replaces those deviations with that Look's own answer.
 
-The tag is on the card, so you always know whether picking something will
-change your palette.
+A Look does **not** touch which segments are enabled. Turning the battery
+segment off is a standing decision, not part of a look.
+
+If you would rather keep your colors, **Lock to desktop** on the Theme tab
+binds them to the Omarchy theme; applying a Look then changes its shape and
+leaves your palette alone. No Look can clear the lock.
 
 ### Gradients that stay in the family
 

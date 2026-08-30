@@ -159,6 +159,7 @@ Controls color source.
 | `source` | string | `"omarchy"` | `omarchy`, `custom`, `hybrid`, `terminal` | Yes | Color palette source. `omarchy` reads from theme system. `custom` uses only `[theme.custom]`. `hybrid` merges both. `terminal` resolves from the rendered terminal palette file (ghostty.conf in the theme state dir): background/foreground direct, accent=palette 4, muted=palette 8, red..cyan=palette 1–6, orange=11, bright=15; falls back to defaults when the file or entries are missing. `[theme.custom]` overrides still win. Custom overrides not re-applied on `reload_theme`. |
 
 | `gradient` | string | `"auto"` | `auto`, `off`, `full` | Yes | How wide a hue sweep the palette's gradient ramp takes from the accent. `auto` = 38°, `full` = 64°, both rotated in OKLCH so the ramp stays inside the accent's own hue family; `off` collapses the ramp to a flat accent and outranks `ramp`. |
+| `follow_desktop` | bool | `false` | `true`, `false` | Yes | Lock the prompt's colors to the Omarchy desktop theme. A Look is a complete definition and normally brings its own palette; with this on, applying one takes its shape, glyphs and framing and leaves the colors bound to the desktop. Not in `LOOK_OWNED`, so no Look can clear it. |
 | `ramp` | array | — | two hex strings | Yes | Art-directed ramp override, start → end. Wins over `gradient` unless that is `off`. Curated palettes that ship one are also matched by accent, so a config written before this key still gets its art direction. |
 
 ### The gradient ramp

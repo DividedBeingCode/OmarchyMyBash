@@ -560,10 +560,10 @@ the panel's background rather than the preset's.
 
 ### Palette shown per card
 
-A `complete` Look carries `theme.custom`, so its card previews in its own
-colors. A `structure` Look respects whatever palette you are on, so its card
-previews on the **current** palette — inventing a background for it would show
-something the preset does not actually do.
+Every Look carries its own colors, so a card previews in the palette that
+Look will actually apply — not the one you happen to be on. When
+`[theme] follow_desktop` is set the card previews without the Look's
+palette, matching what applying it will really do.
 
 ### Detail editor: `StudioLookEditor.qml`
 

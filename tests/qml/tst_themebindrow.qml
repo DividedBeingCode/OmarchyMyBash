@@ -58,4 +58,39 @@ TestCase {
         bound.cfgFlat = ({ "theme.source": "omarchy" })
         compare(bound.state_, "bound")
     }
+
+    // The desktop lock. Distinct from the bound/pinned STATE the rest of this
+    // file covers: that describes what the colors happen to be right now,
+    // the lock says they must survive every Look you apply.
+    ThemeBindRow {
+        id: lockRow
+        width: 600
+        cfgFlat: ({ "theme.source": "omarchy" })
+        desktopTheme: "Tokyo Night"
+        locked: true
+    }
+
+    ThemeBindRow {
+        id: unlockedRow
+        width: 600
+        cfgFlat: ({ "theme.source": "omarchy" })
+        desktopTheme: "Tokyo Night"
+        locked: false
+    }
+
+    function test_the_lock_is_not_the_same_thing_as_being_bound() {
+        // Both rows are bound to the desktop; only one is locked there.
+        compare(lockRow.state_, unlockedRow.state_)
+        verify(lockRow.locked !== unlockedRow.locked)
+    }
+
+    function test_toggling_the_lock_reports_the_new_value() {
+        var seen = []
+        function rec(on) { seen.push(on) }
+        lockRow.lockToggled.connect(rec)
+        lockRow.lockToggled(!lockRow.locked)
+        lockRow.lockToggled.disconnect(rec)
+        compare(seen.length, 1)
+        compare(seen[0], false, "a locked row must ask to unlock")
+    }
 }

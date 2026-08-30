@@ -1534,10 +1534,6 @@ async fn write_patch(
         },
         Err(_) => toml::Table::new(),
     };
-    if atomic {
-        crate::looks::clear_look_owned(&mut doc);
-    }
-
     let mut failed_keys: Vec<String> = Vec::new();
     let mut patch_table = toml::Table::new();
     if let Some(obj) = patch.as_object() {
@@ -1557,7 +1553,15 @@ async fn write_patch(
         ));
     }
 
-    let patch_val = toml::Value::Table(patch_table);
+    // Atomic applies clear what a Look owns and honour the desktop lock.
+    // Both rules come from `prepare_atomic_apply`, the same function the
+    // in-memory merge uses: they lived only in that merge once, so the lock
+    // held in a preview and evaporated the moment you pressed Apply.
+    let patch_val = if atomic {
+        crate::looks::prepare_atomic_apply(&mut doc, toml::Value::Table(patch_table))
+    } else {
+        toml::Value::Table(patch_table)
+    };
     crate::looks::clear_replaced_palette(&mut doc, &patch_val);
     if let Some(obj) = patch_val.as_table() {
         for (k, v) in obj {
@@ -2401,9 +2405,11 @@ mod tests {
     }
 
     #[test]
-    fn a_structure_look_card_keeps_the_palette_you_are_on() {
-        // The other half of the contract: `structure` Looks are documented to
-        // respect your colors, so the live theme must still travel.
+    fn a_card_shows_the_looks_own_colors_not_the_ones_you_are_on() {
+        // A Look is a complete definition, so its card must show ITS palette
+        // regardless of what you are currently pinned to. This used to assert
+        // the opposite -- that a `structure` Look kept your colors -- back
+        // when a Look was a partial definition.
         let mut base = Config::default();
         base.theme.source = "hybrid".into();
         base.theme.custom = Some(crate::config::CustomPalette {
@@ -2413,7 +2419,23 @@ mod tests {
             magenta: None, cyan: None, orange: None,
         });
         let card = card_config("dot-matrix", &base);
-        assert_eq!(card.theme, base.theme, "structure card lost your palette");
+        let accent = card.theme.custom.as_ref().and_then(|c| c.accent.clone());
+        assert_ne!(accent.as_deref(), Some("#ff0000"),
+                   "the card inherited the palette you were on");
+    }
+
+    #[test]
+    fn a_card_honours_the_desktop_lock() {
+        // With colors locked to the desktop, a card must preview the Look's
+        // shape WITHOUT its palette -- otherwise the card promises a color
+        // change that applying will not make.
+        let mut base = Config::default();
+        base.theme.follow_desktop = true;
+        let card = card_config("synthwave", &base);
+        assert_eq!(card.theme.source, "omarchy", "card ignored the lock");
+        assert!(card.theme.custom.is_none(), "card took the Look's palette while locked");
+        assert_eq!(card.style.frame.enabled, Some(true),
+                   "the lock swallowed the Look's structure in the card too");
     }
 
     #[test]
@@ -2537,6 +2559,88 @@ mod tests {
             crate::theme::AnsiColor::from_hex("#83a598").unwrap(),
             "palette did not move off the starting accent at all"
         );
+    }
+
+    #[tokio::test]
+    async fn the_desktop_lock_survives_a_persisted_apply() {
+        // The lock was honoured by the in-memory merge and ignored by the
+        // on-disk write, so it held in a preview and evaporated the moment
+        // you pressed Apply. Both paths now share prepare_atomic_apply.
+        let dir = temp_config_dir("lock-persisted");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[theme]\nsource = \"omarchy\"\nfollow_desktop = true\n",
+        )
+        .unwrap();
+        let state = std::sync::Arc::new(DaemonState::new(
+            Config::load(&path).expect("load"),
+            ThemePalette::default(),
+            path.clone(),
+            dir.join("d.sock"),
+        ));
+
+        // synthwave is a Look that carries a palette.
+        let look = crate::looks::resolve("synthwave", &Config::default()).expect("curated");
+        write_look_patch(&state, &look.patch).await.expect("write ok");
+
+        let doc: toml::Table =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).expect("valid toml");
+        let theme = doc.get("theme").and_then(|t| t.as_table()).expect("theme table");
+        assert_eq!(
+            theme.get("follow_desktop").and_then(|v| v.as_bool()),
+            Some(true),
+            "the Look cleared the lock on disk"
+        );
+        assert!(
+            theme.get("custom").is_none(),
+            "the Look wrote its palette to disk despite the lock: {:?}",
+            theme.get("custom")
+        );
+        assert_eq!(
+            theme.get("source").and_then(|v| v.as_str()),
+            Some("omarchy"),
+            "the Look unbound colors from the desktop"
+        );
+        // ...but its SHAPE must still have landed.
+        let frame = doc
+            .get("style")
+            .and_then(|v| v.get("frame"))
+            .and_then(|v| v.get("enabled"))
+            .and_then(|v| v.as_bool());
+        assert_eq!(frame, Some(true), "the lock swallowed the Look's structure");
+    }
+
+    #[tokio::test]
+    async fn the_lock_holds_when_a_palette_is_already_on_disk() {
+        // The live repro: the lock is switched on while a previous Look's
+        // palette is still in config.toml. The earlier lock test started
+        // from a file with no [theme.custom] at all, which is not the state
+        // a real user is ever in.
+        let dir = temp_config_dir("lock-with-existing-palette");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[theme]\nsource = \"omarchy\"\nfollow_desktop = true\n\n             [theme.custom]\naccent = \"#76ff9f\"\n",
+        )
+        .unwrap();
+        let state = std::sync::Arc::new(DaemonState::new(
+            Config::load(&path).expect("load"),
+            ThemePalette::default(),
+            path.clone(),
+            dir.join("d.sock"),
+        ));
+        let look = crate::looks::resolve("synthwave", &Config::default()).expect("curated");
+        write_look_patch(&state, &look.patch).await.expect("write ok");
+
+        let doc: toml::Table =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).expect("toml");
+        let accent = doc
+            .get("theme")
+            .and_then(|t| t.get("custom"))
+            .and_then(|c| c.get("accent"))
+            .and_then(|v| v.as_str());
+        assert_eq!(accent, Some("#76ff9f"), "the Look overwrote the locked palette");
     }
 }
 
