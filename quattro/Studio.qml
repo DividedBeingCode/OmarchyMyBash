@@ -39,6 +39,11 @@ Item {
     property var service: null
     property string omarchyPath: Quickshell.env("OMARCHY_PATH")
 
+    /// Where this plugin was installed. `omarchy plugin add` clones the whole
+    /// repo, so install.sh sits right here and the banner can name its path.
+    readonly property string pluginRoot:
+        Quickshell.env("HOME") + "/.config/omarchy/plugins/" + studio.pluginId
+
     readonly property string pluginId:
         manifest && manifest.id ? String(manifest.id) : "community.omarchy10k"
 
@@ -221,6 +226,64 @@ Item {
                                 labelSize: Style.font.body
                                 active: studio.currentTab === index
                                 onClicked: studio.currentTab = index
+                            }
+                        }
+                    }
+
+                    // The binary is missing. `omarchy plugin add` installs
+                    // the QML only -- it never builds anything -- so this is
+                    // a reachable state, and the one thing that must not
+                    // happen is the surfaces silently looking broken.
+                    Rectangle {
+                        width: parent.width
+                        visible: studio.service && studio.service.binaryProbed
+                                 && !studio.service.binaryInstalled
+                        height: visible ? missingCol.implicitHeight + Style.space(20) : 0
+                        radius: Fx.radius(Style.cornerRadius)
+                        color: Color.background
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: parent.radius
+                            color: Style.normalFill
+                        }
+
+                        Column {
+                            id: missingCol
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.margins: Style.space(14)
+                            spacing: Style.space(6)
+
+                            Text {
+                                text: "\u26a0  The omarchy10k binary is not installed"
+                                color: Color.urgent
+                                font.family: Style.font.family
+                                font.pixelSize: Style.font.body
+                                font.bold: true
+                            }
+
+                            Text {
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                color: Color.foreground
+                                font.family: Style.font.family
+                                font.pixelSize: Style.font.bodySmall
+                                text: "This panel configures a prompt daemon, and `omarchy plugin "
+                                      + "add` installs only the plugin \u2014 it never builds "
+                                      + "anything. Until the binary is on PATH there is nothing "
+                                      + "to preview and nothing to apply."
+                            }
+
+                            Text {
+                                width: parent.width
+                                wrapMode: Text.WrapAnywhere
+                                color: Color.accent
+                                font.family: studio.service && studio.service.terminalFont
+                                    ? studio.service.terminalFont : Style.font.family
+                                font.pixelSize: Style.font.bodySmall
+                                text: "  " + studio.pluginRoot + "/install.sh"
                             }
                         }
                     }

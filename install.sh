@@ -243,8 +243,18 @@ fi
 # Step 4: Quattro plugin (optional)
 if [[ -d "${SCRIPT_DIR}/quattro" ]]; then
     info "Installing Quattro Control Center plugin..."
-    mkdir -p "$PLUGIN_DIR"
-    cp -r "${SCRIPT_DIR}/quattro/"* "$PLUGIN_DIR/"
+    # Lay it out EXACTLY as `omarchy plugin add` would: manifest.json at the
+    # plugin root, payload under quattro/. The two install paths must produce
+    # the same tree or they drift, and the drift surfaces as "works from the
+    # installer, not from plugin add".
+    mkdir -p "${PLUGIN_DIR}/quattro"
+    cp -r "${SCRIPT_DIR}/quattro/"* "${PLUGIN_DIR}/quattro/"
+    cp "${SCRIPT_DIR}/manifest.json" "${PLUGIN_DIR}/manifest.json"
+    # A previous layout flattened quattro/ into the plugin root. Clear those
+    # stale copies so the shell cannot load yesterday's QML.
+    find "$PLUGIN_DIR" -maxdepth 1 -name '*.qml' -delete 2>/dev/null || true
+    find "$PLUGIN_DIR" -maxdepth 1 -name 'Model.js' -delete 2>/dev/null || true
+    rm -rf "${PLUGIN_DIR}/o10k" 2>/dev/null || true
     # Sync manifest.json version with Cargo.toml
     cargo_version=$(grep -m1 '^version' "${SCRIPT_DIR}/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
     if [[ -n "$cargo_version" && -f "${PLUGIN_DIR}/manifest.json" ]]; then

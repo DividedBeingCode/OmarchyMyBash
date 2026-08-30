@@ -18,3 +18,6 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Junk that would otherwise ship in a `plugin add` clone.
+.*.tmp

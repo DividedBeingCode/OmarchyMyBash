@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "community.omarchy10k",
+  "name": "Omarchy10k",
+  "version": "0.4.0",
+  "author": "Ian Johnston",
+  "license": "MIT",
+  "description": "Control Center for the Omarchy10k shell experience. Configure prompt style, theme, segments, and shell integrations from the Quattro bar.",
+  "kinds": [
+    "bar-widget",
+    "service",
+    "overlay",
+    "panel"
+  ],
+  "entryPoints": {
+    "barWidget": "quattro/BarWidget.qml",
+    "service": "quattro/Service.qml",
+    "overlay": "quattro/SessionPicker.qml",
+    "panel": "quattro/Studio.qml"
+  },
+  "barWidget": {
+    "displayName": "Omarchy10k",
+    "category": "Shell",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showGitBadge": true,
+      "showAgentBadge": true,
+      "showLongCmdBadge": true
+    },
+    "schema": [
+      {
+        "key": "showGitBadge",
+        "type": "bool",
+        "label": "Git activity dot",
+        "description": "A dot beside the glyph when the working tree is dirty or has staged changes."
+      },
+      {
+        "key": "showAgentBadge",
+        "type": "bool",
+        "label": "Coding-agent badge",
+        "description": "Shown when the last prompt render detected Claude Code or Codex."
+      },
+      {
+        "key": "showLongCmdBadge",
+        "type": "bool",
+        "label": "Long-command badge",
+        "description": "Shown when the last command ran longer than the notification threshold."
+      }
+    ]
+  }
+}

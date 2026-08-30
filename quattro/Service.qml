@@ -36,6 +36,34 @@ Item {
 
     // ── Public reactive state ──────────────────────────────────────────────
     property string daemonStatus: "not running"
+
+    // ── Is the binary even installed? ──────────────────────────────────────
+    //
+    // `omarchy plugin add` installs the QML and nothing else -- it never
+    // builds or installs anything, by design. So this plugin can be present
+    // and complete while the omarchy10k binary it is a control surface FOR is
+    // absent entirely. Without saying so, the surfaces just look broken: no
+    // presets, no preview, one small "no daemon" in a corner.
+    //
+    // `daemonStatus` cannot answer this: no daemon runs until a shell starts
+    // one, so "not running" is the normal state on a fresh login even when
+    // everything is installed correctly. The binary's presence is a separate
+    // question and needs a separate probe.
+    property bool binaryInstalled: true    // assume yes until the probe says otherwise
+    property bool binaryProbed: false
+
+    Process {
+        id: binaryProbe
+        running: true
+        command: ["sh", "-c", "command -v omarchy10k >/dev/null 2>&1 && echo yes || echo no"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                service.binaryInstalled = String(this.text).trim() === "yes"
+                service.binaryProbed = true
+            }
+        }
+    }
+
     property var sessions: []
     property var lastStatus: ({})
     // Notification threshold in ms from the daemon config ([notifications]

@@ -7,7 +7,10 @@ version = "0.4.0"
 edition = "2024"
 license = "MIT"
 authors = ["Ian Johnston"]
-repository = "https://github.com/ijohnst/omarchy10k"
+# NOTE: update this when the public repo name is settled -- a PKGBUILD
+# will source from it, and §7 of docs/omarchy-plugin-packaging.md lists a
+# wrong/absent source as a last-minute blocker.
+repository = "https://github.com/DividedBeingCode/OmarchyMyBash"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

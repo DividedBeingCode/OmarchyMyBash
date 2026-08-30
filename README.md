@@ -30,6 +30,29 @@ eval "$(omarchy10k init bash)"
 
 `install.sh` handles the rest: builds the binaries, installs them to `~/.local/bin`, installs the Quattro plugin, rice templates, and desktop hooks. Nothing outside `~/.config/omarchy10k`, `~/.local/bin`, and the plugin dir is touched; `--uninstall` reverses everything.
 
+### Installing the Control Center on its own
+
+The repo is a valid Omarchy plugin, so the QML half can be added directly:
+
+```bash
+omarchy plugin add <repo-url> --enable --yes
+```
+
+**This installs the plugin only.** `omarchy plugin add` never builds anything
+— by design, since plugins run unsandboxed inside a long-lived shell process.
+Omarchy10k is a control surface for a prompt daemon, so without the
+`omarchy10k` binary on `PATH` there is nothing to preview and nothing to
+apply. The Studio says so plainly and names the script to run; `plugin add`
+clones the whole repo, so `install.sh` lands in the plugin directory next to
+the QML:
+
+```bash
+~/.config/omarchy/plugins/community.omarchy10k/install.sh
+```
+
+Pass `--enable` if you want it active immediately — plugins land disabled
+otherwise, so you can read the code first.
+
 ## Quick start
 
 ```bash
