@@ -66,7 +66,20 @@ var SCENES = [
 ];
 
 /// The subset shown on a compact card, where six rows would not fit.
-var CARD_SCENES = [SCENES[1]];
+///
+/// Rendered narrow on purpose. A card is roughly a third the width of the
+/// preview pane, and at the pane's column count the daemon pads frame rules
+/// and right-aligned segments out past the card edge, so every card elided
+/// mid-prompt -- which is the exact failure the old gallery had.
+var CARD_SCENES = [{
+    key: "dirty",
+    label: "",
+    git_branch: "main",
+    git_staged: 2,
+    git_unstaged: 1,
+    exit_code: 0,
+    cols: 44
+}];
 
 /// Fields a scene may carry. Anything else is dropped rather than sent, so a
 /// typo in a scene definition fails here instead of being silently ignored by

@@ -38,7 +38,10 @@ Item {
     property var workspaceByPid: ({})
 
     property bool opened: false
-    property string page: "sessions"   // "sessions" | "gallery"
+    // "sessions" only. This surface used to also host the Looks gallery via
+    // payload page:"gallery"; that gallery is now the Studio's Looks tab, and
+    // Studio.open() routes the payload there without reaching this file.
+    property string page: "sessions"
     property var rows: []
     property int selectedIndex: 0
 
@@ -67,15 +70,9 @@ Item {
         root.opened = true
         var payload = null
         try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = null }
-        root.page = (payload && payload.page === "gallery") ? "gallery" : "sessions"
-        if (root.page === "gallery") {
-            galleryLoader.active = true
-            if (galleryLoader.item && galleryLoader.item.open)
-                galleryLoader.item.open("{}")
-        } else {
-            root.selectedIndex = 0
-            root.refreshRows()
-        }
+        root.page = "sessions"
+        root.selectedIndex = 0
+        root.refreshRows()
         Qt.callLater(function () { keyCatcher.forceActiveFocus() })
     }
 
@@ -219,18 +216,6 @@ Item {
             anchors.fill: parent
             enabled: root.page === "sessions"
             onClicked: root.dismiss()
-        }
-
-        // ── Looks Gallery (payload page:"gallery") ─────────────────────────
-        Loader {
-            id: galleryLoader
-            anchors.fill: parent
-            active: false
-            visible: root.opened && root.page === "gallery"
-            source: Qt.resolvedUrl("Gallery.qml")
-            onLoaded: {
-                if (item && item.open) item.open("{}")
-            }
         }
 
         Rectangle {

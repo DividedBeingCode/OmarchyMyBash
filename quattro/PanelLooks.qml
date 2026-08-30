@@ -132,8 +132,10 @@ Column {
         onClicked: looksBucket.panel.saveLook(lookNameField.text)
     }
 
+    // Opens the Studio's Looks tab. The label named a separate surface that
+    // no longer exists as one -- the browser is a Studio tab now.
     PanelKit.ActionButton {
-        label: "Expand gallery"
+        label: "Browse all presets\u2026"
         panel: looksBucket.panel
         onClicked: {
             if (looksBucket.panel.omarchyService && typeof looksBucket.panel.omarchyService.openGallery === "function")

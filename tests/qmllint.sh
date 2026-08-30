@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # Static QML gate.
 #
-# Two rules:
-#   1. NO file may produce an Error:.
-#   2. NO file in quattro/o10k/ may produce an [unqualified] warning.
+# Three rules:
+#   1. NO file may fail to PARSE.
+#   2. NO file may produce an Error:.
+#   3. NO file in quattro/o10k/ may produce an [unqualified] warning.
+#
+# Rule 1 is separate from rule 2 because qmllint reports a syntax error as
+# `Warning: ... [syntax]`, NOT as `Error:`, and exits 255. A gate that greps
+# only for `^Error:` therefore passes a file that does not parse -- which it
+# did: StudioLooks.qml shipped a stray backslash that terminated a string
+# early, cleared this gate, and only failed once Quickshell tried to load it.
+# The exit code is the reliable signal; warning-only files exit 0.
 #
 # Rule 2 is scoped to new code deliberately: the plugin-wide baseline is
 # 341 warnings / 0 errors, of which 134 are [unqualified] — the class that
@@ -33,6 +41,13 @@ cd "$ROOT/quattro" || exit 1
 for f in *.qml o10k/*.qml; do
     [[ -e "$f" ]] || continue
     out="$("$LINT" -I "$SHIM" "$f" 2>&1)"
+    rc=$?
+
+    if (( rc != 0 )); then
+        echo "PARSE FAILURE in $f (qmllint exit $rc):"
+        grep -E "\[syntax\]|^Error:" <<<"$out" | head -5
+        FAIL=1
+    fi
 
     if grep -q "^Error:" <<<"$out"; then
         echo "ERROR in $f:"

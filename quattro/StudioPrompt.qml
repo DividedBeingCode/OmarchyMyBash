@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Ui
 import "o10k"
 import "o10k/Fx.js" as Fx
+import "o10k/Preview.js" as Preview
 
 // Studio → Prompt tab: style preset, separators, glyphs, frame and the
 // prompt-behavior toggles.
@@ -15,6 +16,8 @@ Flickable {
     id: promptTab
 
     property var service: null
+    /// Injected by Studio: the pinned preview pane this tab drives.
+    property var previewPane: null
 
     contentWidth: width
     contentHeight: body.implicitHeight
@@ -34,7 +37,30 @@ Flickable {
 
     function _set(key, value) {
         if (promptTab.service) promptTab.service.setConfigValue(key, value)
+        // The config just changed, so re-render against it. Every control on
+        // this tab routes through here, which is why one call covers all of
+        // them rather than each control remembering to refresh.
+        promptTab.refreshPreview()
     }
+
+    /// Render the CURRENT config (no look, no patch) into the pinned pane.
+    ///
+    /// Immediate rather than debounced: this follows a click, and a click
+    /// should never wait out the hover delay.
+    function refreshPreview() {
+        if (!promptTab.previewPane || !promptTab.service) return
+        promptTab.previewPane.caption = "your prompt"
+        promptTab.previewPane.colors = promptTab.service.currentPaletteColors()
+        promptTab.previewPane.renderState = "loading"
+        promptTab.service.requestPreview(null, null, Preview.SCENES, true,
+            function (res) {
+                promptTab.previewPane.renderState = res.state
+                promptTab.previewPane.renders = res.renders
+                promptTab.previewPane.errorText = res.error
+            })
+    }
+
+    onPreviewPaneChanged: promptTab.refreshPreview()
 
     function _default(key) {
         return promptTab.defaults[key]

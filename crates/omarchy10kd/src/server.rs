@@ -436,7 +436,16 @@ async fn handle_control(
             let looks = crate::looks::all(&config_guard);
             let looks_json: Vec<serde_json::Value> = looks
                 .iter()
-                .map(|l| serde_json::json!({ "name": l.name, "label": l.label, "patch": l.patch }))
+                .map(|l| serde_json::json!({
+                    "name": l.name,
+                    "label": l.label,
+                    // Without these the browser has no blurb to show and no
+                    // tags to filter by -- the metadata exists on LookDef but
+                    // was being dropped on the way out.
+                    "blurb": l.blurb,
+                    "tags": l.tags,
+                    "patch": l.patch,
+                }))
                 .collect();
             write_response(writer, serde_json::json!({
                 "type": "control",

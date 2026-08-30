@@ -2,6 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "o10k/Preview.js" as Preview
+import "o10k/Motion.js" as Motion
 import "o10k/Store.js" as Store
 
 // Omarchy10k service-kind plugin (manifest kind "service").
@@ -95,6 +97,10 @@ Item {
     // Any config or theme change invalidates every cached render.
     function invalidateDerived() {
         Store.brokerInvalidate(service._broker)
+        // Cached renders are now stale in exactly the same way: a config or
+        // theme change means every preview was rendered against the old
+        // effective config.
+        if (service._previewCache) Store.brokerInvalidate(service._previewCache)
     }
 
     function touchConfigKey(key) {
@@ -117,6 +123,10 @@ Item {
     // real `looks` verb is exactly what one owner prevents.
     property var looks: []
     property var palettes: ({})
+    /// The same palettes in daemon order (curated first, then derived
+    /// alphabetically). A picker built from Object.keys() reshuffles between
+    /// opens, which is disorienting when there are thirty of them.
+    property var paletteList: []
     property var defaultsFlat: ({})
     property var scripts: []
     // Active Omarchy theme, so a pinned surface can name what it diverges
@@ -135,27 +145,175 @@ Item {
         service._rpc(Model.buildCommand("palettes", "svc-palettes"), "svc-palettes",
                      function (resp) {
                          if (resp.palettes === undefined) return
-                         // The verb returns [{key, theme}]; flatten to the
-                         // {key: {label, accent, ...}} shape the bind
-                         // indicator and palette pickers expect.
+                         // The verb returns a list; consumers index by key, so
+                         // flatten to {key: {...}} while keeping the ordered
+                         // list for pickers that must not reshuffle.
                          var out = {}
+                         var ordered = []
                          for (var i = 0; i < resp.palettes.length; i++) {
                              var entry = resp.palettes[i]
                              if (!entry || !entry.key) continue
                              var custom = (entry.theme && entry.theme.custom) ? entry.theme.custom : {}
-                             // The `palettes` verb returns {key, theme} with
-                             // no display label, so the bind row rendered the
-                             // raw key ("gruvbox"). Model.js carries the
-                             // proper labels.
-                             var curated = Model.CURATED_PALETTES[entry.key]
-                             out[entry.key] = {
-                                 label: (curated && curated.label) || entry.label || entry.key,
-                                 accent: custom.accent || "",
+                             // `colors` is sent flat precisely so a swatch
+                             // strip does not have to dig it out of the patch;
+                             // fall back for an older daemon.
+                             var colors = entry.colors ? entry.colors : custom
+                             var rec = {
+                                 key: entry.key,
+                                 label: entry.label || entry.key,
+                                 blurb: entry.blurb || "",
+                                 source: entry.source || "curated",
+                                 lowContrast: !!entry.low_contrast,
+                                 accent: colors.accent || custom.accent || "",
+                                 colors: colors,
                                  custom: custom
                              }
+                             out[entry.key] = rec
+                             ordered.push(rec)
                          }
                          service.palettes = out
+                         service.paletteList = ordered
                      })
+    }
+
+    // ── Live preview (beautification pass) ─────────────────────────────────
+    //
+    // One owner for preview fetching, so every surface shares the broker's
+    // cache: browsing eighteen Looks costs at most eighteen renders, then
+    // zero. Hover is debounced through Preview.js so crossing a grid issues
+    // one request rather than one per card.
+
+    /// Render `look`/`patch` against `scenes` and hand the callback
+    /// `{ state, renders, error }`. `state` is "ok" | "error" | "empty".
+    ///
+    /// Cached: an identical (look, patch, scenes) triple resolves from the
+    /// broker without touching the socket. `immediate` skips the hover
+    /// debounce, which is what a click wants.
+    function requestPreview(look, patch, scenes, immediate, cb) {
+        var key = Preview.cacheKey(look, patch, scenes)
+
+        // Fast path: already rendered. No socket, no timer, no frame cost.
+        var probe = Store.brokerLookup(service._previewCache, key)
+        if (probe.hit) {
+            cb(probe.value)
+            return
+        }
+        // Already in flight — join the waiters rather than issue a duplicate.
+        if (!probe.shouldSend) {
+            service._addPreviewWaiter(key, cb)
+            return
+        }
+
+        function issue() {
+            // Re-probe: the debounce means the world may have moved since the
+            // request was queued.
+            var now = Store.brokerLookup(service._previewCache, key)
+            if (now.hit) { cb(now.value); return }
+            if (!now.shouldSend) { service._addPreviewWaiter(key, cb); return }
+
+            if (!controlSocket.connected) {
+                cb({ state: "empty", renders: [], error: "" })
+                return
+            }
+
+            var id = service._nextId("prev")
+            Store.brokerBegin(service._previewCache, key, id)
+            service._addPreviewWaiter(key, cb)
+
+            service._pending[id] = function (resp) {
+                var result
+                if (resp.status === "error") {
+                    result = { state: "error", renders: [],
+                               error: resp.error || "render failed" }
+                    // Released, not cached: a stranded key would block this
+                    // preset forever, and the next hover should retry.
+                    Store.brokerRelease(service._previewCache, key)
+                } else {
+                    // A daemon without `scenes` support answers with the flat
+                    // left/right pair; treat that as a single unlabelled row.
+                    var renders = resp.renders
+                        ? resp.renders
+                        : [{ label: "", left: resp.left, right: resp.right }]
+                    result = { state: "ok", renders: renders, error: "" }
+                    Store.brokerResolve(service._previewCache, key, id, result)
+                }
+                service._flushPreviewWaiters(key, result)
+            }
+
+            controlSocket.write(Preview.buildRequest(
+                { cwd: service.previewCwd, cols: service.previewCols },
+                patch, look, scenes, id))
+            controlSocket.flush()
+        }
+
+        if (immediate) {
+            // A click must not wait out the hover delay.
+            service._previewDebounce.clear()
+            issue()
+        } else {
+            service._previewDebounce.request(issue)
+        }
+    }
+
+    function _addPreviewWaiter(key, cb) {
+        if (!service._previewWaiters[key]) service._previewWaiters[key] = []
+        service._previewWaiters[key].push(cb)
+    }
+
+    function _flushPreviewWaiters(key, result) {
+        var waiting = service._previewWaiters[key] || []
+        delete service._previewWaiters[key]
+        for (var i = 0; i < waiting.length; i++) waiting[i](result)
+    }
+
+    /// Drop a queued hover — for a pointer leaving the grid.
+    function cancelPreview() {
+        service._previewDebounce.clear()
+    }
+
+    /// The palette a preview will actually render in, for a preset that does
+    /// not bring its own. Falls back to the pinned custom palette, then to
+    /// whatever the daemon reports.
+    function currentPaletteColors() {
+        var pinned = service.cfgFlat ? service.cfgFlat["theme.custom.accent"] : ""
+        if (pinned) {
+            for (var k in service.palettes) {
+                var p = service.palettes[k]
+                if (p.accent && String(p.accent).toLowerCase()
+                        === String(pinned).toLowerCase())
+                    return p.colors
+            }
+        }
+        var desktop = service.palettes[service.desktopTheme]
+        return desktop ? desktop.colors : ({})
+    }
+
+    property var _previewCache: Store.newBroker()
+    property var _previewWaiters: ({})
+    /// Context every preview renders against. A real-looking path makes the
+    /// mock read as a terminal rather than a diagram.
+    property string previewCwd: "~/projects/my-app"
+    /// Narrower than a real terminal on purpose: the preview pane is about a
+    /// third of the Studio, and a 120-col render pads its frame rules out
+    /// past the pane and wraps every line. 88 fills the pane without
+    /// misrepresenting how the prompt lays out.
+    property int previewCols: 88
+
+    readonly property var _previewDebounce: Preview.debouncer(
+        Motion.MICRO_MS,
+        function (fn) { previewTimer.callback = fn; previewTimer.restart(); return 1 },
+        function () { previewTimer.stop() })
+
+    Timer {
+        id: previewTimer
+        property var callback: null
+        interval: Motion.MICRO_MS
+        repeat: false
+        onTriggered: {
+            var fn = previewTimer.callback
+            previewTimer.callback = null
+            if (fn) fn()
+        }
     }
 
     function fetchDefaults() {
@@ -229,6 +387,43 @@ Item {
     // Studio share one dirty set and one debounce and cannot race each
     // other's saves. Reads come from `cfgFlat`.
     readonly property var cfgFlat: service._cfgFlat
+
+    /// Save the daemon's CURRENT effective config as a named Look.
+    ///
+    /// Lives here rather than on each surface because Panel.qml and
+    /// Gallery.qml each had their own copy writing to their own socket —
+    /// the duplication this pass exists to remove.
+    function saveLook(name, cb) {
+        var safe = String(name || "").trim()
+        if (safe.length === 0) return service._err("a Look needs a name")
+        var id = service._nextId("looksave")
+        var sent = service._rpc(JSON.stringify({
+            type: "control", command: "looks_save", name: safe, label: safe, id: id
+        }) + "\n", id, function (resp) {
+            service.fetchLooks()
+            // A new Look changes nothing about existing renders, but the
+            // saved one must not inherit a cache entry keyed on its name.
+            service.invalidateDerived()
+            if (cb) cb(resp)
+        })
+        return sent ? JSON.stringify({ ok: true, queued: true })
+                    : service._err("no omarchy10k daemon running")
+    }
+
+    function deleteLook(name, cb) {
+        var safe = String(name || "").trim()
+        if (safe.length === 0) return service._err("which Look?")
+        var id = service._nextId("looksdel")
+        var sent = service._rpc(JSON.stringify({
+            type: "control", command: "looks_delete", name: safe, id: id
+        }) + "\n", id, function (resp) {
+            service.fetchLooks()
+            service.invalidateDerived()
+            if (cb) cb(resp)
+        })
+        return sent ? JSON.stringify({ ok: true, queued: true })
+                    : service._err("no omarchy10k daemon running")
+    }
 
     function configValue(tomlKey, fallback) {
         var v = service._cfgFlat[tomlKey]

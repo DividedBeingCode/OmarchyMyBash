@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Ui
 import "o10k"
 import "o10k/Fx.js" as Fx
+import "o10k/Preview.js" as Preview
 import "Model.js" as Model
 
 // Studio → Theme tab: the bind state machine and the two things that drive
@@ -17,6 +18,8 @@ Flickable {
     id: themeTab
 
     property var service: null
+    /// Injected by Studio: the pinned preview pane this tab drives.
+    property var previewPane: null
 
     contentWidth: width
     contentHeight: body.implicitHeight
@@ -31,6 +34,57 @@ Flickable {
         (themeTab.service && themeTab.service.palettes
          && Object.keys(themeTab.service.palettes).length > 0)
             ? themeTab.service.palettes : Model.CURATED_PALETTES
+
+    /// Daemon order — curated first, then derived alphabetically. Built from
+    /// Object.keys() a thirty-entry picker reshuffles between opens.
+    readonly property var paletteList: {
+        if (themeTab.service && themeTab.service.paletteList
+                && themeTab.service.paletteList.length > 0)
+            return themeTab.service.paletteList
+        var out = []
+        var keys = Object.keys(themeTab.palettes)
+        keys.sort()
+        for (var i = 0; i < keys.length; i++) {
+            var p = themeTab.palettes[keys[i]]
+            out.push({ key: keys[i], label: p.label || keys[i],
+                       blurb: p.blurb || "", source: p.source || "curated",
+                       accent: p.accent || "",
+                       colors: p.colors ? p.colors : p })
+        }
+        return out
+    }
+
+    /// Preview a palette without applying it — the try-before-buy the theme
+    /// picker never had. The current config is rendered against the hovered
+    /// palette by patching only `theme.custom`.
+    function previewPalette(entry, immediate) {
+        if (!themeTab.previewPane || !themeTab.service) return
+        themeTab.previewPane.caption = entry.label + " · preview"
+        themeTab.previewPane.colors = entry.colors
+        themeTab.previewPane.renderState = "loading"
+        var patch = { theme: { source: "hybrid", custom: entry.colors } }
+        themeTab.service.requestPreview(null, patch, Preview.SCENES, immediate,
+            function (res) {
+                themeTab.previewPane.renderState = res.state
+                themeTab.previewPane.renders = res.renders
+                themeTab.previewPane.errorText = res.error
+            })
+    }
+
+    function showCurrent() {
+        if (!themeTab.previewPane || !themeTab.service) return
+        themeTab.previewPane.caption = "your prompt"
+        themeTab.previewPane.colors = themeTab.service.currentPaletteColors()
+        themeTab.previewPane.renderState = "loading"
+        themeTab.service.requestPreview(null, null, Preview.SCENES, true,
+            function (res) {
+                themeTab.previewPane.renderState = res.state
+                themeTab.previewPane.renders = res.renders
+                themeTab.previewPane.errorText = res.error
+            })
+    }
+
+    onPreviewPaneChanged: themeTab.showCurrent()
 
     Component.onCompleted: themeTab.refresh()
 
@@ -117,32 +171,22 @@ Flickable {
 
             Repeater {
                 model: themeTab.themes
-                delegate: Rectangle {
+
+                // A theme chip now carries the colors it will apply. The list
+                // used to be 22 identical grey words, so choosing meant
+                // applying one desktop-wide just to find out what it was.
+                delegate: Chip {
                     id: themeChip
                     required property string modelData
-                    readonly property bool active: themeTab.current === themeChip.modelData
-                    width: themeText.implicitWidth + Style.space(20)
-                    height: themeText.implicitHeight + Style.space(12)
-                    radius: Fx.radius(Style.cornerRadius) / 2
-                    color: themeChip.active ? Color.accent
-                        : (themeArea.containsMouse ? Style.hoverFill : Style.normalFill)
 
-                    Text {
-                        id: themeText
-                        anchors.centerIn: parent
-                        text: themeChip.modelData
-                        color: themeChip.active ? Color.background : Color.foreground
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                    }
+                    readonly property var pal: themeTab.palettes[
+                        String(themeChip.modelData).toLowerCase().replace(/ /g, "-")]
 
-                    MouseArea {
-                        id: themeArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: themeTab.applyTheme(themeChip.modelData)
-                    }
+                    label: themeChip.modelData
+                    active: themeTab.current === themeChip.modelData
+                    swatches: themeChip.pal && themeChip.pal.colors
+                        ? themeChip.pal.colors : null
+                    onClicked: themeTab.applyTheme(themeChip.modelData)
                 }
             }
         }
@@ -173,51 +217,33 @@ Flickable {
             spacing: Style.space(8)
 
             Repeater {
-                model: Object.keys(themeTab.palettes)
-                delegate: Rectangle {
+                model: themeTab.paletteList
+
+                delegate: Chip {
                     id: palChip
-                    required property string modelData
-                    readonly property var pal: themeTab.palettes[palChip.modelData]
-                    readonly property bool active:
+                    required property var modelData
+
+                    readonly property bool isActive:
                         String(themeTab.cfg["theme.custom.accent"] || "").toLowerCase()
-                        === String(palChip.pal ? palChip.pal.accent : "").toLowerCase()
-                    width: palRow.implicitWidth + Style.space(18)
-                    height: Style.space(34)
-                    radius: Fx.radius(Style.cornerRadius) / 2
-                    color: palChip.active ? Color.accent
-                        : (palArea.containsMouse ? Style.hoverFill : Style.normalFill)
+                        === String(palChip.modelData.accent || "").toLowerCase()
+                        && String(palChip.modelData.accent || "").length > 0
 
-                    Row {
-                        id: palRow
-                        anchors.centerIn: parent
-                        spacing: Style.space(6)
+                    label: palChip.modelData.label
+                    active: palChip.isActive
+                    swatches: palChip.modelData.colors
 
-                        Rectangle {
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: Style.space(12)
-                            height: Style.space(12)
-                            radius: width / 2
-                            color: palChip.pal && palChip.pal.accent
-                                ? palChip.pal.accent : Color.muted
-                        }
-
-                        Text {
-                            text: palChip.pal && palChip.pal.label
-                                ? palChip.pal.label : palChip.modelData
-                            color: palChip.active ? Color.background : Color.foreground
-                            font.family: Style.font.family
-                            font.pixelSize: Style.font.bodySmall
-                        }
+                    onClicked: {
+                        if (themeTab.service && themeTab.service.applyPalette)
+                            themeTab.service.applyPalette(palChip.modelData.key)
                     }
 
-                    MouseArea {
-                        id: palArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (themeTab.service && themeTab.service.applyPalette)
-                                themeTab.service.applyPalette(palChip.modelData)
+                    // Hovering previews the palette against your CURRENT
+                    // prompt without applying it -- the thing this picker
+                    // could never do.
+                    HoverHandler {
+                        onHoveredChanged: {
+                            if (hovered) themeTab.previewPalette(palChip.modelData, false)
+                            else if (themeTab.service) themeTab.service.cancelPreview()
                         }
                     }
                 }
