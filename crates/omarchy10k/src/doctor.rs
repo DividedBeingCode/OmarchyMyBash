@@ -1,6 +1,13 @@
 use std::path::Path;
 use std::process::Command;
 
+// One definition of the terminal table, shared with the daemon by path
+// rather than duplicated. These are two binary crates with no library
+// between them, and a second copy of the capability table is exactly how
+// the two would drift.
+#[path = "../../omarchy10kd/src/terminal.rs"]
+mod terminal;
+
 pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
     println!("Omarchy10k Doctor");
     println!("══════════════════════════════════════");
@@ -117,14 +124,98 @@ fn check_fzf() {
 }
 
 fn check_terminal() {
-    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    let term = std::env::var("TERM").unwrap_or_default();
-    let display = if !term_program.is_empty() {
-        term_program
+    // Identity first, and HOW it was identified -- every fault this section
+    // was rewritten for turned on which signal named the terminal, and the
+    // old version printed TERM_PROGRAM with an unconditional tick, so it
+    // reported "healthy" throughout all of them.
+    let explicit = std::env::var("O10K_TERM").unwrap_or_default();
+    let version = std::env::var("O10K_TERM_VERSION").unwrap_or_default();
+    let kind = terminal::kind_from_env();
+
+    let method = if !explicit.is_empty() {
+        // O10K_TERM is what the adapter's probe writes, and also the manual
+        // override; from here they are indistinguishable, so say so plainly.
+        "O10K_TERM (probe or override)"
+    } else if std::env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
+        "GHOSTTY_RESOURCES_DIR"
+    } else if std::env::var("KITTY_WINDOW_ID").is_ok() {
+        "KITTY_WINDOW_ID"
+    } else if !std::env::var("TERM_PROGRAM").unwrap_or_default().is_empty() {
+        "TERM_PROGRAM"
     } else {
-        term
+        "TERM"
     };
-    println!("  Terminal           {:<12}✓", display);
+
+    let name = format!("{kind:?}").to_lowercase();
+    let display = if version.is_empty() {
+        name.clone()
+    } else {
+        format!("{name} {version}")
+    };
+
+    if kind == terminal::TerminalKind::Unknown {
+        println!("  Terminal          {:<14} ⚠ unidentified — conservative profile", display);
+        println!("      via           {method}");
+        println!("      hint          set O10K_TERM=<name>, or start an interactive shell");
+        println!("                    so the XTVERSION probe can run");
+    } else {
+        println!("  Terminal          {:<14} ✓ via {method}", display);
+    }
+
+    let caps = terminal::TermCaps::for_kind(kind.clone());
+    let yn = |b: bool| if b { "✓" } else { "✘" };
+    println!(
+        "      caps          OSC7 {}  OSC8 {}  OSC52 {}  sixel {}  kitty-gfx {}  sync {}",
+        yn(caps.has_osc7),
+        yn(caps.has_osc8),
+        yn(caps.has_osc52),
+        yn(caps.has_sixel),
+        yn(caps.has_kitty_graphics),
+        yn(caps.has_sync_output),
+    );
+
+    check_theme_include(&kind);
+}
+
+/// Is our themed include still wired into the terminal's own config?
+///
+/// Omarchy regenerates these files on every theme switch, but the LINE that
+/// pulls them in lives in the user's terminal config -- so an `omarchy
+/// refresh` or a hand-edit can silently drop it, and the only symptom is that
+/// the terminal quietly stops following the theme. Nothing is auto-written
+/// here: this project never edits terminal configs.
+fn check_theme_include(kind: &terminal::TerminalKind) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let (config, needle, label) = match kind {
+        terminal::TerminalKind::Ghostty => (
+            format!("{home}/.config/ghostty/config"),
+            "o10k-ghostty.conf",
+            "ghostty/config",
+        ),
+        terminal::TerminalKind::Foot => (
+            format!("{home}/.config/foot/foot.ini"),
+            "o10k-foot.ini",
+            "foot/foot.ini",
+        ),
+        // Only the two terminals Omarchy ships get a themed include.
+        _ => return,
+    };
+
+    match std::fs::read_to_string(&config) {
+        Ok(text) => {
+            let wired = text
+                .lines()
+                .filter(|l| !l.trim_start().starts_with('#'))
+                .any(|l| l.contains(needle));
+            if wired {
+                println!("      theme include {label} → {needle} ✓");
+            } else {
+                println!("      theme include {label} ✘ missing `{needle}`");
+                println!("                    the terminal will not follow theme switches");
+            }
+        }
+        Err(_) => println!("      theme include {label} — not found"),
+    }
 }
 
 async fn check_daemon(socket_path: &Path) {

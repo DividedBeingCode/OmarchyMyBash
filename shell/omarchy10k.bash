@@ -75,11 +75,18 @@ __o10k_probe_xtversion() {
     # the loop spun out in roughly no time and the reply never arrived. foot
     # was still detected as `unknown` and the bug looked like a probe failure.
     #
-    # 80ms for the first byte; once a terminal starts answering the rest
-    # follows immediately, so later bytes get a short timeout. A terminal that
-    # answers nothing costs 80ms once per shell, never per prompt.
+    # Generous on the FIRST byte, tight thereafter.
+    #
+    # 80ms was the first value tried and it was measurably flaky: the same
+    # foot window answered on one run and timed out on the next, because a
+    # cold-starting terminal is still bringing up its window and fonts and
+    # does not service the query immediately. Since only ambiguous terminals
+    # probe at all (Ghostty short-circuits on GHOSTTY_RESOURCES_DIR) and only
+    # once per shell, spending a quarter second in the worst case is cheap
+    # next to misreporting the terminal for the life of the session.
+    local first_wait="${O10K_PROBE_TIMEOUT:-0.25}"
     local ch first=1
-    while IFS= read -rsN1 -t "$( ((first)) && echo 0.08 || echo 0.01 )" \
+    while IFS= read -rsN1 -t "$( ((first)) && echo "$first_wait" || echo 0.02 )" \
             ch </dev/tty 2>/dev/null; do
         first=0
         reply+="$ch"
