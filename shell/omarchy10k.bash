@@ -37,6 +37,132 @@ if [[ -f "$__O10K_CACHE" ]]; then
     PS1=$(<"$__O10K_CACHE")
 fi
 
+# ── Terminal Identification ───────────────────────────────────────────────
+# Resolves O10K_TERM once per shell. Everything downstream -- the OSC 133
+# gate below, the daemon's capability profile, `omarchy10k doctor` -- reads
+# this instead of guessing from TERM_PROGRAM.
+#
+# Guessing from the environment does not work, and foot is why. foot
+# DELIBERATELY UNSETS TERM_PROGRAM (its man page lists the variable under
+# "Variables unset in the child process"), and Omarchy sets
+# term=xterm-256color in foot.ini, so a real foot session looks like this:
+#
+#     TERM=xterm-256color  COLORTERM=truecolor  (no TERM_PROGRAM at all)
+#
+# It carries no identifying signal whatsoever. It does answer XTVERSION
+# (CSI > q) correctly, so when the environment is inconclusive we ask.
+
+__o10k_probe_xtversion() {
+    # The probe talks to /dev/tty directly, so it does NOT care whether
+    # stdin or stdout are redirected -- requiring `-t 1` here made the probe
+    # bail whenever output was piped, which is most of the ways it gets
+    # tested. A usable controlling terminal is the only real requirement;
+    # whether we SHOULD probe is the resolver's decision, below.
+    [[ -r /dev/tty && -w /dev/tty ]] || return 1
+
+    local saved reply=""
+    saved=$(stty -g </dev/tty 2>/dev/null) || return 1
+    # A raw tty left behind is the one unacceptable outcome, so restoring it
+    # is a trap rather than a trailing statement.
+    trap 'stty "$saved" </dev/tty 2>/dev/null' RETURN
+
+    stty raw -echo min 0 time 0 </dev/tty 2>/dev/null || return 1
+    printf '\033[>q' >/dev/tty 2>/dev/null || return 1
+
+    # Read byte-by-byte with a timeout on each `read`, which BLOCKS for up to
+    # that long -- the whole point. An earlier version polled with `read -N 0`
+    # between iterations; that reads zero bytes and returns immediately, so
+    # the loop spun out in roughly no time and the reply never arrived. foot
+    # was still detected as `unknown` and the bug looked like a probe failure.
+    #
+    # 80ms for the first byte; once a terminal starts answering the rest
+    # follows immediately, so later bytes get a short timeout. A terminal that
+    # answers nothing costs 80ms once per shell, never per prompt.
+    local ch first=1
+    while IFS= read -rsN1 -t "$( ((first)) && echo 0.08 || echo 0.01 )" \
+            ch </dev/tty 2>/dev/null; do
+        first=0
+        reply+="$ch"
+        [[ "$reply" == *$'\033\\' || "$reply" == *$'\a' ]] && break
+        (( ${#reply} > 128 )) && break   # never read unboundedly
+    done
+
+    [[ -n "$reply" ]] || return 1
+    printf '%s' "$reply"
+}
+
+__o10k_resolve_terminal() {
+    # 1. Explicit override, and what the probe writes for later shells.
+    if [[ -n "${O10K_TERM:-}" ]]; then
+        return
+    fi
+
+    # 2. Unambiguous environment. Ghostty -- the common case under Omarchy --
+    #    always lands here, so it never pays for the probe.
+    if [[ -n "${GHOSTTY_RESOURCES_DIR:-}" || "$TERM" == "xterm-ghostty" ]]; then
+        O10K_TERM=ghostty
+        # Ghostty publishes its version, so the env path is as informative as
+        # a probe would be -- and free.
+        [[ -n "${TERM_PROGRAM_VERSION:-}" ]] && O10K_TERM_VERSION="$TERM_PROGRAM_VERSION"
+        export O10K_TERM O10K_TERM_VERSION; return
+    fi
+    if [[ "$TERM" == foot || "$TERM" == foot-* ]]; then
+        O10K_TERM=foot; export O10K_TERM; return
+    fi
+    if [[ -n "${KITTY_WINDOW_ID:-}" || "$TERM" == "xterm-kitty" ]]; then
+        O10K_TERM=kitty; export O10K_TERM; return
+    fi
+
+    # 3. Probe -- but never through a multiplexer or over ssh, where the
+    #    reply describes the wrong terminal and a confident wrong answer is
+    #    worse than none.
+    # Interactive shells only: a script or a pipeline has no business writing
+    # escape sequences at a terminal.
+    #
+    # NOT skipped over ssh, deliberately. An earlier version skipped it, on
+    # the theory that the reply would describe the wrong terminal. The
+    # opposite is true: over ssh the pty runs back to the LOCAL terminal,
+    # which answers with its real identity -- and that terminal is precisely
+    # the one rendering the prompt, so its capabilities are the ones that
+    # matter. Environment variables are least trustworthy over ssh, which
+    # makes the probe most valuable there.
+    #
+    # tmux IS skipped: it answers as itself and interposes its own capability
+    # set, so the outer terminal's identity would be misleading.
+    if [[ $- == *i* || -n "${O10K_FORCE_PROBE:-}" ]] && [[ -z "${TMUX:-}" ]]; then
+        local reply name
+        reply=$(__o10k_probe_xtversion) || reply=""
+        if [[ -n "$reply" ]]; then
+            # Strip the DCS envelope, take the leading name token.
+            name="${reply#*|}"
+            name="${name%%$'\033'*}"
+            name="${name%%$'\a'*}"
+            name="${name%%[ (]*}"
+            case "${name,,}" in
+                ghostty|foot|kitty|wezterm|alacritty)
+                    O10K_TERM="${name,,}"
+                    O10K_TERM_VERSION="${reply#*"$name"}"
+                    O10K_TERM_VERSION="${O10K_TERM_VERSION%%$'\033'*}"
+                    O10K_TERM_VERSION="${O10K_TERM_VERSION//[()]/}"
+                    O10K_TERM_VERSION="${O10K_TERM_VERSION// /}"
+                    export O10K_TERM O10K_TERM_VERSION
+                    return
+                    ;;
+            esac
+        fi
+    fi
+
+    # 4. TERM_PROGRAM, then give up. `unknown` is a real answer: it selects
+    #    the conservative capability profile rather than pretending.
+    case "${TERM_PROGRAM:-}" in
+        ghostty|foot|wezterm|alacritty) O10K_TERM="${TERM_PROGRAM,,}" ;;
+        *)                              O10K_TERM=unknown ;;
+    esac
+    export O10K_TERM
+}
+
+__o10k_resolve_terminal
+
 # ── Shell Integration Guard ───────────────────────────────────────────────
 # O10K_SHELL_INTEGRATION=auto|force|off
 # auto: emit OSC 133 unless terminal already provides integration
@@ -84,11 +210,16 @@ __o10k_update_133cd() {
     esac
     (( __O10K_SEMANTIC_PROMPTS )) || return
     [[ -n "${TMUX:-}" ]] && return   # tmux does not forward 133
-    case "${TERM_PROGRAM:-}" in ghostty|foot) ;; *) return ;; esac
+    case "${O10K_TERM:-}" in ghostty|foot|kitty|wezterm) ;; *) return ;; esac
     # Ghostty auto-injects its own bash integration, which emits 133;C/D.
     # Double emission corrupts prompt navigation — yield to it.
-    [[ -n "${GHOSTTY_SHELL_INTEGRATION_FEATURES:-}" \
-        || -n "${GHOSTTY_SHELL_FEATURES:-}" ]] && return
+    #
+    # The injected FUNCTION is the signal. GHOSTTY_SHELL_FEATURES is not:
+    # Ghostty sets it identically whether shell-integration is `none` or
+    # `detect`, because it is populated from `shell-integration-features` --
+    # a different key listing which features are configured, not whether the
+    # integration was injected. Testing it here meant this function always
+    # returned, so 133;C/D never fired in Ghostty at all.
     declare -F __ghostty_precmd &>/dev/null && return
     __O10K_EMIT_133CD=1
 }
