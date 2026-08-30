@@ -26,6 +26,11 @@
 //! range instead, so one threshold means the same thing on Vantablack as on
 //! Catppuccin Latte.
 //!
+//! APCA is used here as a RELATIVE instrument, not an absolute standard: the
+//! floors are calibrated against palettes the community has validated by
+//! using them. See the calibration note on the constants below — it is the
+//! most load-bearing decision in this module.
+//!
 //! ## Why OKLCH is the repair space
 //!
 //! Equal lightness steps are equal *perceived* steps, so walking L toward
@@ -56,35 +61,47 @@ pub const ROLES: [&str; 11] = [
     "orange",
 ];
 
-// ── APCA Lc targets ────────────────────────────────────────────────────────
+// ── Contrast floors ────────────────────────────────────────────────────────
 //
-// These thresholds repair what is UNREADABLE. They do not enforce what would
-// be ideal, because the colors belong to the theme and the user picked it.
+// These floors repair what is UNREADABLE. They do not enforce what would be
+// ideal, because the colors belong to the theme and the user picked it.
 //
-// Measured across all 22 shipped themes before choosing them (median Lc on
-// each theme's own background):
+// The numbers are calibrated EMPIRICALLY, against the sixteen curated
+// palettes in `looks.rs` — Solarized, Nord, Dracula, Gruvbox, Catppuccin and
+// friends, schemes the community has read every day for up to fifteen years.
+// Measured on their own backgrounds, the floor of that validated practice is:
 //
-//     foreground  80.1     accent  52.9     muted  18.7
-//     red         44.3     green   56.4     blue   50.4
+//     role          minimum   (palette)          median
+//     foreground     46.4     solarized-dark      79.7
+//     accent         34.3     solarized-dark      54.9
+//     hue roles      27.2     solarized-dark      56.1
+//     muted          19.5     tokyo-night         40.2
 //
-// An earlier draft used APCA's body-text tier (Lc 60) for the hue roles. That
-// would have repaired 14 of 22 accents and 16 of 22 reds — systematically
-// brightening every theme in the distribution. People choose Nord *because*
-// it is muted; rewriting it is not a fix.
+// Two earlier drafts got this wrong in the same direction. The first used
+// APCA's body-text tier (Lc 60) everywhere; the second its spot-readable tier
+// (Lc 45). Both flagged Solarized Dark as broken across nearly every role —
+// which is the instrument being wrong about the goal, not Solarized.
 //
-// So the bar is APCA's "spot readable" tier instead, which is the right one
-// for prompt text: you read one short token at a time ("main", "+2", "✗1"),
-// never a column of prose. `muted` sits a tier lower still because it is
-// deliberately recessive — but two themes ship `muted` at Lc 0.0 against
-// their own background, which is not design, it is a color meant for borders
-// being used as text.
+// APCA's tiers are calibrated for prose on a page. A prompt is one short
+// token at a time, and APCA weights the green channel at 0.715, so saturated
+// reds and blues score low however visible they actually are. Used as an
+// ABSOLUTE standard here it rewrites the whole distribution; used as a
+// RELATIVE instrument — flag what sits below anything a validated palette
+// ships — it finds exactly the broken cases, and `hackerman` and
+// `matte-black` ship `muted` at Lc 0.0 against their own background.
+//
+// Each floor therefore sits just under the validated minimum for its role.
 
-/// Text roles: foreground, accent, and the six hue roles. APCA's
-/// spot-readable tier — short, isolated tokens rather than running text.
-pub const LC_TEXT: f32 = 45.0;
-/// Deliberately recessive, held to APCA's floor for text of any kind.
-/// Below this a segment is not dim, it is missing.
-pub const LC_MUTED: f32 = 30.0;
+/// Main prompt text. Validated floor 46.4.
+pub const LC_FOREGROUND: f32 = 45.0;
+/// The accent: prompt character, branch name. Validated floor 34.3.
+pub const LC_ACCENT: f32 = 32.0;
+/// The six hue roles, used as text in lean styles and as segment fills in
+/// powerline styles. Validated floor 27.2.
+pub const LC_HUE: f32 = 25.0;
+/// Deliberately recessive. Validated floor 19.5 — but below this a segment is
+/// not dim, it is missing.
+pub const LC_MUTED: f32 = 18.0;
 
 /// Fallback chain for roles a theme omits, tried in order.
 fn fallbacks(role: &str) -> &'static [&'static str] {
@@ -343,12 +360,13 @@ impl DerivedPalette {
     }
 }
 
-/// Target Lc for a role.
-fn target_for(role: &str) -> f32 {
-    if role == "muted" {
-        LC_MUTED
-    } else {
-        LC_TEXT
+/// Contrast floor for a role. See the calibration note above.
+pub fn target_for(role: &str) -> f32 {
+    match role {
+        "foreground" => LC_FOREGROUND,
+        "accent" => LC_ACCENT,
+        "muted" => LC_MUTED,
+        _ => LC_HUE,
     }
 }
 
@@ -580,7 +598,7 @@ mod tests {
     fn repair_leaves_a_passing_color_untouched() {
         // Tokyo Night's blue already clears body contrast on its background.
         let hex = "#7aa2f7";
-        assert_eq!(repair(hex, "#1a1b26", LC_TEXT, true), hex);
+        assert_eq!(repair(hex, "#1a1b26", LC_HUE, true), hex);
     }
 
     #[test]
