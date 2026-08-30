@@ -58,9 +58,23 @@ Flickable {
             out.push({ key: keys[i], label: p.label || keys[i],
                        blurb: p.blurb || "", source: p.source || "curated",
                        accent: p.accent || "",
+                       ramp: p.ramp || [],
                        colors: p.colors ? p.colors : p })
         }
         return out
+    }
+
+    /// The ramp of the palette currently in force, so the control above shows
+    /// what it is changing rather than an abstract idea of a gradient.
+    readonly property var currentRamp: {
+        var accent = String(themeTab.cfg["theme.custom.accent"] || "").toLowerCase()
+        for (var i = 0; i < themeTab.paletteList.length; i++) {
+            var e = themeTab.paletteList[i]
+            if (accent.length > 0
+                && String(e.accent || "").toLowerCase() === accent)
+                return e.ramp || []
+        }
+        return []
     }
 
     readonly property var visiblePalettes: {
@@ -239,6 +253,55 @@ Flickable {
             font.pixelSize: Style.font.caption
         }
 
+        // ── Gradient ──────────────────────────────────────────────────────
+        //
+        // Surfaced because it was invisible and wrong. The ramp's far end used
+        // to be an ANSI slot picked by comparing two channel bytes, so
+        // Synthwave — "purple all the way down" — swept purple to teal, and
+        // nothing in the UI ever drew the ramp to show it.
+        Text {
+            text: "GRADIENT"
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            font.bold: true
+        }
+
+        Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            Repeater {
+                model: [
+                    { key: "auto", label: "auto", hint: "An analogous sweep off your accent" },
+                    { key: "full", label: "full", hint: "A wider sweep, same hue family" },
+                    { key: "off",  label: "off",  hint: "Flat accent, no gradient anywhere" }
+                ]
+
+                delegate: Chip {
+                    id: gradChip
+                    required property var modelData
+
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: gradChip.modelData.label
+                    // Unset means "auto" — the daemon's own default.
+                    active: String(themeTab.cfg["theme.gradient"] || "auto")
+                            === gradChip.modelData.key
+                    onClicked: {
+                        if (themeTab.service && themeTab.service.setGradient)
+                            themeTab.service.setGradient(gradChip.modelData.key)
+                    }
+                }
+            }
+
+            Ramp {
+                anchors.verticalCenter: parent.verticalCenter
+                width: Style.space(160)
+                barHeight: Style.space(8)
+                stops: themeTab.currentRamp
+            }
+        }
+
         Row {
             width: parent.width
             spacing: Style.space(8)
@@ -302,6 +365,7 @@ Flickable {
                     label: palChip.modelData.label
                     active: palChip.isActive
                     swatches: palChip.modelData.colors
+                    ramp: palChip.modelData.ramp
 
                     onClicked: {
                         if (themeTab.service && themeTab.service.applyPalette)

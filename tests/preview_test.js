@@ -163,6 +163,33 @@ function fakeClock() {
     check('flushing an empty debouncer is harmless', d.pending(), false);
 })();
 
+
+// ── Card baseline ──────────────────────────────────────────────────────────
+//
+// Preset cards render on `base: "default"` so applying one preset cannot
+// rewrite how the others look. That makes the baseline part of a render's
+// identity, and therefore part of its cache key: the same Look rendered as a
+// card and in the pinned pane are two different renders.
+(() => {
+    const card = P.cacheKey('synthwave', null, P.CARD_SCENES, 38, 'default');
+    const pane = P.cacheKey('synthwave', null, P.CARD_SCENES, 38, undefined);
+    check('the baseline separates card and pane renders', card !== pane, true);
+
+    const same = P.cacheKey('synthwave', null, P.CARD_SCENES, 38, 'default');
+    check('the same baseline still shares a cache entry', card === same, true);
+})();
+
+(() => {
+    const req = JSON.parse(P.buildRequest(
+        { cwd: '~/app', cols: 38, base: 'default' }, null, 'synthwave', null, 'x1'));
+    check('base reaches the daemon', req.base, 'default');
+
+    const plain = JSON.parse(P.buildRequest(
+        { cwd: '~/app', cols: 38, base: undefined }, null, 'synthwave', null, 'x2'));
+    check('an absent baseline is omitted, not sent as null',
+          Object.prototype.hasOwnProperty.call(plain, 'base'), false);
+})();
+
 if (failures) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);

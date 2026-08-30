@@ -39,7 +39,7 @@ Studio is produced by the same code that draws your prompt.
 
 | | |
 |---|---|
-| **Prompt engine** | 25 segments · 11 style presets · 14 separator shapes · truecolor gradients · frames · transient prompts · right rail · vi-mode character · git and worktree awareness |
+| **Prompt engine** | 25 segments · 11 style presets · 14 separator shapes · hue-anchored gradients · frames · transient prompts · right rail · vi-mode character · git and worktree awareness |
 | **Presets** | 28 curated Looks and 53 palettes — 39 hand-tuned plus one derived from every Omarchy theme you have installed |
 | **Control Center** | A summonable Studio and a bar popout, both driven by live daemon renders |
 | **Bash layer** | Hook broker, per-shell daemon lifecycle, instant prompt, env channel — *coexisting* with Omarchy's own bash layer rather than replacing it |
@@ -121,6 +121,28 @@ Every curated Look is tagged **`structure`** or **`complete`**:
 
 The tag is on the card, so you always know whether picking something will
 change your palette.
+
+### Gradients that stay in the family
+
+A palette owns one gradient ramp, and everything that draws a gradient reads
+it: the `gradient` preset's segment fills and the frame rule alike.
+
+Its far end used to be an ANSI slot picked by comparing two channel bytes —
+the `magenta` role for cool accents, `cyan` for warm ones. Synthwave's accent
+is `#d53bce`, which is 213 red against 206 blue, so seven bytes decided the
+answer and chose cyan. A preset whose own description reads *purple all the
+way down* rendered a purple → `#00b0b1` teal rule.
+
+The far end is now the accent rotated in [OKLCH](https://bottosson.github.io/posts/oklab/)
+at constant lightness and chroma. Blue goes to purple, purple to hot pink,
+green to cyan; a greyscale accent has no chroma to rotate, so a monochrome
+theme stays monochrome, and holding lightness keeps the contrast work below
+intact. A palette may override the derivation with an explicit two-color ramp
+where the scheme is known for a particular pair — Gruvbox sweeps aqua to
+mustard through its own green.
+
+`[theme] gradient` is `auto`, `full`, or `off`, and the Studio's Theme tab
+draws the ramp under every palette chip.
 
 ### Colors that are actually readable
 

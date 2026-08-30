@@ -91,7 +91,7 @@ Curated visual preset system. Controls separators, frames/ornaments, caps, and s
 | **omarchy** | space | none | none | Clean default |
 | **powerline** | `` arrows (U+E0B0) | none | none | Classic powerline |
 | **rainbow** | `` arrows (U+E0B0) | none | none | Vibrant, colorful |
-| **gradient** | thin arrows (U+E0B1 / U+E0B3) | none | none | Filled segments with a stepped accent→magenta→cyan background ramp across the segment run |
+| **gradient** | thin arrows (U+E0B1 / U+E0B3) | none | none | Filled segments with the palette's own ramp swept across the segment run (see `[theme] gradient`) |
 | **framed** | space | left+right `╭╰╮╯` | `─` fill | Connected lines |
 | **classic** | `│` bars | none | none | Simple vertical dividers |
 | **lean** | space | none | none | Maximum horizontal space |
@@ -119,7 +119,7 @@ Connecting lines and ornaments between prompt lines. Only visible in two-line mo
 | `left` | bool | `true` | — | Yes | Show left frame column (`╭` / `╰`). |
 | `right` | bool | `true` | — | Yes | Show right frame column (`╮` / `╯`). |
 | `gap_char` | string | `""` | `─`, `·`, `⋯`, `none` | Yes | Character used to fill the gap between left and right prompt content on line 1. |
-| `gap_gradient` | string | `"off"` | `off`, `subtle`, `full` | Yes | Interpolates the gap fill in per-8-cell truecolor blocks: `subtle` = accent fading into background; `full` = accent → complement (blue/red accents → magenta, else cyan). Needs `gap_char` + frame. Added in v0.4 (Wave 1). |
+| `gap_gradient` | string | `"off"` | `off`, `subtle`, `full` | Yes | Interpolates the gap fill in per-8-cell truecolor blocks: `subtle` = accent fading into the background; `full` = the palette's ramp (`[theme] gradient` / `[theme] ramp`). Needs `gap_char` + frame. Added in v0.4 (Wave 1). |
 
 ### `[style.caps]`
 
@@ -157,6 +157,27 @@ Controls color source.
 | Key | Type | Default | Values | Implemented | Description |
 |-----|------|---------|--------|-------------|-------------|
 | `source` | string | `"omarchy"` | `omarchy`, `custom`, `hybrid`, `terminal` | Yes | Color palette source. `omarchy` reads from theme system. `custom` uses only `[theme.custom]`. `hybrid` merges both. `terminal` resolves from the rendered terminal palette file (ghostty.conf in the theme state dir): background/foreground direct, accent=palette 4, muted=palette 8, red..cyan=palette 1–6, orange=11, bright=15; falls back to defaults when the file or entries are missing. `[theme.custom]` overrides still win. Custom overrides not re-applied on `reload_theme`. |
+
+| `gradient` | string | `"auto"` | `auto`, `off`, `full` | Yes | How wide a hue sweep the palette's gradient ramp takes from the accent. `auto` = 38°, `full` = 64°, both rotated in OKLCH so the ramp stays inside the accent's own hue family; `off` collapses the ramp to a flat accent and outranks `ramp`. |
+| `ramp` | array | — | two hex strings | Yes | Art-directed ramp override, start → end. Wins over `gradient` unless that is `off`. Curated palettes that ship one are also matched by accent, so a config written before this key still gets its art direction. |
+
+### The gradient ramp
+
+One ramp per palette, used everywhere a gradient appears: the `gradient` style
+preset's segment fills and `[style.frame] gap_gradient = "full"`. They read the
+same two colors, so they cannot disagree.
+
+The far end used to be an ANSI slot chosen by `accent.b >= accent.r` — the
+`magenta` role for cool accents, `cyan` for warm ones. That comparison is seven
+bytes of red apart for Synthwave's `#d53bce`, so a palette sold as "purple all
+the way down" rendered a purple → `#00b0b1` teal rule. The far end is now the
+accent rotated in OKLCH at constant lightness and chroma, which keeps hue in
+family, leaves greyscale accents grey (zero chroma makes the rotation a no-op),
+and preserves the contrast work in `palette_derive`.
+
+A patch that sets `[theme.custom]` replaces `custom` and `ramp` wholesale
+rather than merging, so switching palettes cannot leave the previous one's
+ramp behind.
 
 ### `[theme.custom]`
 
@@ -630,7 +651,7 @@ Reload can also be triggered via:
 | `[directory] unique` | bool | `false` | truncate_to_unique: each component shortens to the fewest characters unambiguous among its siblings; anchor-file dirs and the last component stay full; 30s sibling cache per cwd |
 | `[directory] anchors` | string[] | `[".git", "Cargo.toml", "package.json", "pyproject.toml", "go.mod", "Gemfile", "flake.nix", "README.md"]` | a directory containing any anchor file is never shortened |
 | `[style.separators] shape` | string | `"auto"` | geometry family for both sides at once: `powerline`, `powerline_thin`, `slanted`, `round`, `trapezoid`, `trapezoid_rev`, `flame`, `dither`, `vertical`, `fade`, `fade_rev`, `dot`, `diamond`, `none`. Precedence: explicit left/right > shape > preset |
-| `[style.frame] gap_gradient` | string | `"off"` | `subtle` = accent fading into background; `full` = accent → complement (blue≥red accents → magenta, else cyan). Per-8-cell truecolor blocks; needs `gap_char` + frame |
+| `[style.frame] gap_gradient` | string | `"off"` | `subtle` = accent fading into the background; `full` = the palette's ramp. Per-8-cell truecolor blocks; needs `gap_char` + frame |
 | `[segments.load] enabled` | bool | `false` | braille load-average sparkline ▁▂▃▄▅▆▇█ from a 16-slot per-render ring |
 | `[segments.load] width` | int | `16` | sparkline sample width |
 

@@ -233,6 +233,11 @@ Item {
                                  lowContrast: !!entry.low_contrast,
                                  accent: colors.accent || custom.accent || "",
                                  colors: colors,
+                                 // Sampled daemon-side by the same ramp_color
+                                 // the prompt renders with. Empty from an
+                                 // older daemon, which the Ramp component
+                                 // treats as "nothing to draw".
+                                 ramp: entry.ramp || [],
                                  custom: custom
                              }
                              out[entry.key] = rec
@@ -256,12 +261,12 @@ Item {
     /// Cached: an identical (look, patch, scenes) triple resolves from the
     /// broker without touching the socket. `immediate` skips the hover
     /// debounce, which is what a click wants.
-    function requestPreview(look, patch, scenes, immediate, cb, cols) {
+    function requestPreview(look, patch, scenes, immediate, cb, cols, base) {
         // The pane knows how wide it is; the service does not. A render is
         // laid out to a column count, so the width has to reach both the
         // daemon and the cache key.
         var useCols = (cols && cols > 0) ? cols : service.previewCols
-        var key = Preview.cacheKey(look, patch, scenes, useCols)
+        var key = Preview.cacheKey(look, patch, scenes, useCols, base)
 
         // Fast path: already rendered. No socket, no timer, no frame cost.
         var probe = Store.brokerLookup(service._previewCache, key)
@@ -312,7 +317,7 @@ Item {
             }
 
             controlSocket.write(Preview.buildRequest(
-                { cwd: service.previewCwd, cols: useCols },
+                { cwd: service.previewCwd, cols: useCols, base: base },
                 patch, look, scenes, id))
             controlSocket.flush()
         }
@@ -449,6 +454,17 @@ Item {
             yellow: pal.yellow, blue: pal.blue, magenta: pal.magenta,
             cyan: pal.cyan, orange: pal.orange
         }
+    }
+
+    /// Palette-level gradient intensity: "auto", "off" or "full".
+    ///
+    /// Palette-level rather than style-level because a gradient is made of
+    /// colors: the segment ramp and the frame rule are the same sweep seen in
+    /// two places, and they used to be able to disagree.
+    function setGradient(mode) {
+        var m = String(mode || "auto")
+        if (m !== "auto" && m !== "off" && m !== "full") m = "auto"
+        return service._configSet({ "theme": { "gradient": m } })
     }
 
     function applyPalette(key) {

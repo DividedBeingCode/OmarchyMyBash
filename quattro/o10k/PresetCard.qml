@@ -33,6 +33,9 @@ Rectangle {
     /// Named `colors`, not `palette`: Item.palette already exists in Qt 6.
     property var colors: ({})
     property string terminalFont: Style.font.family
+    /// Ordered hex stops for this preset's gradient sweep. A `complete` Look
+    /// brings its own; a `structure` Look shows the one you are already on.
+    property var ramp: []
     property bool active: false
     property bool hovered: area.containsMouse
     /// "ok" | "loading" | "error"
@@ -120,11 +123,24 @@ Rectangle {
             // will actually sit on. Eight small dots showed that a palette
             // exists; this shows what it is -- and seeing it against its own
             // background is the part that tells you whether it will read.
+            // The gradient this preset will sweep through, directly under the
+            // palette band. Together they answer both questions a card has to
+            // answer about color: which ones, and how they move.
+            Ramp {
+                id: rampBand
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                visible: card.ramp && card.ramp.length >= 2 && !rampBand.isFlat
+                stops: card.ramp ? card.ramp : []
+                barHeight: Style.space(5)
+            }
+
             Swatches {
                 id: paletteBand
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.bottom: parent.bottom
+                anchors.bottom: rampBand.visible ? rampBand.top : parent.bottom
                 visible: card.colors && Object.keys(card.colors).length > 0
                 colors: card.colors ? card.colors : ({})
                 roles: ["accent", "red", "green", "yellow", "blue",

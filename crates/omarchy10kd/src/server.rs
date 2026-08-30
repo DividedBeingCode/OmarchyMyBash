@@ -90,6 +90,21 @@ pub struct PreviewRequest {
     /// which is what the CLI and the bar panel still use.
     #[serde(default)]
     pub scenes: Option<Vec<PreviewScene>>,
+    /// What the Look/patch is layered onto: `"current"` (default) or
+    /// `"default"`.
+    ///
+    /// A gallery of preset cards needs `"default"`. Layering every card on
+    /// the LIVE config meant applying one preset silently rewrote all the
+    /// others: a Look patch is a delta, so every key it does not mention was
+    /// inherited from whatever was applied last. Applying `synthwave` changed
+    /// how 27 of the other 28 cards rendered — it left `frame.gap_char` and
+    /// `frame.gap_gradient` behind, and every card that drew a frame picked
+    /// them up.
+    ///
+    /// The live `theme` still travels, because a `structure` Look is
+    /// documented to respect whatever palette you are on.
+    #[serde(default)]
+    pub base: Option<String>,
 }
 
 /// One shell state to render the previewed config against.
@@ -838,7 +853,11 @@ async fn handle_preview(
     let preset_config;
     let look_config;
     let config: &Config =
-        if req.look.is_some() || req.patch.is_some() || profile_patch.is_some() {
+        if req.look.is_some()
+            || req.patch.is_some()
+            || profile_patch.is_some()
+            || req.base.is_some()
+        {
             // Unknown look names fall back to the base config (gallery
             // behavior); an unrepresentable patch is a preview error.
             match effective_preview_config(req, &config_guard, profile_patch.as_ref()) {
@@ -889,7 +908,26 @@ async fn handle_preview(
     } else {
         &config_guard
     };
-    let palette = state.palette.read().await;
+    // The preview MUST resolve the palette from the effective config, not
+    // from the daemon's live one.
+    //
+    // It used to always use `state.palette`, so a `complete` Look — one that
+    // brings its own colors — previewed in whatever palette you happened to
+    // be on and only revealed its real colors after Apply. That is the whole
+    // "the preset I picked isn't what I got" complaint: the preview was
+    // rendering a different palette than the thing it was previewing.
+    //
+    // Re-resolving costs a `colors.toml` read, so it is skipped when the
+    // effective config's theme matches the live one — which is every
+    // structure-only preview, and the Panel's hot path.
+    let live_palette = state.palette.read().await;
+    let previewed_palette;
+    let palette: &crate::theme::ThemePalette = if config.theme == config_guard.theme {
+        &live_palette
+    } else {
+        previewed_palette = crate::theme::ThemePalette::resolve_palette(config);
+        &previewed_palette
+    };
 
     // One renderer, reused across every scene: building the effective config
     // is the expensive half, and the whole point of `scenes` is to pay it
@@ -974,6 +1012,27 @@ async fn handle_preview(
 /// Reading the theme directory is I/O on a control-verb path, but `palettes`
 /// is fetched once per connection and refreshed only when the config changes
 /// — not on the prompt path.
+/// Sample a palette's gradient ramp for the UI.
+///
+/// Deliberately built by running the palette's own theme patch through the
+/// SAME resolution the prompt uses, rather than reimplementing the OKLCH
+/// sweep in QML. A second implementation is a second thing that can disagree,
+/// and the entire point of this daemon is that the preview and the prompt are
+/// the same code.
+fn ramp_stops(theme: &serde_json::Value, stops: usize) -> Vec<String> {
+    let Ok(cfg) = crate::looks::apply_transient(
+        &crate::config::Config::default(),
+        &serde_json::json!({ "theme": theme }),
+    ) else {
+        return Vec::new();
+    };
+    let palette = crate::theme::ThemePalette::resolve_palette(&cfg);
+    let last = stops.saturating_sub(1).max(1) as f32;
+    (0..stops)
+        .map(|i| palette.ramp_color(i as f32 / last).to_hex())
+        .collect()
+}
+
 fn collect_palettes() -> Vec<serde_json::Value> {
     use crate::palette_derive;
 
@@ -990,6 +1049,9 @@ fn collect_palettes() -> Vec<serde_json::Value> {
             "blurb": blurb,
             "source": source,
             "colors": colors,
+            // Eight stops of the palette's own gradient, so the Theme tab can
+            // show what a preset will actually sweep through.
+            "ramp": ramp_stops(&theme, 8),
             "theme": theme,
             "low_contrast": low_contrast,
         })
@@ -1097,7 +1159,13 @@ fn effective_preview_config(
     current: &Config,
     profile: Option<&toml::Value>,
 ) -> Result<Config, String> {
-    let mut effective = current.clone();
+    let mut effective = if req.base.as_deref() == Some("default") {
+        let mut c = Config::default();
+        c.theme = current.theme.clone();
+        c
+    } else {
+        current.clone()
+    };
     if let Some(look_name) = &req.look {
         if let Some(l) = crate::looks::resolve(look_name, &effective) {
             effective = crate::looks::apply_transient(&effective, &l.patch)?;
@@ -1675,6 +1743,7 @@ mod tests {
     /// Minimal fully-specified PreviewRequest for override tests.
     pub(super) fn preview_req(patch: Option<serde_json::Value>, look: Option<&str>) -> PreviewRequest {
         PreviewRequest {
+            base: None,
             cwd: "~/projects/my-app".into(),
             exit_code: 0,
             cmd_duration_ms: 0,
@@ -2000,6 +2069,160 @@ mod tests {
 
         let err = delete_user_look(&state, "mine").await.unwrap_err();
         assert!(err.contains("unknown look"), "got: {err}");
+    }
+
+    // ── Preset cards must not contaminate each other ────────────────────
+    //
+    // Applying a Look used to rewrite how every OTHER card rendered. A Look
+    // patch is a delta, and the gallery layered each card on the LIVE config,
+    // so any key a patch did not mention was inherited from whatever had been
+    // applied last. Measured before the fix: applying `synthwave` changed 27
+    // of the other 28 cards; `framed-focus` changed 25.
+
+    fn card_config(look: &str, base: &Config, baseline: Option<&str>) -> Config {
+        let mut req = preview_req(None, Some(look));
+        req.base = baseline.map(String::from);
+        effective_preview_config(&req, base, None).expect("card renders")
+    }
+
+    #[test]
+    fn applying_a_look_does_not_rewrite_the_other_cards() {
+        let base = Config::default();
+        for applied in ["synthwave", "framed-focus", "tokyo-rainbow"] {
+            let after = {
+                let l = crate::looks::resolve(applied, &base).expect("curated");
+                crate::looks::apply_transient(&base, &l.patch).expect("apply")
+            };
+            for def in crate::looks::all(&base) {
+                if def.name == applied {
+                    continue;
+                }
+                let before = card_config(&def.name, &base, Some("default"));
+                let now = card_config(&def.name, &after, Some("default"));
+                assert_eq!(
+                    before.style, now.style,
+                    "applying {applied} changed the {} card's style",
+                    def.name
+                );
+                assert_eq!(
+                    before.prompt.newline, now.prompt.newline,
+                    "applying {applied} changed the {} card's line count",
+                    def.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_leak_is_real_without_the_default_baseline() {
+        // Guards the guard: if this ever stops failing, `base: "default"` has
+        // stopped being the thing that fixes it and these tests are vacuous.
+        let base = Config::default();
+        let after = {
+            let l = crate::looks::resolve("synthwave", &base).expect("curated");
+            crate::looks::apply_transient(&base, &l.patch).expect("apply")
+        };
+        let leaked = crate::looks::all(&base)
+            .iter()
+            .filter(|d| d.name != "synthwave")
+            .filter(|d| {
+                card_config(&d.name, &base, None).style
+                    != card_config(&d.name, &after, None).style
+            })
+            .count();
+        assert!(leaked > 0, "expected the live-config baseline to leak");
+    }
+
+    #[test]
+    fn a_structure_look_card_keeps_the_palette_you_are_on() {
+        // The other half of the contract: `structure` Looks are documented to
+        // respect your colors, so the live theme must still travel.
+        let mut base = Config::default();
+        base.theme.source = "hybrid".into();
+        base.theme.custom = Some(crate::config::CustomPalette {
+            accent: Some("#ff0000".into()),
+            foreground: None, muted: None, background: None,
+            red: None, green: None, yellow: None, blue: None,
+            magenta: None, cyan: None, orange: None,
+        });
+        let card = card_config("dot-matrix", &base, Some("default"));
+        assert_eq!(card.theme, base.theme, "structure card lost your palette");
+    }
+
+    #[test]
+    fn a_complete_look_card_brings_its_own_palette() {
+        let mut base = Config::default();
+        base.theme.source = "hybrid".into();
+        base.theme.custom = Some(crate::config::CustomPalette {
+            accent: Some("#ff0000".into()),
+            foreground: None, muted: None, background: None,
+            red: None, green: None, yellow: None, blue: None,
+            magenta: None, cyan: None, orange: None,
+        });
+        let card = card_config("synthwave", &base, Some("default"));
+        let accent = card.theme.custom.as_ref().and_then(|c| c.accent.clone());
+        assert_ne!(accent.as_deref(), Some("#ff0000"), "complete card kept the old accent");
+    }
+
+    #[test]
+    fn switching_palettes_does_not_blend_them() {
+        // Gruvbox ships an art-directed `ramp`; a palette that derives its own
+        // must not inherit it.
+        let base = Config::default();
+        let gruvbox = crate::looks::apply_transient(
+            &base,
+            &crate::looks::curated_palette("gruvbox").expect("curated"),
+        )
+        .expect("apply");
+        assert!(gruvbox.theme.ramp.is_some(), "gruvbox should ship a ramp");
+
+        let then_tokyo = crate::looks::apply_transient(
+            &gruvbox,
+            &crate::looks::curated_palette("tokyo-night").expect("curated"),
+        )
+        .expect("apply");
+        assert!(
+            then_tokyo.theme.ramp.is_none(),
+            "tokyo-night inherited gruvbox's ramp: {:?}",
+            then_tokyo.theme.ramp
+        );
+    }
+
+    #[test]
+    fn every_palette_publishes_a_ramp_in_its_own_hue_family() {
+        for p in collect_palettes() {
+            let ramp: Vec<String> = p["ramp"]
+                .as_array()
+                .expect("ramp present")
+                .iter()
+                .map(|v| v.as_str().unwrap_or_default().to_string())
+                .collect();
+            assert_eq!(ramp.len(), 8, "{}: wrong stop count", p["key"]);
+            for hex in &ramp {
+                assert!(
+                    hex.len() == 7 && hex.starts_with('#'),
+                    "{}: bad stop {hex}",
+                    p["key"]
+                );
+            }
+            // The published strip must agree with what the prompt renders,
+            // which is the only reason it is computed daemon-side.
+            let first = crate::palette_derive::srgb_to_oklch(&ramp[0]).expect("hex");
+            let last = crate::palette_derive::srgb_to_oklch(&ramp[7]).expect("hex");
+            // Explicit ramps are art direction and may cross families; the
+            // derived ones may not.
+            let curated_with_ramp = crate::looks::curated_palettes()
+                .iter()
+                .any(|c| c.key == p["key"].as_str().unwrap_or_default() && c.ramp.is_some());
+            if curated_with_ramp || first.c < 0.02 {
+                continue;
+            }
+            let d = {
+                let raw = (first.h - last.h).abs() % 360.0;
+                if raw > 180.0 { 360.0 - raw } else { raw }
+            };
+            assert!(d <= 45.0, "{}: published ramp swings {d:.0}deg", p["key"]);
+        }
     }
 }
 

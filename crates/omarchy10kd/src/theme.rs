@@ -20,6 +20,63 @@ pub struct ThemePalette {
     pub cyan: AnsiColor,
     pub orange: AnsiColor,
     pub is_dark: bool,
+    /// Art-directed gradient ramp from `[theme] ramp`, start → end. When set
+    /// it wins over the derivation below.
+    pub ramp: Option<(AnsiColor, AnsiColor)>,
+    /// How wide a hue sweep to derive when `ramp` is unset.
+    pub gradient: GradientMode,
+}
+
+/// How a palette's gradient ramp is chosen.
+///
+/// Gradients used to be picked from ANSI slots — `complement()` returned the
+/// `magenta` role or the `cyan` role depending on `accent.b >= accent.r`. For
+/// Synthwave's `#d53bce` that comparison is 213 vs 206, so seven bytes of red
+/// decided whether a palette sold as "purple all the way down" ramped to
+/// violet or to teal. It chose teal. The ramp is now derived from the
+/// accent's own hue, so a purple palette cannot produce a green gradient.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GradientMode {
+    /// No sweep — the ramp collapses to a flat accent.
+    Off,
+    /// An analogous sweep. The default, and in-family for every palette.
+    Auto,
+    /// A wider, more theatrical sweep. Still hue-anchored to the accent.
+    Full,
+}
+
+impl GradientMode {
+    pub fn parse(s: Option<&str>) -> Self {
+        match s.map(str::trim) {
+            Some("off") => Self::Off,
+            Some("full") => Self::Full,
+            _ => Self::Auto,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::Full => "full",
+        }
+    }
+
+    /// Hue rotation, in OKLCH degrees, from the accent to the ramp's far end.
+    ///
+    /// Positive rotation walks red → orange → green → cyan → blue → purple →
+    /// red. Measured across all 39 curated palettes, +38 deg keeps every accent
+    /// inside its own family: blue → purple, purple → hot pink, green → cyan.
+    /// Beyond roughly 45 deg the sweep starts crossing into unrelated hues,
+    /// which is the failure this whole mechanism exists to prevent, so `Full`
+    /// stays deliberately short of a complementary swing.
+    pub fn sweep(self) -> f32 {
+        match self {
+            Self::Off => 0.0,
+            Self::Auto => 38.0,
+            Self::Full => 64.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -87,6 +144,58 @@ impl AnsiColor {
     pub fn bg_escape(&self) -> String {
         format!("\x1b[48;2;{};{};{}m", self.r, self.g, self.b)
     }
+
+    pub fn to_hex(&self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
+
+    /// Rotate hue in OKLCH, holding lightness and chroma.
+    ///
+    /// Holding chroma is what makes this safe for monochrome themes: a grey
+    /// has no chroma, so rotating its hue is a no-op and the theme stays grey.
+    /// Holding lightness keeps the contrast work in `palette_derive` intact —
+    /// the ramp sweeps hue only, never readability.
+    pub fn hue_rotated(&self, degrees: f32) -> Self {
+        match crate::palette_derive::srgb_to_oklch(&self.to_hex()) {
+            Some(mut c) => {
+                c.h = (c.h + degrees).rem_euclid(360.0);
+                Self::from_hex(&crate::palette_derive::oklch_to_srgb(c)).unwrap_or(*self)
+            }
+            None => *self,
+        }
+    }
+
+    /// Interpolate a→b at t through OKLCH, taking the short way around the
+    /// hue circle.
+    ///
+    /// Straight sRGB interpolation between two saturated colors dips through
+    /// a desaturated middle — a purple→pink ramp goes grey in the centre.
+    /// OKLCH holds chroma up across the sweep.
+    pub fn mix_oklch(a: &Self, b: &Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        let (ca, cb) = match (
+            crate::palette_derive::srgb_to_oklch(&a.to_hex()),
+            crate::palette_derive::srgb_to_oklch(&b.to_hex()),
+        ) {
+            (Some(x), Some(y)) => (x, y),
+            _ => return Self::lerp(a, b, t),
+        };
+        // Shortest arc: without this, 350 deg → 10 deg would sweep the long way
+        // through the entire wheel.
+        let mut dh = cb.h - ca.h;
+        if dh > 180.0 {
+            dh -= 360.0;
+        } else if dh < -180.0 {
+            dh += 360.0;
+        }
+        let mixed = crate::palette_derive::Oklch {
+            l: ca.l + (cb.l - ca.l) * t,
+            c: ca.c + (cb.c - ca.c) * t,
+            h: (ca.h + dh * t).rem_euclid(360.0),
+        };
+        Self::from_hex(&crate::palette_derive::oklch_to_srgb(mixed))
+            .unwrap_or_else(|| Self::lerp(a, b, t))
+    }
 }
 
 impl Default for ThemePalette {
@@ -106,6 +215,8 @@ impl Default for ThemePalette {
             cyan: AnsiColor { r: 125, g: 207, b: 255 },
             orange: AnsiColor { r: 255, g: 158, b: 100 },
             is_dark: true,
+            ramp: None,
+            gradient: GradientMode::Auto,
         }
     }
 }
@@ -228,18 +339,41 @@ impl GhosttyPalette {
     }
 }
 
+/// A curated palette's art-directed ramp, matched by accent.
+///
+/// Matching on accent rather than requiring `[theme] ramp` in the file is what
+/// makes art direction reach configs that predate the key, or that were
+/// written by hand in hex. Accent identity is already how the Studio decides
+/// which palette chip is active, so the convention is not new here.
+fn curated_ramp_for(accent: &AnsiColor) -> Option<(AnsiColor, AnsiColor)> {
+    let hex = accent.to_hex();
+    let def = crate::looks::curated_palettes()
+        .iter()
+        .find(|p| p.ramp.is_some() && p.colors[0].eq_ignore_ascii_case(&hex))?;
+    let [start, end] = def.ramp?;
+    Some((AnsiColor::from_hex(start)?, AnsiColor::from_hex(end)?))
+}
+
 impl ThemePalette {
-    /// Complement rule (Wave 1): blue ≥ red accents get magenta, warm
-    /// accents get cyan. Deterministic from any palette.
-    pub fn complement(&self) -> AnsiColor {
-        if self.accent.b >= self.accent.r {
-            self.magenta
-        } else {
-            self.cyan
+    /// The palette's gradient ramp, start → end.
+    ///
+    /// An explicit `[theme] ramp` is art direction and wins outright.
+    /// Otherwise the far end is the accent rotated through OKLCH, which keeps
+    /// every ramp inside the accent's own hue family — see [`GradientMode`]
+    /// for what replaced the old ANSI-slot rule.
+    pub fn ramp_endpoints(&self) -> (AnsiColor, AnsiColor) {
+        // "off" is the user saying they want no gradient anywhere, so it
+        // outranks a palette's art direction.
+        if self.gradient == GradientMode::Off {
+            return (self.accent, self.accent);
         }
+        if let Some((start, end)) = self.ramp {
+            return (start, end);
+        }
+        (self.accent, self.accent.hue_rotated(self.gradient.sweep()))
     }
 
-    /// Wave 1 gap-gradient endpoints by mode.
+    /// Gap-gradient endpoints by mode.
     pub fn gap_gradient_endpoints(
         &self,
         mode: crate::style::GapGradient,
@@ -250,19 +384,20 @@ impl ThemePalette {
             GapGradient::Subtle => {
                 (self.accent, AnsiColor::lerp(&self.accent, &self.background, 0.6))
             }
-            GapGradient::Full => (self.accent, self.complement()),
+            // The frame rule and the segment ramp are the same gradient seen
+            // in two places, so they must not be able to disagree.
+            GapGradient::Full => self.ramp_endpoints(),
         }
     }
 
-    /// Two-stage stepped ramp accent → magenta → cyan, sampled at t ∈ [0,1].
-    /// Wave 1 gradient preset.
+    /// The palette's ramp sampled at t ∈ [0,1].
+    ///
+    /// Was a two-stage accent → magenta → cyan walk. In three curated
+    /// palettes accent *is* magenta, so the whole first half sat flat and the
+    /// only visible sweep ran to the cyan slot.
     pub fn ramp_color(&self, t: f32) -> AnsiColor {
-        let t = t.clamp(0.0, 1.0);
-        if t <= 0.5 {
-            AnsiColor::lerp(&self.accent, &self.magenta, t * 2.0)
-        } else {
-            AnsiColor::lerp(&self.magenta, &self.cyan, (t - 0.5) * 2.0)
-        }
+        let (start, end) = self.ramp_endpoints();
+        AnsiColor::mix_oklch(&start, &end, t)
     }
 
     pub fn omarchy_theme_dir() -> PathBuf {
@@ -319,6 +454,8 @@ impl ThemePalette {
             cyan: defaults.cyan.clone(),
             orange: defaults.orange.clone(),
             is_dark: colors.mode != "light",
+            ramp: None,
+            gradient: GradientMode::Auto,
         };
         palette.derive_extended();
         Ok(palette)
@@ -365,6 +502,8 @@ impl ThemePalette {
             cyan: file.palette[6],
             orange: file.palette[11],
             is_dark: file.background.perceived_luminance() < 0.5,
+            ramp: None,
+            gradient: GradientMode::Auto,
         })
     }
 
@@ -395,7 +534,29 @@ impl ThemePalette {
             }
         }
         palette.derive_extended_except(derived);
+        // The ramp is palette-level, not style-level: a gradient belongs to
+        // the colors, so every surface that renders one — segment fills, the
+        // frame rule, the Studio's ramp preview — reads the same two colors.
+        palette.gradient = GradientMode::parse(config.theme.gradient.as_deref());
+        palette.ramp = Self::configured_ramp(config).or_else(|| curated_ramp_for(&palette.accent));
         palette
+    }
+
+    /// The ramp explicitly written in `[theme] ramp`, if it is valid.
+    fn configured_ramp(config: &crate::config::Config) -> Option<(AnsiColor, AnsiColor)> {
+        config.theme.ramp.as_ref().and_then(|v| {
+            let [start, end] = v.as_slice() else {
+                warn!("[theme] ramp needs exactly two colors, got {}", v.len());
+                return None;
+            };
+            match (AnsiColor::from_hex(start), AnsiColor::from_hex(end)) {
+                (Some(a), Some(b)) => Some((a, b)),
+                _ => {
+                    warn!("[theme] ramp has an invalid color; deriving instead");
+                    None
+                }
+            }
+        })
     }
 
     /// Blends the primaries into the extended roles so magenta/cyan/orange
@@ -465,7 +626,7 @@ mod tests {
     #[test]
     fn test_resolve_omarchy_is_default() {
         let config = Config {
-            theme: ThemeConfig { source: "omarchy".into(), custom: None },
+            theme: ThemeConfig { source: "omarchy".into(), custom: None, ..Default::default() },
             ..Config::default()
         };
         let palette = ThemePalette::resolve_palette(&config);
@@ -484,6 +645,7 @@ mod tests {
                     red: None, green: None, yellow: None, blue: None,
                     magenta: None, cyan: None, orange: None,
                 }),
+                ..Default::default()
             },
             ..Config::default()
         };
@@ -504,6 +666,7 @@ mod tests {
                     red: None, green: None, yellow: None, blue: None,
                     magenta: None, cyan: None, orange: None,
                 }),
+                ..Default::default()
             },
             ..Config::default()
         };
@@ -553,7 +716,7 @@ palette = 15=#c0caf5
 
     fn terminal_config(custom: Option<CustomPalette>) -> Config {
         Config {
-            theme: ThemeConfig { source: "terminal".into(), custom },
+            theme: ThemeConfig { source: "terminal".into(), custom, ..Default::default() },
             ..Config::default()
         }
     }
@@ -686,5 +849,201 @@ palette = 15=#c0caf5
 
         assert!(AnsiColor::from_hex("invalid").is_none());
         assert!(AnsiColor::from_hex("#fff").is_none());
+    }
+
+    // ── Gradient ramps ──────────────────────────────────────────────────
+    //
+    // The bug these pin: `complement()` picked the ramp's far end with
+    // `if accent.b >= accent.r { magenta } else { cyan }`. For Synthwave's
+    // #d53bce that is r=213 vs b=206 — seven bytes of red decided whether a
+    // palette advertised as "purple all the way down" ramped to violet or to
+    // teal. It picked teal, so the Look rendered purple → #00b0b1.
+
+    /// OKLCH hue of a color, for asserting on hue families.
+    fn hue_of(c: &AnsiColor) -> f32 {
+        let hex = format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
+        crate::palette_derive::srgb_to_oklch(&hex).expect("valid hex").h
+    }
+
+    /// Shortest angular distance between two hues, in degrees.
+    fn hue_delta(a: f32, b: f32) -> f32 {
+        let d = (a - b).abs() % 360.0;
+        if d > 180.0 { 360.0 - d } else { d }
+    }
+
+    fn palette_named(key: &str) -> ThemePalette {
+        let def = crate::looks::curated_palettes()
+            .iter()
+            .find(|p| p.key == key)
+            .unwrap_or_else(|| panic!("no curated palette {key}"));
+        let mut p = ThemePalette::default();
+        for (role, hex) in crate::looks::ROLE_ORDER.iter().zip(def.colors.iter()) {
+            let c = AnsiColor::from_hex(hex).expect("curated hex");
+            match *role {
+                "accent" => p.accent = c,
+                "foreground" => p.foreground = c,
+                "muted" => p.muted = c,
+                "background" => p.background = c,
+                "red" => p.red = c,
+                "green" => p.green = c,
+                "yellow" => p.yellow = c,
+                "blue" => p.blue = c,
+                "magenta" => p.magenta = c,
+                "cyan" => p.cyan = c,
+                "orange" => p.orange = c,
+                _ => {}
+            }
+        }
+        p.ramp = def.ramp.and_then(|[a, b]| {
+            Some((AnsiColor::from_hex(a)?, AnsiColor::from_hex(b)?))
+        });
+        p
+    }
+
+    #[test]
+    fn a_gradient_never_leaves_the_accents_hue_family() {
+        for def in crate::looks::curated_palettes() {
+            let p = palette_named(def.key);
+            let (start, end) = p.ramp_endpoints();
+            // An explicit ramp is art direction; the derivation rule is what
+            // this guards.
+            if def.ramp.is_some() {
+                continue;
+            }
+            let d = hue_delta(hue_of(&start), hue_of(&end));
+            assert!(
+                d <= 45.0,
+                "{}: ramp #{:02x}{:02x}{:02x} -> #{:02x}{:02x}{:02x} swings {d:.0}deg out of family",
+                def.key, start.r, start.g, start.b, end.r, end.g, end.b
+            );
+        }
+    }
+
+    #[test]
+    fn synthwave_stays_purple_instead_of_going_teal() {
+        let p = palette_named("synthwave-alpha");
+        let (_, end) = p.ramp_endpoints();
+        // The old code returned #00b0b1 here.
+        assert!(
+            end.r > end.g && end.b > end.g,
+            "expected a magenta-family end, got #{:02x}{:02x}{:02x}",
+            end.r, end.g, end.b
+        );
+    }
+
+    #[test]
+    fn a_grey_accent_stays_grey() {
+        // Rotating hue on a zero-chroma color must be a no-op, or monochrome
+        // themes would sprout a color they never asked for.
+        let mut p = ThemePalette::default();
+        p.accent = AnsiColor { r: 128, g: 128, b: 128 };
+        let (_, end) = p.ramp_endpoints();
+        let spread = end.r.max(end.g).max(end.b) - end.r.min(end.g).min(end.b);
+        assert!(spread <= 2, "grey drifted to #{:02x}{:02x}{:02x}", end.r, end.g, end.b);
+    }
+
+    #[test]
+    fn gradient_off_collapses_the_ramp_to_the_accent() {
+        let mut p = palette_named("synthwave-alpha");
+        p.gradient = GradientMode::Off;
+        let (start, end) = p.ramp_endpoints();
+        assert_eq!(start, end);
+        assert_eq!(start, p.accent);
+    }
+
+    #[test]
+    fn an_explicit_ramp_overrides_the_derivation() {
+        let mut p = palette_named("synthwave-alpha");
+        p.ramp = Some((
+            AnsiColor::from_hex("#ff4fd8").unwrap(),
+            AnsiColor::from_hex("#7c3aed").unwrap(),
+        ));
+        let (start, end) = p.ramp_endpoints();
+        assert_eq!(start, AnsiColor::from_hex("#ff4fd8").unwrap());
+        assert_eq!(end, AnsiColor::from_hex("#7c3aed").unwrap());
+    }
+
+    #[test]
+    fn the_ramp_sweeps_rather_than_sitting_flat() {
+        // accent == magenta in three curated palettes, which made the old
+        // two-stage ramp spend its entire first half going nowhere.
+        let p = palette_named("vaporwave-sunset");
+        let mid = p.ramp_color(0.5);
+        let (start, end) = p.ramp_endpoints();
+        assert_ne!(mid, start, "ramp is flat at its midpoint");
+        assert_ne!(mid, end, "ramp is flat at its midpoint");
+    }
+
+    #[test]
+    fn gap_gradient_full_uses_the_palette_ramp() {
+        let p = palette_named("synthwave-alpha");
+        let (a, b) = p.gap_gradient_endpoints(crate::style::GapGradient::Full);
+        assert_eq!((a, b), p.ramp_endpoints());
+    }
+
+    #[test]
+    fn a_hand_written_gruvbox_config_still_gets_its_art_directed_ramp() {
+        // A config that predates `[theme] ramp` — or that someone typed in
+        // hex — must not be stuck with the derived sweep. Gruvbox's accent is
+        // nearly grey, so derivation barely moves it.
+        let config = Config {
+            theme: ThemeConfig {
+                source: "custom".into(),
+                custom: Some(CustomPalette {
+                    accent: Some("#83a598".into()),
+                    foreground: None, muted: None, background: None,
+                    red: None, green: None, yellow: None, blue: None,
+                    magenta: None, cyan: None, orange: None,
+                }),
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        let palette = ThemePalette::resolve_palette(&config);
+        let (_, end) = palette.ramp_endpoints();
+        assert_eq!(end, AnsiColor::from_hex("#fabd2f").unwrap(),
+                   "expected gruvbox mustard, got {}", end.to_hex());
+    }
+
+    #[test]
+    fn an_explicit_ramp_still_beats_the_curated_lookup() {
+        let config = Config {
+            theme: ThemeConfig {
+                source: "custom".into(),
+                custom: Some(CustomPalette {
+                    accent: Some("#83a598".into()),
+                    foreground: None, muted: None, background: None,
+                    red: None, green: None, yellow: None, blue: None,
+                    magenta: None, cyan: None, orange: None,
+                }),
+                ramp: Some(vec!["#111111".into(), "#222222".into()]),
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        let (start, end) = ThemePalette::resolve_palette(&config).ramp_endpoints();
+        assert_eq!(start, AnsiColor::from_hex("#111111").unwrap());
+        assert_eq!(end, AnsiColor::from_hex("#222222").unwrap());
+    }
+
+    #[test]
+    fn a_palette_with_no_curated_match_derives() {
+        let config = Config {
+            theme: ThemeConfig {
+                source: "custom".into(),
+                custom: Some(CustomPalette {
+                    accent: Some("#d53bce".into()),
+                    foreground: None, muted: None, background: None,
+                    red: None, green: None, yellow: None, blue: None,
+                    magenta: None, cyan: None, orange: None,
+                }),
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        let (_, end) = ThemePalette::resolve_palette(&config).ramp_endpoints();
+        // Synthwave ships no explicit ramp, so this is the OKLCH derivation —
+        // and it must not be teal.
+        assert!(end.r > end.g && end.b > end.g, "got {}", end.to_hex());
     }
 }

@@ -25,6 +25,10 @@ Rectangle {
     property bool hasSwatch: false
     /// Flat role → hex map; renders a full Swatches strip after the label.
     property var swatches: null
+    /// Ordered hex stops; renders the palette's gradient sweep under the row.
+    /// A palette's ramp is part of what you are choosing, so it belongs on the
+    /// chip you choose it with.
+    property var ramp: null
     /// Font for the label — a glyph chip wants the terminal's font, not the UI's.
     property string labelFont: Style.font.family
     property real labelSize: Style.font.bodySmall
@@ -35,9 +39,12 @@ Rectangle {
 
     readonly property bool _showStrip: chip.swatches
         && Object.keys(chip.swatches).length > 0
+    readonly property bool _showRamp: chip.ramp && chip.ramp.length >= 2
+        && !rampBar.isFlat
 
     implicitWidth: row.implicitWidth + Style.space(20)
     implicitHeight: Math.max(row.implicitHeight + Style.space(12), Style.space(30))
+        + (chip._showRamp ? rampBar.height + Style.space(4) : 0)
     width: implicitWidth
     height: implicitHeight
 
@@ -49,7 +56,8 @@ Rectangle {
 
     Row {
         id: row
-        anchors.centerIn: parent
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: Style.space(6)
         spacing: Style.space(7)
 
         Rectangle {
@@ -79,6 +87,19 @@ Rectangle {
             dotSize: Style.space(8)
             joined: true
         }
+    }
+
+    Ramp {
+        id: rampBar
+        visible: chip._showRamp
+        stops: chip.ramp ? chip.ramp : []
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: Style.space(10)
+        anchors.rightMargin: Style.space(10)
+        anchors.bottomMargin: Style.space(5)
+        barHeight: Style.space(5)
     }
 
     MouseArea {

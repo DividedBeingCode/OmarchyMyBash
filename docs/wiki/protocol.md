@@ -100,6 +100,7 @@ Render a prompt with simulated context for live UI preview. Added in v0.3. Unlik
 | `git_branch` | string | No | `""` | Simulated git branch name. Empty string disables git repo simulation. |
 | `git_staged` | int | No | `0` | Simulated staged file count |
 | `git_unstaged` | int | No | `0` | Simulated unstaged file count |
+| `base` | string | No | `"current"` | **Additive.** What the Look/patch is layered onto: `"current"` (the live config) or `"default"`. A gallery of preset cards sends `"default"`: a Look patch is a delta, so layering cards on the live config meant applying one preset rewrote how all the others rendered. The live `theme` still travels under `"default"`, because a `structure` Look respects whatever palette you are on. |
 | `style_preset` | string | No | `""` | **v0.4 (additive).** Per-request preset override for the Quattro preset gallery: renders this preview with the named preset regardless of `style.preset`. Absent/empty = current config. |
 | `look` | string | No | `""` | **v0.5.** Dry-run render a Look: resolves the named Look (user entries from `[looks.<name>]` shadow curated ones), applies its patch via the transient in-memory merge, and renders the result. Nothing is persisted; an unknown look name silently falls back to the current config. |
 | `patch` | object | No | — | **v0.4.1 (Looks Studio).** `config_set`-shaped patch merged over the effective config for this render only — RAW config-tree keys, no glyph shortcut expansion. Merge order: base config → `look` → project profile of the previewed `cwd` → `patch` → wizard style knobs (later wins); see [Preview `patch` Override](#preview-patch-override-v041-looks-studio). |
@@ -222,7 +223,7 @@ Behavior details:
 | `looks` | client→daemon | 0.5 | List all Looks (curated + user) as `{name, label, patch}` entries |
 | `looks_apply` | client→daemon | 0.5 | Apply a named Look atomically to disk, or transiently in memory with `transient: true` |
 | `looks_save` | client→daemon | 0.5 | Save the current appearance as a user Look in `[looks.<name>]` |
-| `palettes` | client→daemon | 0.5 | List the 8 curated palette keys with their `theme` patches |
+| `palettes` | client→daemon | 0.5 | List every palette (curated + derived) with colors, gradient ramp, and `theme` patch |
 | `defaults` | client→daemon | 0.5 | Return the full default `Config` as JSON (modified-vs-default comparison) |
 | `script_list` | client→daemon | 0.5 | List executable user scripts in `~/.config/omarchy10k/scripts` |
 | `script_run` | client→daemon | 0.5 | Execute a named user script with a hard timeout (default 30s) |
@@ -426,7 +427,8 @@ The 8 curated Looks are compiled in: `omnarchy`, `tokyo-rainbow`, `framed-gradie
 
 ### `palettes` (v0.5)
 
-List the curated palettes (moved daemon-side from quattro/Model.js so Looks resolve identically from CLI, gallery, and panel).
+List every prompt palette (moved daemon-side from quattro/Model.js so Looks
+resolve identically from CLI, gallery, and panel).
 
 **Request:**
 ```json
@@ -439,18 +441,34 @@ List the curated palettes (moved daemon-side from quattro/Model.js so Looks reso
   "type": "control",
   "status": "ok",
   "palettes": [
-    {"key": "tokyo-night", "theme": {"source": "hybrid", "custom": {"accent": "#7aa2f7", "...": "..."}}}
+    {
+      "key": "synthwave-alpha",
+      "label": "Synthwave Alpha",
+      "blurb": "Neon grid at dusk, purple all the way down.",
+      "source": "curated",
+      "colors": {"accent": "#d53bce", "...": "..."},
+      "ramp": ["#d53bce", "#dc36c2", "...", "#f81b6e"],
+      "theme": {"source": "hybrid", "custom": {"accent": "#d53bce", "...": "..."}},
+      "low_contrast": false
+    }
   ]
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `palettes` | array | `{key, theme}` objects. `theme` is an `[theme]`-shaped patch: `source: "hybrid"` plus 11 `custom` colors (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `orange`). |
+| `key` | string | Stable identifier. |
+| `label` / `blurb` | string | Display name and one line of plain English. |
+| `source` | string | `curated` (hand-tuned, compiled in) or `derived` (built from an installed Omarchy theme by `palette_derive`). |
+| `colors` | object | The 11 roles flat (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `orange`), so a swatch strip does not have to dig them out of the patch. |
+| `ramp` | array | Eight hex stops of the palette's gradient, sampled by the same `ramp_color` the prompt renders with. Computed daemon-side deliberately: a second OKLCH implementation in QML is one that can disagree with the terminal. |
+| `theme` | object | A `[theme]`-shaped patch: `source: "hybrid"`, the 11 `custom` colors, and `ramp` when the palette ships an art-directed one. |
+| `low_contrast` | bool | A derived palette that still falls short of the contrast floors after repair. |
 
-Keys (all always present): `tokyo-night`, `catppuccin`, `gruvbox`, `nord`, `dracula`, `rose-pine`, `everforest`, `kanagawa`.
+Curated palettes come first, then derived ones sorted by key — `read_dir` order
+is arbitrary and a picker that reshuffles between opens is disorienting.
 
-**Used by:** Quattro panel palette picker, gallery overlay.
+**Used by:** Quattro panel palette picker, Studio Theme tab, preset cards.
 
 ### `defaults` (v0.5)
 

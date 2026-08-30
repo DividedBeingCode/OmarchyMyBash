@@ -168,6 +168,7 @@ Applied when `theme.source` is anything except `"omarchy"` — i.e. `"custom"`, 
 | `is_dark` | perceived luminance of `background` < 0.5 |
 
 - The mapping was sanity-checked against the Omarchy Tokyo Night ghostty theme (accent lands on palette 4, as expected for that theme).
+- The gradient ramp is palette-level (`ThemePalette::ramp_endpoints`), so the `gradient` preset's segment fills and `gap_gradient = "full"` read the same two colors. Its far end is the accent hue-rotated in OKLCH, not an ANSI slot — see [config.md](config.md) for why.
 - Magenta/cyan/orange come straight from the live palette — extended-role derivation must not blend over them (the `derived` flag trio in `resolve_palette_in`), so gradient-gap and ramp rendering use the terminal's real hues.
 - **Any failure — missing file, missing palette entries, bad hex — falls back to the full default resolution** (Tokyo Night defaults) with a warning; a partial palette never produces a half-rendered prompt.
 - `[theme.custom]` still wins: overrides apply on top of the terminal palette, and any role the user sets explicitly is likewise excluded from blending.

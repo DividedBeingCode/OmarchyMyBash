@@ -113,8 +113,36 @@ Item {
         return looks.service ? looks.service.currentPaletteColors() : ({})
     }
 
+    /// The gradient sweep this preset will produce.
+    ///
+    /// Matched by accent against the daemon's published palette list rather
+    /// than interpolated here — the daemon samples the ramp with the same
+    /// `ramp_color` the prompt renders with, and a second implementation in
+    /// QML is one that can disagree with the terminal.
+    function _rampFor(look) {
+        var custom = look.patch && look.patch.theme && look.patch.theme.custom
+            ? look.patch.theme.custom : null
+        var accent = String((custom && custom.accent)
+            ? custom.accent
+            : (looks.service ? (looks.service.currentPaletteColors() || {}).accent : "") || "")
+            .toLowerCase()
+        if (accent.length === 0) return []
+        var list = looks.service ? (looks.service.paletteList || []) : []
+
+        for (var i = 0; i < list.length; i++) {
+            if (String(list[i].accent || "").toLowerCase() === accent)
+                return list[i].ramp || []
+        }
+        return []
+    }
+
     function _fetchCard(look) {
         if (!looks.service) return
+        // `base: "default"` — a card shows what the PRESET is, not what your
+        // config plus the preset happens to be. Layered on the live config,
+        // applying one preset visibly rewrote the frame and glyphs on all the
+        // others, because a Look patch is a delta and every key it omits was
+        // inherited from whatever was applied last.
         looks.service.requestPreview(look.name, null,
             Preview.cardScenes(looks.cardCols), true,
             function (res) {
@@ -124,7 +152,7 @@ Item {
                 // Reassigned, not mutated: a plain JS object mutated in place
                 // never re-evaluates the bindings that read it.
                 looks.cardRenders = next
-            }, looks.cardCols)
+            }, looks.cardCols, "default")
     }
 
     function refreshCards() {
@@ -242,6 +270,7 @@ Item {
                         blurb: card.modelData.blurb || ""
                         tags: card.modelData.tags || []
                         colors: looks._paletteFor(card.modelData)
+                        ramp: looks._rampFor(card.modelData)
                         terminalFont: (looks.service && looks.service.terminalFont)
                             ? looks.service.terminalFont : Style.font.family
                         active: looks.selected === card.modelData.name

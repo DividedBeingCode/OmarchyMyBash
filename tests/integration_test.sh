@@ -714,8 +714,13 @@ fi
 section "Quattro Plugin"
 
 QUATTRO_DIR="$SCRIPT_DIR/quattro"
+# The manifest lives at the REPO ROOT, not beside the QML: Omarchy's plugin
+# rules require it there, and the install dir must equal the manifest id. This
+# block still pointed at quattro/ after that move, so all three of its checks
+# had been failing since.
+MANIFEST="$SCRIPT_DIR/manifest.json"
 
-if [[ -f "$QUATTRO_DIR/manifest.json" ]]; then
+if [[ -f "$MANIFEST" ]]; then
     pass "manifest.json exists"
 else
     fail "manifest.json" "not found"
@@ -724,11 +729,18 @@ fi
 # Validate manifest structure
 if python3 -c "
 import json, sys
-m = json.load(open('$QUATTRO_DIR/manifest.json'))
+m = json.load(open('$MANIFEST'))
 assert m['schemaVersion'] == 1
 assert m['id'] == 'community.omarchy10k'
 assert 'bar-widget' in m['kinds']
 assert 'barWidget' in m['entryPoints']
+# Entry points are repo-root relative, so they must carry the quattro/ prefix
+# and point at files that exist.
+import os
+root = os.path.dirname('$MANIFEST') or '.'
+for name, rel in m['entryPoints'].items():
+    assert rel.startswith('quattro/'), name
+    assert os.path.isfile(os.path.join(root, rel)), rel
 print('MANIFEST_VALID')
 " 2>/dev/null | grep -q "MANIFEST_VALID"; then
     pass "manifest.json structure valid"
@@ -1049,7 +1061,7 @@ else
 fi
 
 if command -v omarchy >/dev/null 2>&1; then
-    if omarchy plugin validate "$SCRIPT_DIR/quattro" >/dev/null 2>&1; then
+    if omarchy plugin validate "$SCRIPT_DIR" >/dev/null 2>&1; then
         pass "omarchy plugin manifest valid"
     else
         fail "omarchy plugin manifest valid" "schema validation failed"

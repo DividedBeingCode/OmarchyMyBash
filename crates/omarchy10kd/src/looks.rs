@@ -38,6 +38,11 @@ pub struct PaletteDef {
     /// accent, foreground, muted, background, red, green, yellow, blue,
     /// magenta, cyan, orange — in that order, matching `ROLE_ORDER`.
     pub colors: [&'static str; 11],
+    /// Art-directed gradient ramp, start → end. `None` lets the palette
+    /// derive one by rotating the accent's hue in OKLCH, which is right for
+    /// almost every palette; this exists for the handful where the derived
+    /// sweep undersells the scheme people know it by.
+    pub ramp: Option<[&'static str; 2]>,
 }
 
 /// Role order for `PaletteDef::colors`. Mirrors `palette_derive::ROLES`
@@ -63,7 +68,18 @@ const fn p(
     blurb: &'static str,
     colors: [&'static str; 11],
 ) -> PaletteDef {
-    PaletteDef { key, label, blurb, colors }
+    PaletteDef { key, label, blurb, colors, ramp: None }
+}
+
+/// A palette with an art-directed ramp, overriding the OKLCH derivation.
+const fn pr(
+    key: &'static str,
+    label: &'static str,
+    blurb: &'static str,
+    colors: [&'static str; 11],
+    ramp: [&'static str; 2],
+) -> PaletteDef {
+    PaletteDef { key, label, blurb, colors, ramp: Some(ramp) }
 }
 
 //      accent     foreground muted      background red        green      yellow     blue       magenta    cyan       orange
@@ -74,8 +90,11 @@ static CURATED_PALETTES: [PaletteDef; 39] = [
       ["#89b4fa", "#cdd6f4", "#7f849c", "#1e1e2e", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#cba6f7", "#94e2d5", "#fab387"]),
     p("catppuccin-frappe", "Catppuccin Frappé", "The same pastels, a shade lighter and cooler.",
       ["#8caaee", "#c6d0f5", "#838ba7", "#303446", "#e78284", "#a6d189", "#e5c890", "#8caaee", "#ca9ee6", "#81c8be", "#ef9f76"]),
-    p("gruvbox", "Gruvbox", "Retro warmth: mustard, rust and olive.",
-      ["#83a598", "#ebdbb2", "#a89984", "#282828", "#fb4934", "#b8bb26", "#fabd2f", "#83a598", "#d3869b", "#8ec07c", "#fe8019"]),
+    // Gruvbox aqua is nearly grey, so a derived sweep barely moves. Aqua to
+    // mustard runs straight through the scheme's own green.
+    pr("gruvbox", "Gruvbox", "Retro warmth: mustard, rust and olive.",
+      ["#83a598", "#ebdbb2", "#a89984", "#282828", "#fb4934", "#b8bb26", "#fabd2f", "#83a598", "#d3869b", "#8ec07c", "#fe8019"],
+       ["#83a598", "#fabd2f"]),
     p("nord", "Nord", "Arctic blues, deliberately low-key.",
       ["#88c0d0", "#eceff4", "#7b88a1", "#2e3440", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#8fbcbb", "#d08770"]),
     p("dracula", "Dracula", "High-contrast neon on deep violet.",
@@ -92,8 +111,11 @@ static CURATED_PALETTES: [PaletteDef; 39] = [
       ["#61afef", "#abb2bf", "#828997", "#282c34", "#e06c75", "#98c379", "#e5c07b", "#61afef", "#c678dd", "#56b6c2", "#d19a66"]),
     p("monokai", "Monokai", "Loud lime and magenta on olive black.",
       ["#a6e22e", "#f8f8f2", "#9a957f", "#272822", "#f92672", "#a6e22e", "#e6db74", "#66d9ef", "#ae81ff", "#66d9ef", "#fd971f"]),
-    p("ayu-mirage", "Ayu Mirage", "Amber highlights on slate blue.",
-      ["#ffcc66", "#cbccc6", "#8a94a3", "#1f2430", "#ff6666", "#bae67e", "#ffcc66", "#73d0ff", "#d4bfff", "#95e6cb", "#ff9940"]),
+    // Ayu is amber; the derived sweep pulls it toward green, away from the
+    // thing the scheme is named for.
+    pr("ayu-mirage", "Ayu Mirage", "Amber highlights on slate blue.",
+      ["#ffcc66", "#cbccc6", "#8a94a3", "#1f2430", "#ff6666", "#bae67e", "#ffcc66", "#73d0ff", "#d4bfff", "#95e6cb", "#ff9940"],
+       ["#ffcc66", "#ff9940"]),
     p("oxocarbon", "Oxocarbon", "IBM Carbon: flat, bright, near-black.",
       ["#33b1ff", "#f2f4f8", "#8d8d8d", "#161616", "#ee5396", "#42be65", "#fae3b0", "#33b1ff", "#be95ff", "#3ddbd9", "#ff7eb6"]),
     p("nightfox", "Nightfox", "Dusky blues with a warm amber accent.",
@@ -142,8 +164,11 @@ static CURATED_PALETTES: [PaletteDef; 39] = [
       ["#a277ff", "#cdccce", "#5c5c5c", "#15141b", "#ff6767", "#61ffca", "#ffca85", "#a277ff", "#61ffca", "#a277ff", "#ff9b62"]),
     p("andromeda", "Andromeda", "Deep space navy with a magenta pulse.",
       ["#ca4dc9", "#e5e5e5", "#666666", "#262a33", "#d43937", "#05bc79", "#e5e512", "#2b78cf", "#bc3fbc", "#0fa8cd", "#f38900"]),
-    p("cobalt2", "Cobalt2", "Cobalt and hazard yellow. Wes Bos's.",
-      ["#f0cc09", "#ffffff", "#666666", "#132738", "#ff0000", "#38de21", "#ffe50a", "#236de0", "#ff005d", "#00bbbb", "#ff8d00"]),
+    // Hazard yellow into its own orange. Deriving sends it green, which is a
+    // color Cobalt2 does not really have.
+    pr("cobalt2", "Cobalt2", "Cobalt and hazard yellow. Wes Bos's.",
+      ["#f0cc09", "#ffffff", "#666666", "#132738", "#ff0000", "#38de21", "#ffe50a", "#236de0", "#ff005d", "#00bbbb", "#ff8d00"],
+       ["#f0cc09", "#ff8d00"]),
     p("snazzy", "Snazzy", "Hyper's bright, friendly palette.",
       ["#fc4cb4", "#ebece6", "#606060", "#1e1f29", "#fc4346", "#50fb7c", "#f0fb8c", "#49baff", "#fc4cb4", "#8be9fe", "#ffa700"]),
     p("night-owl", "Night Owl", "Built for late nights and low light.",
@@ -181,7 +206,11 @@ pub fn curated_palette(key: &str) -> Option<serde_json::Value> {
         .zip(def.colors.iter())
         .map(|(role, hex)| (role.to_string(), serde_json::Value::String(hex.to_string())))
         .collect();
-    Some(serde_json::json!({ "theme": { "source": "hybrid", "custom": custom } }))
+    let mut theme = serde_json::json!({ "source": "hybrid", "custom": custom });
+    if let Some(ramp) = def.ramp {
+        theme["ramp"] = serde_json::json!([ramp[0], ramp[1]]);
+    }
+    Some(serde_json::json!({ "theme": theme }))
 }
 
 /// The closed tag vocabulary. Closed so the UI can build filter chips from a
@@ -618,6 +647,21 @@ pub fn apply_transient(current: &Config, patch: &serde_json::Value) -> Result<Co
         Some(t) => t.clone(),
         None => toml::Table::new(),
     };
+    // A patch that sets a palette sets the WHOLE palette. Without this the
+    // deep merge leaves the previous palette's keys behind: switching from
+    // Gruvbox (which ships an art-directed `ramp`) to a palette that derives
+    // its own would keep Gruvbox's mustard ramp, and a partial user palette
+    // would blend with whatever preceded it into a scheme nobody designed.
+    if patch_val
+        .get("theme")
+        .and_then(|t| t.as_table())
+        .is_some_and(|t| t.contains_key("custom"))
+    {
+        if let Some(theme) = doc.get_mut("theme").and_then(|t| t.as_table_mut()) {
+            theme.remove("custom");
+            theme.remove("ramp");
+        }
+    }
     if let Some(obj) = patch_val.as_table() {
         for (k, v) in obj {
             crate::server::merge_toml_value(

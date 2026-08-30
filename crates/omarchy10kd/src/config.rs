@@ -78,7 +78,7 @@ impl Default for LookEntry {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(PartialEq, Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct StyleConfig {
     pub preset: String,
@@ -104,7 +104,7 @@ impl Default for StyleConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(PartialEq, Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SeparatorConfig {
     pub left: Option<String>,
@@ -114,7 +114,7 @@ pub struct SeparatorConfig {
     pub shape: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(PartialEq, Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct FrameConfig {
     pub enabled: Option<bool>,
@@ -125,7 +125,7 @@ pub struct FrameConfig {
     pub gap_gradient: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(PartialEq, Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CapsConfig {
     pub left_start: Option<String>,
@@ -164,11 +164,17 @@ impl Default for PromptConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(PartialEq, Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ThemeConfig {
     pub source: String,
     pub custom: Option<CustomPalette>,
+    /// Palette-level gradient ramp: "auto" (default), "off", or "full".
+    /// Controls how wide a hue sweep is derived from the accent.
+    pub gradient: Option<String>,
+    /// Art-directed ramp override: exactly two hex colors, start → end.
+    /// Wins over `gradient` unless that is "off".
+    pub ramp: Option<Vec<String>>,
 }
 
 impl Default for ThemeConfig {
@@ -176,11 +182,13 @@ impl Default for ThemeConfig {
         Self {
             source: "omarchy".into(),
             custom: None,
+            gradient: None,
+            ramp: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(PartialEq, Debug, Clone, Deserialize, Serialize)]
 pub struct CustomPalette {
     pub accent: Option<String>,
     pub foreground: Option<String>,
