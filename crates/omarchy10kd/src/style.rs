@@ -412,12 +412,59 @@ impl GlyphCatalog {
             "teddy" => "\u{f18fb}",
             // Kaomoji (plain Unicode; width-ambiguous in some terminals —
             // the panel marks these experimental).
-            "kaomoji_bear" => "\u{295}\u{2022}\u{1f425}\u{2022}\u{295}",
+            "kaomoji_bear" => "\u{295}\u{2022}\u{1d25}\u{2022}\u{294}",
             "kaomoji_smile" => "(\u{25d5}\u{203f}\u{25d5})",
             "kaomoji_rage" => "(\u{256f}\u{00b0}\u{25a1}\u{00b0})\u{256f}",
             "kaomoji_relaxed" => "\u{30fd}(\u{00b4}\u{30fc}`)\u{30ce}",
             "kaomoji_smirk" => "(\u{00ac}\u{203f}\u{00ac})",
             "kaomoji_disapprove" => "\u{ca0}_\u{ca0}",
+            "kaomoji_happy" => "(\u{2022}\u{203f}\u{2022})",
+            "kaomoji_soft" => "(\u{b4}\u{2022}\u{1d17}\u{2022}`)",
+            "kaomoji_sleepy" => "( \u{2d8}\u{3c9}\u{2d8} )",
+            "kaomoji_cheer" => "\u{30fd}(\u{2022}\u{203f}\u{2022})\u{30ce}",
+            "kaomoji_shrug" => "\u{af}\\_(\u{30c4})_/\u{af}",
+            // Wider bestiary and the Japan/Geek set. These were offered by the
+            // Studio glyph browser long before the daemon knew them, so picking
+            // one wrote a key that fell through `_ => key` and rendered as its
+            // own name -- a prompt reading "snail" instead of a snail.
+            "snail" => "\u{f1677}",
+            "spider" => "\u{f11ea}",
+            "snake" => "\u{f150e}",
+            "bird" => "\u{f15c6}",
+            "dolphin" => "\u{f18b4}",
+            "shark" => "\u{f18ba}",
+            "jellyfish" => "\u{f0f01}",
+            "elephant" => "\u{f07c6}",
+            "kangaroo" => "\u{f1558}",
+            "donkey" => "\u{f07c2}",
+            "rodent" => "\u{f1327}",
+            "bat" => "\u{f0b5f}",
+            "bone" => "\u{f00b9}",
+            "egg" => "\u{f0aaf}",
+            "feather" => "\u{f06d3}",
+            "bug" => "\u{f00e4}",
+            "squirrel" => "\u{eb58}",
+            "ninja" => "\u{f0774}",
+            "torii" => "\u{eee6}",
+            "sushi" => "\u{e21a}",
+            "noodles" => "\u{f117e}",
+            "rice" => "\u{f07ea}",
+            "tea" => "\u{f0d9e}",
+            "fan" => "\u{f0210}",
+            "mask" => "\u{f1023}",
+            "drama" => "\u{f0d02}",
+            "katana" => "\u{f18be}",
+            "alien" => "\u{f089a}",
+            "robot" => "\u{f1719}",
+            "ghost" => "\u{f02a0}",
+            "sakura" => "\u{f09f1}",
+            "crown" => "\u{edeb}",
+            "sword" => "\u{f04e5}",
+            "emoticon" => "\u{f0c68}",
+            "cool" => "\u{f0c6b}",
+            "wink" => "\u{f0c78}",
+            "heart" => "\u{f02d1}",
+            "star" => "\u{f04ce}",
             _ => key,
         }
     }
@@ -489,42 +536,91 @@ pub fn available_separators() -> &'static [(&'static str, &'static str)] {
     /// Animals (Nerd Font, verified against the NF v3 cmap).
     pub fn available_animal_chars() -> &'static [(&'static str, &'static str)] {
         &[
-            ("cat", "\u{f0b58}"),
-            ("penguin", "\u{f0752}"),
-            ("fox", "\u{f0f86}"),
-            ("owl", "\u{f1041}"),
-            ("duck", "\u{f095f}"),
-            ("butterfly", "\u{f10a9}"),
-            ("ladybug", "\u{f0828}"),
+            ("cat", "\u{f011b}"),
+            ("penguin", "\u{f0ec0}"),
+            ("fox", "\u{f0239}"),
+            ("owl", "\u{f03d2}"),
+            ("duck", "\u{f01e5}"),
+            ("butterfly", "\u{f1589}"),
+            ("ladybug", "\u{f082d}"),
             ("bee", "\u{f0fa1}"),
-            ("dog", "\u{f094c}"),
-            ("rabbit", "\u{f0810}"),
-            ("turtle", "\u{f0be0}"),
-            ("paw", "\u{f02f2}"),
-            ("fish", "\u{f0143}"),
-            ("frog", "\u{ed01}"),
-            ("dragon", "\u{ee01}"),
-            ("panda", "\u{f02e3}"),
-            ("koala", "\u{f1648}"),
-            ("unicorn", "\u{f14cb}"),
-            ("teddy", "\u{f1804}"),
-            ("cow", "\u{f01e4}"),
-            ("horse", "\u{f0f12}"),
-            ("pig", "\u{f1045}"),
-            ("sheep", "\u{f1077}"),
+            ("dog", "\u{f0a43}"),
+            ("rabbit", "\u{f0907}"),
+            ("turtle", "\u{f0cd7}"),
+            ("paw", "\u{f03e9}"),
+            ("fish", "\u{f023a}"),
+            ("frog", "\u{edf8}"),
+            ("dragon", "\u{eef8}"),
+            ("panda", "\u{f03da}"),
+            ("koala", "\u{f173f}"),
+            ("unicorn", "\u{f15c2}"),
+            ("teddy", "\u{f18fb}"),
+            ("cow", "\u{f019a}"),
+            ("horse", "\u{f15bf}"),
+            ("pig", "\u{f0401}"),
+            ("sheep", "\u{f0cc6}"),
+            ("snail", "\u{f1677}"),
+            ("spider", "\u{f11ea}"),
+            ("snake", "\u{f150e}"),
+            ("bird", "\u{f15c6}"),
+            ("dolphin", "\u{f18b4}"),
+            ("shark", "\u{f18ba}"),
+            ("jellyfish", "\u{f0f01}"),
+            ("elephant", "\u{f07c6}"),
+            ("kangaroo", "\u{f1558}"),
+            ("donkey", "\u{f07c2}"),
+            ("rodent", "\u{f1327}"),
+            ("bat", "\u{f0b5f}"),
+            ("bone", "\u{f00b9}"),
+            ("egg", "\u{f0aaf}"),
+            ("feather", "\u{f06d3}"),
+            ("bug", "\u{f00e4}"),
+            ("squirrel", "\u{eb58}"),
         ]
     }
 
     /// Kaomoji: plain-Unicode multi-char strings, width-ambiguous in some
     /// terminals — the panel labels these experimental.
+    /// Japan/Geek symbols offered by the Studio's glyph browser.
+    pub fn available_symbol_chars() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("ninja", "\u{f0774}"),
+            ("torii", "\u{eee6}"),
+            ("sushi", "\u{e21a}"),
+            ("noodles", "\u{f117e}"),
+            ("rice", "\u{f07ea}"),
+            ("tea", "\u{f0d9e}"),
+            ("fan", "\u{f0210}"),
+            ("mask", "\u{f1023}"),
+            ("drama", "\u{f0d02}"),
+            ("katana", "\u{f18be}"),
+            ("alien", "\u{f089a}"),
+            ("robot", "\u{f1719}"),
+            ("ghost", "\u{f02a0}"),
+            ("sakura", "\u{f09f1}"),
+            ("crown", "\u{edeb}"),
+            ("sword", "\u{f04e5}"),
+            ("emoticon", "\u{f0c68}"),
+            ("cool", "\u{f0c6b}"),
+            ("wink", "\u{f0c78}"),
+            ("heart", "\u{f02d1}"),
+            ("star", "\u{f04ce}"),
+        ]
+    }
+
     pub fn available_kaomoji_chars() -> &'static [(&'static str, &'static str)] {
         &[
-            ("kaomoji_bear", "\u{295}\u{2022}\u{1f425}\u{2022}\u{295}"),
+            ("kaomoji_bear", "\u{295}\u{2022}\u{1d25}\u{2022}\u{294}"),
             ("kaomoji_smile", "(\u{25d5}\u{203f}\u{25d5})"),
             ("kaomoji_rage", "(\u{256f}\u{00b0}\u{25a1}\u{00b0})\u{256f}"),
             ("kaomoji_relaxed", "\u{30fd}(\u{00b4}\u{30fc}`)\u{30ce}"),
             ("kaomoji_smirk", "(\u{00ac}\u{203f}\u{00ac})"),
             ("kaomoji_disapprove", "\u{ca0}_\u{ca0}"),
+            ("kaomoji_happy", "(\u{2022}\u{203f}\u{2022})"),
+            ("kaomoji_soft", "(\u{b4}\u{2022}\u{1d17}\u{2022}`)"),
+            ("kaomoji_sleepy", "( \u{2d8}\u{3c9}\u{2d8} )"),
+            ("kaomoji_cheer", "\u{30fd}(\u{2022}\u{203f}\u{2022})\u{30ce}"),
+            ("kaomoji_shrug", "\u{af}\\_(\u{30c4})_/\u{af}"),
         ]
     }
 
@@ -737,6 +833,39 @@ mod catalog_parity_tests {
         }
     }
 
+    /// Every key the glyph browser offers must resolve in the daemon.
+    ///
+    /// `prompt_char` passes an unknown key through as its own literal, so a
+    /// browser entry keyed on the GLYPH still renders -- it just writes a
+    /// value no Look, no CLI and no other picker recognises. Sixteen entries
+    /// (the whole Prompt and Kaomoji categories) were keyed that way, so
+    /// picking Chevron from the browser stored "❯" while the chip row above
+    /// it stored "chevron", and the two never agreed on what was selected.
+    #[test]
+    fn glyph_browser_keys_all_resolve() {
+        let src = qml("StudioPrompt.qml");
+        if src.is_empty() {
+            return;
+        }
+        let keys = keys_in_property(&src, "glyphCatalog");
+        assert!(keys.len() > 20, "expected the full glyph catalog, got {}", keys.len());
+
+        let mut bad = Vec::new();
+        for k in &keys {
+            // An identifier that resolves to itself is not in the catalog.
+            if GlyphCatalog::prompt_char(k) == k.as_str() {
+                bad.push(k.clone());
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "{} glyph-browser key(s) do not resolve in the daemon and would \
+             render as their own literal text:\n  {}",
+            bad.len(),
+            bad.join("\n  ")
+        );
+    }
+
     #[test]
     fn studio_separators_are_real_catalog_keys() {
         let src = qml("StudioPrompt.qml");
@@ -795,6 +924,55 @@ mod catalog_parity_tests {
                 offered.iter().any(|o| o == p),
                 "the daemon implements preset {p:?} but the Studio does not \
                  offer it"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod catalog_self_consistency_tests {
+    use super::*;
+
+    /// The `available_*` listings and `prompt_char` are two hand-maintained
+    /// copies of the same data. They HAD drifted: `kaomoji_bear` was fixed in
+    /// one and not the other, so the picker and the prompt disagreed.
+    #[test]
+    fn listings_agree_with_the_resolver() {
+        let mut bad = Vec::new();
+        for (key, glyph) in available_animal_chars()
+            .iter()
+            .chain(available_kaomoji_chars())
+            .chain(available_symbol_chars())
+            .chain(available_prompt_chars())
+        {
+            let resolved = GlyphCatalog::prompt_char(key);
+            if resolved != *glyph {
+                bad.push(format!("{key}: listing {glyph:?} vs resolver {resolved:?}"));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "{} catalog entr(y/ies) disagree between the listing and \
+             prompt_char:\n  {}",
+            bad.len(),
+            bad.join("\n  ")
+        );
+    }
+
+    /// A listed key that `prompt_char` does not know falls through `_ => key`
+    /// and renders as its own literal name in the prompt.
+    #[test]
+    fn every_listed_key_actually_resolves() {
+        for (key, _) in available_animal_chars()
+            .iter()
+            .chain(available_kaomoji_chars())
+            .chain(available_symbol_chars())
+        {
+            assert_ne!(
+                GlyphCatalog::prompt_char(key),
+                *key,
+                "{key} is offered but not resolved -- it would render as the \
+                 literal text {key:?}"
             );
         }
     }

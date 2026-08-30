@@ -167,33 +167,6 @@ Column {
         ]
     }
 
-    // Kaomoji. Pure text, so these need no font support at all and survive
-    // SSH and 16-colour terminals. GlyphCatalog::prompt_char already passes
-    // an unrecognised key through as a literal string, so no daemon-side
-    // catalog entry is required.
-    PanelKit.GlyphRow {
-        label: "Kaomoji"
-        configKey: "segments.character.success"
-        panel: behaviorBucket.panel
-        currentValue: behaviorBucket.panel.cfgCharSuccess
-        customHandler: function(key) {
-            behaviorBucket.panel.setConfigValue("segments.character.success", key)
-            behaviorBucket.panel.setConfigValue("segments.character.error", key)
-            behaviorBucket.panel.setConfigValue("segments.character.transient", key)
-        }
-        glyphs: [
-            { key: "(\u25d5\u203f\u25d5)", glyph: "(\u25d5\u203f\u25d5)", label: "Happy" },
-            { key: "(\u00b4\u2022\u1d17\u2022`)", glyph: "(\u00b4\u2022\u1d17\u2022`)", label: "Soft" },
-            { key: "( \u02d8\u03c9\u02d8 )", glyph: "( \u02d8\u03c9\u02d8 )", label: "Sleepy" },
-            { key: "\u30fd(\u2022\u203f\u2022)\u30ce", glyph: "\u30fd(\u2022\u203f\u2022)\u30ce", label: "Cheer" },
-            { key: "(\u256f\u00b0\u25a1\u00b0)\u256f", glyph: "(\u256f\u00b0\u25a1\u00b0)\u256f", label: "Flip" },
-            { key: "\u00af\\_(\u30c4)_/\u00af", glyph: "\u00af\\_(\u30c4)_/\u00af", label: "Shrug" },
-            { key: "(\u2022\u203f\u2022)", glyph: "(\u2022\u203f\u2022)", label: "Smile" },
-            { key: "\u0295\u2022\u1d25\u2022\u0294", glyph: "\u0295\u2022\u1d25\u2022\u0294", label: "Bear" }
-        ]
-    }
-
-
     PanelKit.GlyphRow {
         label: "Kaomoji"
         configKey: "segments.character.success"
@@ -210,7 +183,12 @@ Column {
             { key: "kaomoji_rage",       glyph: "(╯°□°)╯", label: "Rage" },
             { key: "kaomoji_relaxed",    glyph: "ヽ(´ー`)ノ", label: "Relaxed" },
             { key: "kaomoji_smirk",      glyph: "(¬‿¬)",   label: "Smirk" },
-            { key: "kaomoji_disapprove", glyph: "ಠ_ಠ",     label: "No" }
+            { key: "kaomoji_disapprove", glyph: "ಠ_ಠ",     label: "No" },
+            { key: "kaomoji_happy",      glyph: "(•‿•)",   label: "Happy" },
+            { key: "kaomoji_soft",       glyph: "(´•ᴗ•`)", label: "Soft" },
+            { key: "kaomoji_sleepy",     glyph: "( ˘ω˘ )", label: "Sleepy" },
+            { key: "kaomoji_cheer",      glyph: "ヽ(•‿•)ノ", label: "Cheer" },
+            { key: "kaomoji_shrug",      glyph: "¯\\_(ツ)_/¯", label: "Shrug" }
         ]
     }
 
