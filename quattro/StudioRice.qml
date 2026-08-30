@@ -30,6 +30,9 @@ Flickable {
     clip: true
     boundsBehavior: Flickable.StopAtBounds
 
+    // Touchpad scrolling at the same rate as the bar popout.
+    WheelBoost { flick: riceTab }
+
     readonly property string home: Quickshell.env("HOME")
     readonly property string themeDir: riceTab.home + "/.local/state/omarchy/current/theme"
 

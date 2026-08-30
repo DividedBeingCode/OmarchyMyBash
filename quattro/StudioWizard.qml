@@ -25,6 +25,9 @@ Flickable {
     clip: true
     boundsBehavior: Flickable.StopAtBounds
 
+    // Touchpad scrolling at the same rate as the bar popout.
+    WheelBoost { flick: wizard }
+
     property var steps: []
     property var execTier: []
     property int stepIndex: 0

@@ -24,6 +24,9 @@ Flickable {
     clip: true
     boundsBehavior: Flickable.StopAtBounds
 
+    // Touchpad scrolling at the same rate as the bar popout.
+    WheelBoost { flick: promptTab }
+
     // Bindings must reference a PROPERTY to re-evaluate. Reading through a
     // function call only creates a dependency on `service` itself, so the
     // whole tab stayed frozen at its first paint once the config arrived.

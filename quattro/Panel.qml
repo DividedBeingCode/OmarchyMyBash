@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "o10k"
 import "Model.js" as Model
 
 Panel {
@@ -978,33 +979,14 @@ Panel {
                     policy: content.implicitHeight > scrollArea.height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
                 }
 
-                // Precision touchpads deliver tiny angleDelta values that
-                // scroll painfully slowly. Amplify and drive contentY
-                // directly. Tunable: wheelBoost.
-                WheelHandler {
-                    // NOTE: the boost multiplier must not share its name with
-                    // this handler's id — `id: wheelBoost` + `property real
-                    // wheelBoost` made every lookup resolve to the handler
-                    // object and the scroll step computed NaN (silent dead
-                    // scroll). Keep the names distinct.
-                    id: panelWheel
-                    property real boost: 3.0
-                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                    activeTimeout: 0.5
-                    onWheel: (event) => {
-                        const pd = event.pixelDelta
-                        const ady = event.angleDelta.y
-                        if (!(pd && pd.y) && ady === 0) { event.accepted = false; return }
-                        const max = Math.max(0, content.implicitHeight - scrollArea.height)
-                        // pixelDelta path (touchpads): pixels × boost. Wheel
-                        // path: a full notch (120) scrolls 1/4 pane × boost.
-                        const step = (pd && pd.y !== 0)
-                            ? -pd.y * panelWheel.boost
-                            : -(ady / 120) * scrollArea.height * 0.25 * panelWheel.boost
-                        scrollArea.contentY = Math.max(0, Math.min(max, scrollArea.contentY + step))
-                        event.accepted = true
-                    }
-                }
+                // Precision touchpads deliver tiny angleDelta values that scroll
+                // painfully slowly. Amplify and drive contentY directly.
+                //
+                // Shared with the Studio via o10k/WheelBoost.qml rather than kept
+                // as a private copy: the Studio was built later with plain
+                // Flickables and never got this, which is why the popout
+                // scrolled normally and the Studio did not.
+                WheelBoost { flick: scrollArea }
 
                     Column {
                         id: content

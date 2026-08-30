@@ -26,6 +26,9 @@ Flickable {
     clip: true
     boundsBehavior: Flickable.StopAtBounds
 
+    // Touchpad scrolling at the same rate as the bar popout.
+    WheelBoost { flick: themeTab }
+
     property var themes: []
     property string current: ""
     /// Palette search. At 8 palettes a plain list was fine; at 53 it is a

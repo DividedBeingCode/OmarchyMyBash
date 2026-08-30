@@ -137,6 +137,9 @@ Item {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
 
+        // Touchpad scrolling at the same rate as the bar popout.
+        WheelBoost { flick: scroll }
+
         Column {
             id: body
             width: scroll.width
