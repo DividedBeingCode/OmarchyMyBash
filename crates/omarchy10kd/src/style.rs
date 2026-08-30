@@ -927,6 +927,35 @@ mod catalog_parity_tests {
             );
         }
     }
+
+    #[test]
+    fn the_studio_catalog_has_no_duplicate_keys() {
+        // `dragon` shipped twice — once category "Animals", once "Japan" — so it
+        // rendered twice in the grid.
+        let src = qml("StudioPrompt.qml");
+        let keys = keys_in_property(&src, "glyphCatalog");
+        let mut seen = std::collections::BTreeSet::new();
+        let dupes: Vec<&String> = keys.iter().filter(|k| !seen.insert((*k).clone())).collect();
+        assert!(dupes.is_empty(), "duplicate glyph keys in the Studio catalog: {dupes:?}");
+    }
+
+    #[test]
+    fn every_glyph_the_daemon_resolves_is_browsable() {
+        // kaomoji_relaxed, kaomoji_smirk and kaomoji_disapprove were resolvable
+        // but not listed — and the shipped rose-classic Look uses
+        // kaomoji_disapprove, so a preset depended on a glyph the picker could
+        // not show.
+        let src = qml("StudioPrompt.qml");
+        let listed: std::collections::BTreeSet<String> =
+            keys_in_property(&src, "glyphCatalog").into_iter().collect();
+        let missing: Vec<&str> = available_kaomoji_chars()
+            .iter()
+            .chain(available_symbol_chars())
+            .map(|(k, _)| *k)
+            .filter(|k| !listed.contains(*k))
+            .collect();
+        assert!(missing.is_empty(), "daemon resolves glyphs the Studio cannot show: {missing:?}");
+    }
 }
 
 #[cfg(test)]
