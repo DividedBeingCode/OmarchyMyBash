@@ -24,3 +24,5 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 unicode-width = "0.2"
+# PNG only — the `image` crate would pull a dozen decoders we never use.
+png = "0.17"

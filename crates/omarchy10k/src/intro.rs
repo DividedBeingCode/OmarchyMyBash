@@ -98,6 +98,40 @@ async fn fetch_palette(socket_path: &Path) -> Option<serde_json::Map<String, ser
     Some(palette)
 }
 
+/// Rows for the optional first-run mascot.
+///
+/// Opt-in by dropping a PNG at `$XDG_CONFIG_HOME/omarchy10k/mascot.png` (or
+/// pointing `[intro] mascot` at one). Empty unless the file exists AND the
+/// terminal reports truecolor — half-blocks rely on 24-bit fg/bg pairs, and on
+/// a 16-colour terminal they would render as noise.
+///
+/// We ship the renderer, not the art: sprite images are a copyright question,
+/// so the user supplies their own.
+fn mascot_rows() -> Vec<String> {
+    let truecolor = std::env::var("COLORTERM")
+        .map(|v| v.contains("truecolor") || v.contains("24bit"))
+        .unwrap_or(false);
+    if !truecolor {
+        return Vec::new();
+    }
+    let Some(path) = mascot_path() else {
+        return Vec::new();
+    };
+    // 32 columns keeps the sprite beside the framed preview rather than
+    // dwarfing it, and bounds the work regardless of the source image size.
+    crate::sprite::render(&path, 32, "  ").unwrap_or_default()
+}
+
+/// `$XDG_CONFIG_HOME/omarchy10k/mascot.png`, or `None` when absent.
+fn mascot_path() -> Option<PathBuf> {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .ok()?;
+    let p = base.join("omarchy10k").join("mascot.png");
+    p.is_file().then_some(p)
+}
+
 fn render_intro(
     left: &str,
     palette: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -105,11 +139,21 @@ fn render_intro(
 ) {
     let mut out = String::new();
 
+    // Optional mascot: a user-supplied PNG rendered as half-blocks beside the
+    // header. Opt-in and silent when absent — nothing here may make a first
+    // run noisier or slower than it already is.
+    let mascot = mascot_rows();
+
     // Header
     out.push_str(&format!(
         "\x1b[1m omarchy10k v{}\x1b[0m — reactive shell UI\n",
         env!("CARGO_PKG_VERSION")
     ));
+
+    for row in &mascot {
+        out.push_str(row);
+        out.push('\n');
+    }
 
     // Framed live preview (rounded frame, display width from ANSI-stripped text)
     let lines: Vec<String> = left.split('\n').map(|l| l.trim_end_matches('\r').to_string()).collect();

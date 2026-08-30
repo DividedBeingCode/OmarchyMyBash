@@ -9,6 +9,7 @@ mod plugins_cli;
 mod prompt;
 mod script;
 mod share;
+mod sprite;
 mod statusline;
 mod update;
 

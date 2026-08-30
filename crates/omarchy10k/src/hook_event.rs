@@ -58,6 +58,28 @@ fn is_executable(p: &Path) -> bool {
     }
 }
 
+/// Run a command, retrying briefly on ETXTBSY.
+///
+/// Exec'ing a file that was written moments ago fails with `ETXTBSY` ("Text
+/// file busy") while a writing handle is still being torn down. Both callers
+/// here exec files that may have just been installed — a hook drop-in, or the
+/// dispatcher itself — so both need the retry. `script_exec::run_script`
+/// carries the same guard for user scripts.
+fn run_retrying_etxtbsy(cmd: &Path, args: &[String]) -> std::io::Result<std::process::ExitStatus> {
+    let mut attempt = 0u32;
+    loop {
+        match Command::new(cmd).args(args).status() {
+            Err(err)
+                if err.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 5 =>
+            {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10 * u64::from(attempt)));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Run every executable hook in `<hook_root>/<event>.d/` with `args`.
 /// Returns the list of hook paths actually executed (callers/tests use it for
 /// assertions); failures are reported on stderr and skipped.
@@ -97,21 +119,7 @@ fn run_hook_dir(event: &str, args: &[String], hook_root: &Path) -> anyhow::Resul
 
     let mut executed = Vec::new();
     for hook in hooks {
-        // Freshly-written executables can transiently fail to exec with
-        // ETXTBSY (Text file busy) when a file watcher/indexer holds the
-        // new inode open for write. The error is transient by nature —
-        // retry briefly before reporting failure.
-        let mut attempt = 0;
-        let outcome = loop {
-            match Command::new(&hook).args(args).status() {
-                Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 3 => {
-                    attempt += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(10 * attempt));
-                }
-                other => break other,
-            }
-        };
-        match outcome {
+        match run_retrying_etxtbsy(&hook, args) {
             Ok(status) if status.success() => executed.push(hook),
             Ok(status) => {
                 eprintln!(
@@ -139,10 +147,9 @@ pub fn run(
     hook_root: &Path,
 ) -> anyhow::Result<()> {
     if let Some(dispatcher) = dispatcher {
-        let status = Command::new(dispatcher)
-            .arg(event)
-            .args(args)
-            .status()
+        let mut dispatcher_args = vec![event.to_string()];
+        dispatcher_args.extend_from_slice(args);
+        let status = run_retrying_etxtbsy(dispatcher, &dispatcher_args)
             .map_err(|err| anyhow::anyhow!("failed to run {}: {err}", dispatcher.display()))?;
         if !status.success() {
             anyhow::bail!("omarchy-hook {event} exited with {status}");
