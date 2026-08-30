@@ -571,6 +571,7 @@ pub struct TerminalConfig {
     pub title: TitleConfig,
     pub progress: ProgressConfig,
     pub semantic_prompts: SemanticPromptsConfig,
+    pub cursor_shape: CursorShapeConfig,
 }
 
 impl Default for TerminalConfig {
@@ -579,7 +580,76 @@ impl Default for TerminalConfig {
             title: TitleConfig::default(),
             progress: ProgressConfig::default(),
             semantic_prompts: SemanticPromptsConfig::default(),
+            cursor_shape: CursorShapeConfig::default(),
         }
+    }
+}
+
+/// Cursor shape per vi mode, via DECSCUSR (`CSI Ps SP q`).
+///
+/// DECSCUSR is ancient and near-universal -- ghostty, foot, kitty, wezterm,
+/// alacritty and xterm all honour it -- so this is not gated on a capability
+/// flag. A terminal that does not implement it ignores the sequence.
+///
+/// Off by default: it changes the cursor for the whole session, and a user
+/// who has already set a cursor style in their terminal config should not
+/// have it silently overridden by installing a prompt.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CursorShapeConfig {
+    pub enabled: bool,
+    /// DECSCUSR parameter for vi INSERT mode (and for non-vi shells).
+    /// 5 = blinking bar, 6 = steady bar.
+    pub insert: u8,
+    /// DECSCUSR parameter for vi NORMAL mode.
+    /// 1 = blinking block, 2 = steady block.
+    pub normal: u8,
+    /// DECSCUSR parameter for vi REPLACE mode.
+    /// 3 = blinking underline, 4 = steady underline.
+    pub replace: u8,
+}
+
+impl Default for CursorShapeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            // Steady shapes rather than blinking: a blinking cursor fights
+            // the prompt for attention, and Omarchy's own Ghostty config
+            // already asks for `cursor:steady`.
+            insert: 6,
+            normal: 2,
+            replace: 4,
+        }
+    }
+}
+
+impl CursorShapeConfig {
+    /// The DECSCUSR parameter for a keymap name as bash reports it in
+    /// `KEYMAP` (`vi`, `vi-insert`, `vi-command`, `vi-move`, `emacs`, …).
+    ///
+    /// Anything that is not recognisably a vi normal/replace keymap gets the
+    /// insert shape, which is also the right answer for emacs mode and for a
+    /// shell with no vi mode at all.
+    pub fn param_for_keymap(&self, keymap: &str) -> u8 {
+        match keymap.trim().to_lowercase().as_str() {
+            "vi" | "vi-command" | "vi-move" | "vicmd" => self.normal,
+            "vi-replace" | "vi_replace" => self.replace,
+            _ => self.insert,
+        }
+    }
+
+    /// The full DECSCUSR sequence, or `None` when disabled or the parameter
+    /// is out of range. Parameters above 6 are not defined by DECSCUSR, and
+    /// emitting one would be writing garbage at the terminal.
+    pub fn sequence_for_keymap(&self, keymap: &str) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
+        let p = self.param_for_keymap(keymap);
+        if p == 0 || p > 6 {
+            return None;
+        }
+        Some(format!("\x1b[{p} q"))
     }
 }
 
@@ -925,5 +995,77 @@ mod tests {
         assert_eq!(config.rice.bat_theme, "ansi");
         assert!(config.rice.blesh_faces);
         assert!(config.rice.delta);
+    }
+}
+
+#[cfg(test)]
+mod cursor_shape_tests {
+    use super::CursorShapeConfig;
+
+    fn on() -> CursorShapeConfig {
+        CursorShapeConfig { enabled: true, ..Default::default() }
+    }
+
+    #[test]
+    fn is_off_by_default() {
+        // Installing a prompt must not silently override a cursor style the
+        // user already set in their terminal config.
+        assert!(!CursorShapeConfig::default().enabled);
+        assert_eq!(CursorShapeConfig::default().sequence_for_keymap("vi"), None);
+    }
+
+    #[test]
+    fn maps_the_keymaps_bash_actually_reports() {
+        let c = on();
+        // bash and ble.sh between them use all of these spellings.
+        for k in ["vi", "vi-command", "vi-move", "vicmd"] {
+            assert_eq!(c.param_for_keymap(k), c.normal, "{k} is normal mode");
+        }
+        assert_eq!(c.param_for_keymap("vi-replace"), c.replace);
+        assert_eq!(c.param_for_keymap("vi-insert"), c.insert);
+    }
+
+    #[test]
+    fn anything_unrecognised_gets_the_insert_shape() {
+        let c = on();
+        // emacs mode, and a shell with no vi mode at all, both belong here.
+        for k in ["emacs", "", "   ", "something-else"] {
+            assert_eq!(c.param_for_keymap(k), c.insert, "{k:?}");
+        }
+    }
+
+    #[test]
+    fn keymap_matching_ignores_case_and_padding() {
+        let c = on();
+        assert_eq!(c.param_for_keymap("  VI-COMMAND "), c.normal);
+    }
+
+    #[test]
+    fn emits_a_well_formed_decscusr_sequence() {
+        let c = on();
+        assert_eq!(c.sequence_for_keymap("vi-command").unwrap(), "\x1b[2 q");
+        assert_eq!(c.sequence_for_keymap("vi-insert").unwrap(), "\x1b[6 q");
+        // The space before `q` is part of DECSCUSR, not a typo.
+        assert!(c.sequence_for_keymap("vi").unwrap().ends_with(" q"));
+    }
+
+    #[test]
+    fn out_of_range_parameters_emit_nothing() {
+        // DECSCUSR defines 0-6. Emitting anything else is writing garbage at
+        // the terminal, so a bad config value yields no sequence at all.
+        for bad in [0u8, 7, 99, 255] {
+            let c = CursorShapeConfig { enabled: true, normal: bad, ..Default::default() };
+            assert_eq!(c.sequence_for_keymap("vi-command"), None, "param {bad}");
+        }
+    }
+
+    #[test]
+    fn defaults_are_steady_not_blinking() {
+        // A blinking cursor fights the prompt for attention, and Omarchy's
+        // own Ghostty config already asks for cursor:steady.
+        let d = CursorShapeConfig::default();
+        assert_eq!(d.insert, 6, "steady bar");
+        assert_eq!(d.normal, 2, "steady block");
+        assert_eq!(d.replace, 4, "steady underline");
     }
 }

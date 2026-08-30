@@ -633,3 +633,28 @@ Reload can also be triggered via:
 | `[style.frame] gap_gradient` | string | `"off"` | `subtle` = accent fading into background; `full` = accent → complement (blue≥red accents → magenta, else cyan). Per-8-cell truecolor blocks; needs `gap_char` + frame |
 | `[segments.load] enabled` | bool | `false` | braille load-average sparkline ▁▂▃▄▅▆▇█ from a 16-slot per-render ring |
 | `[segments.load] width` | int | `16` | sparkline sample width |
+
+### `[terminal.cursor_shape]`
+
+Cursor shape per vi mode, via DECSCUSR (`CSI Ps SP q`). The sequence is
+prepended to the prompt, so it lands before the user types.
+
+| Key | Type | Default | Notes |
+|-----|------|---------|-------|
+| `enabled` | bool | `false` | Off by default: installing a prompt must not silently override a cursor style already set in the terminal's own config |
+| `insert` | int | `6` | vi INSERT, and every non-vi shell. 5 = blinking bar, 6 = steady bar |
+| `normal` | int | `2` | vi NORMAL. 1 = blinking block, 2 = steady block |
+| `replace` | int | `4` | vi REPLACE. 3 = blinking underline, 4 = steady underline |
+
+Defaults are the steady shapes: a blinking cursor competes with the prompt
+for attention, and Omarchy's own Ghostty config already asks for
+`cursor:steady`.
+
+Not gated on a terminal capability. DECSCUSR predates every terminal in the
+catalog and all of them honour it; one that does not simply ignores the
+sequence. Parameters outside 0-6 are undefined by DECSCUSR, so a bad value
+emits nothing rather than writing garbage at the terminal.
+
+The mode comes from bash's `KEYMAP` over the env channel. `vi`, `vi-command`,
+`vi-move` and `vicmd` map to `normal`; `vi-replace` to `replace`; everything
+else — including emacs mode and a shell with no vi mode at all — to `insert`.

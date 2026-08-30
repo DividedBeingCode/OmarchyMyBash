@@ -283,6 +283,24 @@ impl<'a> PromptRenderer<'a> {
             left
         };
 
+        // Cursor shape per vi mode (DECSCUSR). Prepended to the prompt rather
+        // than carried as a new protocol field: it is a zero-width control
+        // sequence that must land before the user types, which is exactly
+        // where the prompt already goes. Off by default.
+        //
+        // Not gated on a capability flag -- DECSCUSR predates all of these
+        // terminals and every one of them honours it; a terminal that does
+        // not simply ignores the sequence.
+        let left = match self
+            .config
+            .terminal
+            .cursor_shape
+            .sequence_for_keymap(&ctx.env_get("vi_mode").unwrap_or_default())
+        {
+            Some(seq) => format!("{seq}{left}"),
+            None => left,
+        };
+
         let transient = if self.config.prompt.transient {
             Some(format!(
                 "{prompt_start}{} {prompt_end}",
@@ -959,5 +977,70 @@ mod tests {
         let left = renderer.render_statusline(&payload);
         assert!(left.contains("ctx 91%"), "used_percentage must drive the percent: {left}");
         assert!(left.contains(&palette.red.fg_escape()), "91% must render red");
+    }
+}
+
+#[cfg(test)]
+mod cursor_shape_render_tests {
+    use super::*;
+
+    fn env_with(k: &str, v: &str) -> std::collections::HashMap<String, String> {
+        let mut m = std::collections::HashMap::new();
+        m.insert(k.to_string(), v.to_string());
+        m
+    }
+
+    fn render(config: &Config, env: Option<&std::collections::HashMap<String, String>>) -> String {
+        let palette = ThemePalette::default();
+        let renderer = PromptRenderer::new(config, &palette);
+        let git = crate::git::GitStatus { is_repo: false, branch: "main".into(), ..Default::default() };
+        renderer
+            .render_with_ssh("/home/u/p", 0, 0, 120, 0, &git, false, Some(false), env, Vec::new())
+            .left
+    }
+
+    #[test]
+    fn nothing_is_emitted_while_disabled() {
+        // The default. A prompt must not change the user's cursor style
+        // just by being installed.
+        let c = Config::default();
+        let out = render(&c, Some(&env_with("vi_mode", "vi-command")));
+        assert!(!out.contains(" q"), "unexpected DECSCUSR in: {out:?}");
+    }
+
+    #[test]
+    fn normal_mode_gets_the_block_cursor() {
+        let mut c = Config::default();
+        c.terminal.cursor_shape.enabled = true;
+        let out = render(&c, Some(&env_with("vi_mode", "vi-command")));
+        assert!(out.starts_with("\x1b[2 q"), "expected steady block, got {out:?}");
+    }
+
+    #[test]
+    fn insert_mode_gets_the_bar_cursor() {
+        let mut c = Config::default();
+        c.terminal.cursor_shape.enabled = true;
+        let out = render(&c, Some(&env_with("vi_mode", "vi-insert")));
+        assert!(out.starts_with("\x1b[6 q"), "expected steady bar, got {out:?}");
+    }
+
+    #[test]
+    fn a_shell_with_no_vi_mode_still_gets_the_insert_shape() {
+        // No vi_mode key at all -- emacs mode, or vanilla bash outside a
+        // bind callback. The bar is the right default, not "no sequence".
+        let mut c = Config::default();
+        c.terminal.cursor_shape.enabled = true;
+        let out = render(&c, None);
+        assert!(out.starts_with("\x1b[6 q"), "got {out:?}");
+    }
+
+    #[test]
+    fn the_sequence_precedes_the_prompt_itself() {
+        // It must land before the user types, which means before everything.
+        let mut c = Config::default();
+        c.terminal.cursor_shape.enabled = true;
+        let out = render(&c, Some(&env_with("vi_mode", "vi-command")));
+        let seq_at = out.find("\x1b[2 q").expect("sequence present");
+        assert_eq!(seq_at, 0, "DECSCUSR must be first in: {out:?}");
     }
 }
