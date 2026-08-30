@@ -53,6 +53,16 @@ for f in *.qml o10k/*.qml; do
     fi
 done
 
+# Glyph escapes: QML `\uXXXX` takes exactly FOUR hex digits, so a Nerd Font
+# codepoint above U+FFFF written as `\uf011b` silently becomes U+F011 plus a
+# stray "b" — the wrong glyph and a trailing character, with no error anywhere.
+# Above-BMP codepoints must use the ES6 brace form `\u{f011b}`.
+if grep -rnoE '\\u[0-9a-fA-F]{5,6}' *.qml o10k/*.qml 2>/dev/null | grep -v 'u{' | grep -q .; then
+    echo "BARE 5-DIGIT \\u ESCAPE (truncates to 4 digits + a stray char):"
+    grep -rnoE '\\u[0-9a-fA-F]{5,6}' *.qml o10k/*.qml 2>/dev/null | grep -v 'u{'
+    FAIL=1
+fi
+
 total=$(for f in *.qml o10k/*.qml; do
             [[ -e "$f" ]] && "$LINT" -I "$SHIM" "$f" 2>&1
         done | grep -c "^Warning:")

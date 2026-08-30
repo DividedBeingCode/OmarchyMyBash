@@ -86,46 +86,113 @@ Column {
             behaviorBucket.panel.setConfigValue("segments.character.transient", key)
         }
         glyphs: [
-            { key: "cat", glyph: "\uf011b", label: "Cat" },
-            { key: "dog", glyph: "\uf0a43", label: "Dog" },
-            { key: "owl", glyph: "\uf03d2", label: "Owl" },
-            { key: "duck", glyph: "\uf01e5", label: "Duck" },
-            { key: "penguin", glyph: "\uf0ec0", label: "Penguin" },
-            { key: "rabbit", glyph: "\uf0907", label: "Rabbit" },
-            { key: "turtle", glyph: "\uf0cd7", label: "Turtle" },
-            { key: "panda", glyph: "\uf03da", label: "Panda" },
-            { key: "koala", glyph: "\uf173f", label: "Koala" },
-            { key: "unicorn", glyph: "\uf15c2", label: "Unicorn" },
-            { key: "cow", glyph: "\uf019a", label: "Cow" },
-            { key: "horse", glyph: "\uf15bf", label: "Horse" },
-            { key: "pig", glyph: "\uf0401", label: "Pig" },
-            { key: "sheep", glyph: "\uf0cc6", label: "Sheep" },
-            { key: "bee", glyph: "\uf0fa1", label: "Bee" },
-            { key: "butterfly", glyph: "\uf1589", label: "Butterfly" },
-            { key: "ladybug", glyph: "\uf082d", label: "Ladybug" },
-            { key: "snail", glyph: "\uf1677", label: "Snail" },
-            { key: "spider", glyph: "\uf11ea", label: "Spider" },
-            { key: "snake", glyph: "\uf150e", label: "Snake" },
-            { key: "bird", glyph: "\uf15c6", label: "Bird" },
-            { key: "fish", glyph: "\uf023a", label: "Fish" },
-            { key: "dolphin", glyph: "\uf18b4", label: "Dolphin" },
-            { key: "shark", glyph: "\uf18ba", label: "Shark" },
-            { key: "jellyfish", glyph: "\uf0f01", label: "Jellyfish" },
-            { key: "elephant", glyph: "\uf07c6", label: "Elephant" },
-            { key: "kangaroo", glyph: "\uf1558", label: "Kangaroo" },
-            { key: "donkey", glyph: "\uf07c2", label: "Donkey" },
-            { key: "rodent", glyph: "\uf1327", label: "Rodent" },
-            { key: "bat", glyph: "\uf0b5f", label: "Bat" },
-            { key: "paw", glyph: "\uf03e9", label: "Paw" },
-            { key: "bone", glyph: "\uf00b9", label: "Bone" },
-            { key: "egg", glyph: "\uf0aaf", label: "Egg" },
-            { key: "feather", glyph: "\uf06d3", label: "Feather" },
-            { key: "bug", glyph: "\uf00e4", label: "Bug" },
+            { key: "cat", glyph: "\u{f011b}", label: "Cat" },
+            { key: "dog", glyph: "\u{f0a43}", label: "Dog" },
+            { key: "owl", glyph: "\u{f03d2}", label: "Owl" },
+            { key: "duck", glyph: "\u{f01e5}", label: "Duck" },
+            { key: "penguin", glyph: "\u{f0ec0}", label: "Penguin" },
+            { key: "rabbit", glyph: "\u{f0907}", label: "Rabbit" },
+            { key: "turtle", glyph: "\u{f0cd7}", label: "Turtle" },
+            { key: "panda", glyph: "\u{f03da}", label: "Panda" },
+            { key: "koala", glyph: "\u{f173f}", label: "Koala" },
+            { key: "unicorn", glyph: "\u{f15c2}", label: "Unicorn" },
+            { key: "cow", glyph: "\u{f019a}", label: "Cow" },
+            { key: "horse", glyph: "\u{f15bf}", label: "Horse" },
+            { key: "pig", glyph: "\u{f0401}", label: "Pig" },
+            { key: "sheep", glyph: "\u{f0cc6}", label: "Sheep" },
+            { key: "bee", glyph: "\u{f0fa1}", label: "Bee" },
+            { key: "butterfly", glyph: "\u{f1589}", label: "Butterfly" },
+            { key: "ladybug", glyph: "\u{f082d}", label: "Ladybug" },
+            { key: "snail", glyph: "\u{f1677}", label: "Snail" },
+            { key: "spider", glyph: "\u{f11ea}", label: "Spider" },
+            { key: "snake", glyph: "\u{f150e}", label: "Snake" },
+            { key: "bird", glyph: "\u{f15c6}", label: "Bird" },
+            { key: "fish", glyph: "\u{f023a}", label: "Fish" },
+            { key: "dolphin", glyph: "\u{f18b4}", label: "Dolphin" },
+            { key: "shark", glyph: "\u{f18ba}", label: "Shark" },
+            { key: "jellyfish", glyph: "\u{f0f01}", label: "Jellyfish" },
+            { key: "elephant", glyph: "\u{f07c6}", label: "Elephant" },
+            { key: "kangaroo", glyph: "\u{f1558}", label: "Kangaroo" },
+            { key: "donkey", glyph: "\u{f07c2}", label: "Donkey" },
+            { key: "rodent", glyph: "\u{f1327}", label: "Rodent" },
+            { key: "bat", glyph: "\u{f0b5f}", label: "Bat" },
+            { key: "paw", glyph: "\u{f03e9}", label: "Paw" },
+            { key: "bone", glyph: "\u{f00b9}", label: "Bone" },
+            { key: "egg", glyph: "\u{f0aaf}", label: "Egg" },
+            { key: "feather", glyph: "\u{f06d3}", label: "Feather" },
+            { key: "bug", glyph: "\u{f00e4}", label: "Bug" },
             { key: "dragon", glyph: "\ueef8", label: "Dragon" },
             { key: "frog", glyph: "\uedf8", label: "Frog" },
             { key: "squirrel", glyph: "\ueb58", label: "Squirrel" }
         ]
     }
+
+    // Japan / geek adjacent. Nerd Fonts has no anime characters — a scan of
+    // all 10,996 glyph names finds none — so this is the closest themed set
+    // that actually renders. Every codepoint was verified against the
+    // installed font before inclusion; see docs/wiki/ricing-intel-2026.md.
+    PanelKit.GlyphRow {
+        label: "Japan / Geek"
+        configKey: "segments.character.success"
+        panel: behaviorBucket.panel
+        currentValue: behaviorBucket.panel.cfgCharSuccess
+        customHandler: function(key) {
+            behaviorBucket.panel.setConfigValue("segments.character.success", key)
+            behaviorBucket.panel.setConfigValue("segments.character.error", key)
+            behaviorBucket.panel.setConfigValue("segments.character.transient", key)
+        }
+        glyphs: [
+            { key: "ninja", glyph: "\u{f0774}", label: "Ninja" },
+            { key: "torii", glyph: "\ueee6", label: "Torii" },
+            { key: "sushi", glyph: "\ue21a", label: "Sushi" },
+            { key: "noodles", glyph: "\u{f117e}", label: "Noodles" },
+            { key: "rice", glyph: "\u{f07ea}", label: "Rice" },
+            { key: "tea", glyph: "\u{f0d9e}", label: "Tea" },
+            { key: "fan", glyph: "\u{f0210}", label: "Fan" },
+            { key: "mask", glyph: "\u{f1023}", label: "Mask" },
+            { key: "drama", glyph: "\u{f0d02}", label: "Drama" },
+            { key: "katana", glyph: "\u{f18be}", label: "Katana" },
+            { key: "alien", glyph: "\u{f089a}", label: "Alien" },
+            { key: "robot", glyph: "\u{f1719}", label: "Robot" },
+            { key: "ghost", glyph: "\u{f02a0}", label: "Ghost" },
+            { key: "sakura", glyph: "\u{f09f1}", label: "Sakura" },
+            { key: "dragon", glyph: "\ueef8", label: "Dragon" },
+            { key: "crown", glyph: "\uedeb", label: "Crown" },
+            { key: "sword", glyph: "\u{f04e5}", label: "Sword" },
+            { key: "emoticon", glyph: "\u{f0c68}", label: "Emoticon" },
+            { key: "cool", glyph: "\u{f0c6b}", label: "Cool" },
+            { key: "wink", glyph: "\u{f0c78}", label: "Wink" },
+            { key: "heart", glyph: "\u{f02d1}", label: "Heart" },
+            { key: "star", glyph: "\u{f04ce}", label: "Star" }
+        ]
+    }
+
+    // Kaomoji. Pure text, so these need no font support at all and survive
+    // SSH and 16-colour terminals. GlyphCatalog::prompt_char already passes
+    // an unrecognised key through as a literal string, so no daemon-side
+    // catalog entry is required.
+    PanelKit.GlyphRow {
+        label: "Kaomoji"
+        configKey: "segments.character.success"
+        panel: behaviorBucket.panel
+        currentValue: behaviorBucket.panel.cfgCharSuccess
+        customHandler: function(key) {
+            behaviorBucket.panel.setConfigValue("segments.character.success", key)
+            behaviorBucket.panel.setConfigValue("segments.character.error", key)
+            behaviorBucket.panel.setConfigValue("segments.character.transient", key)
+        }
+        glyphs: [
+            { key: "(\u25d5\u203f\u25d5)", glyph: "(\u25d5\u203f\u25d5)", label: "Happy" },
+            { key: "(\u00b4\u2022\u1d17\u2022`)", glyph: "(\u00b4\u2022\u1d17\u2022`)", label: "Soft" },
+            { key: "( \u02d8\u03c9\u02d8 )", glyph: "( \u02d8\u03c9\u02d8 )", label: "Sleepy" },
+            { key: "\u30fd(\u2022\u203f\u2022)\u30ce", glyph: "\u30fd(\u2022\u203f\u2022)\u30ce", label: "Cheer" },
+            { key: "(\u256f\u00b0\u25a1\u00b0)\u256f", glyph: "(\u256f\u00b0\u25a1\u00b0)\u256f", label: "Flip" },
+            { key: "\u00af\\_(\u30c4)_/\u00af", glyph: "\u00af\\_(\u30c4)_/\u00af", label: "Shrug" },
+            { key: "(\u2022\u203f\u2022)", glyph: "(\u2022\u203f\u2022)", label: "Smile" },
+            { key: "\u0295\u2022\u1d25\u2022\u0294", glyph: "\u0295\u2022\u1d25\u2022\u0294", label: "Bear" }
+        ]
+    }
+
 
     PanelKit.GlyphRow {
         label: "Kaomoji"
