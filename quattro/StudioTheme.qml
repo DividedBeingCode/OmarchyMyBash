@@ -20,6 +20,8 @@ Flickable {
     property var service: null
     /// Injected by Studio: the pinned preview pane this tab drives.
     property var previewPane: null
+    /// Second-level sub-tab: 0 Themes, 1 Palettes, 2 Gradient.
+    property int subTab: 0
 
     contentWidth: width
     contentHeight: body.implicitHeight
@@ -188,199 +190,223 @@ Flickable {
             }
         }
 
-        // ── Omarchy themes (desktop-wide) ──────────────────────────────────
-        Text {
-            text: "OMARCHY THEMES"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
-
-        Text {
+        SubRail {
             width: parent.width
-            wrapMode: Text.WordWrap
-            text: "Applies desktop-wide — every themed app follows, not just the terminal."
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
+            tabs: ["Themes", "Palettes", "Gradient"]
+            current: themeTab.subTab
+            onSwitched: (i) => themeTab.subTab = i
         }
 
-        Flow {
+        Column {
             width: parent.width
-            spacing: Style.space(8)
+            spacing: Style.space(12)
+            visible: themeTab.subTab === 0
 
-            Repeater {
-                model: themeTab.themes
-
-                // A theme chip now carries the colors it will apply. The list
-                // used to be 22 identical grey words, so choosing meant
-                // applying one desktop-wide just to find out what it was.
-                delegate: Chip {
-                    id: themeChip
-                    required property string modelData
-
-                    readonly property var pal: themeTab.palettes[
-                        String(themeChip.modelData).toLowerCase().replace(/ /g, "-")]
-
-                    label: themeChip.modelData
-                    active: themeTab.current === themeChip.modelData
-                    swatches: themeChip.pal && themeChip.pal.colors
-                        ? themeChip.pal.colors : null
-                    onClicked: themeTab.applyTheme(themeChip.modelData)
-                }
-            }
-        }
-
-        PanelSeparator { foreground: Color.foreground }
-
-        // ── Terminal-only palette override ─────────────────────────────────
-        Text {
-            text: "PIN TERMINAL COLORS"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
-
-        Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "Overrides the prompt palette only, leaving the desktop theme alone. "
-                  + "This is what unbinds the two — use Sync above to rebind."
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-        }
-
-        // ── Gradient ──────────────────────────────────────────────────────
-        //
-        // Surfaced because it was invisible and wrong. The ramp's far end used
-        // to be an ANSI slot picked by comparing two channel bytes, so
-        // Synthwave — "purple all the way down" — swept purple to teal, and
-        // nothing in the UI ever drew the ramp to show it.
-        Text {
-            text: "GRADIENT"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
-
-        Row {
-            width: parent.width
-            spacing: Style.space(8)
-
-            Repeater {
-                model: [
-                    { key: "auto", label: "auto", hint: "An analogous sweep off your accent" },
-                    { key: "full", label: "full", hint: "A wider sweep, same hue family" },
-                    { key: "off",  label: "off",  hint: "Flat accent, no gradient anywhere" }
-                ]
-
-                delegate: Chip {
-                    id: gradChip
-                    required property var modelData
-
-                    anchors.verticalCenter: parent.verticalCenter
-                    label: gradChip.modelData.label
-                    // Unset means "auto" — the daemon's own default.
-                    active: String(themeTab.cfg["theme.gradient"] || "auto")
-                            === gradChip.modelData.key
-                    onClicked: {
-                        if (themeTab.service && themeTab.service.setGradient)
-                            themeTab.service.setGradient(gradChip.modelData.key)
-                    }
-                }
-            }
-
-            Ramp {
-                anchors.verticalCenter: parent.verticalCenter
-                width: Style.space(160)
-                barHeight: Style.space(8)
-                stops: themeTab.currentRamp
-            }
-        }
-
-        Row {
-            width: parent.width
-            spacing: Style.space(8)
-
-            TextField {
-                id: palSearch
-                width: parent.width - Style.space(300)
-                placeholderText: "Search palettes — try \"neon\", \"cyber\", \"gruvbox\"…"
-                text: themeTab.paletteQuery
-                onTextChanged: themeTab.paletteQuery = text
-            }
-
-            Chip {
-                anchors.verticalCenter: parent.verticalCenter
-                label: "all"
-                active: themeTab.paletteSource.length === 0
-                onClicked: themeTab.paletteSource = ""
-            }
-
-            Chip {
-                anchors.verticalCenter: parent.verticalCenter
-                label: "curated"
-                active: themeTab.paletteSource === "curated"
-                onClicked: themeTab.paletteSource =
-                    themeTab.paletteSource === "curated" ? "" : "curated"
-            }
-
-            Chip {
-                anchors.verticalCenter: parent.verticalCenter
-                label: "from themes"
-                active: themeTab.paletteSource === "derived"
-                onClicked: themeTab.paletteSource =
-                    themeTab.paletteSource === "derived" ? "" : "derived"
+            // ── Omarchy themes (desktop-wide) ────────────────────────────
+            Text {
+                text: "OMARCHY THEMES"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
             }
 
             Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: themeTab.visiblePalettes.length + " / " + themeTab.paletteList.length
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Applies desktop-wide — every themed app follows, not just the terminal."
                 color: Color.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
             }
+
+            Flow {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Repeater {
+                    model: themeTab.themes
+
+                    // A theme chip now carries the colors it will apply. The
+                    // list used to be 22 identical grey words, so choosing
+                    // meant applying one desktop-wide just to find out what
+                    // it was.
+                    delegate: Chip {
+                        id: themeChip
+                        required property string modelData
+
+                        readonly property var pal: themeTab.palettes[
+                            String(themeChip.modelData).toLowerCase().replace(/ /g, "-")]
+
+                        label: themeChip.modelData
+                        active: themeTab.current === themeChip.modelData
+                        swatches: themeChip.pal && themeChip.pal.colors
+                            ? themeChip.pal.colors : null
+                        onClicked: themeTab.applyTheme(themeChip.modelData)
+                    }
+                }
+            }
         }
 
-        Flow {
+        Column {
             width: parent.width
-            spacing: Style.space(8)
+            spacing: Style.space(12)
+            visible: themeTab.subTab === 1
 
-            Repeater {
-                model: themeTab.visiblePalettes
+            // ── Terminal-only palette override ───────────────────────────
+            Text {
+                text: "PIN TERMINAL COLORS"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+            }
 
-                delegate: Chip {
-                    id: palChip
-                    required property var modelData
+            Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Overrides the prompt palette only, leaving the desktop theme alone. "
+                      + "This is what unbinds the two — use Sync above to rebind."
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+            }
 
-                    readonly property bool isActive:
-                        String(themeTab.cfg["theme.custom.accent"] || "").toLowerCase()
-                        === String(palChip.modelData.accent || "").toLowerCase()
-                        && String(palChip.modelData.accent || "").length > 0
+            Row {
+                width: parent.width
+                spacing: Style.space(8)
 
-                    label: palChip.modelData.label
-                    active: palChip.isActive
-                    swatches: palChip.modelData.colors
-                    ramp: palChip.modelData.ramp
+                TextField {
+                    id: palSearch
+                    width: parent.width - Style.space(300)
+                    placeholderText: "Search palettes — try \"neon\", \"cyber\", \"gruvbox\"…"
+                    text: themeTab.paletteQuery
+                    onTextChanged: themeTab.paletteQuery = text
+                }
 
-                    onClicked: {
-                        if (themeTab.service && themeTab.service.applyPalette)
-                            themeTab.service.applyPalette(palChip.modelData.key)
-                    }
+                Chip {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: "all"
+                    active: themeTab.paletteSource.length === 0
+                    onClicked: themeTab.paletteSource = ""
+                }
 
-                    // Hovering previews the palette against your CURRENT
-                    // prompt without applying it -- the thing this picker
-                    // could never do.
-                    HoverHandler {
-                        onHoveredChanged: {
-                            if (hovered) themeTab.previewPalette(palChip.modelData, false)
-                            else if (themeTab.service) themeTab.service.cancelPreview()
+                Chip {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: "curated"
+                    active: themeTab.paletteSource === "curated"
+                    onClicked: themeTab.paletteSource =
+                        themeTab.paletteSource === "curated" ? "" : "curated"
+                }
+
+                Chip {
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: "from themes"
+                    active: themeTab.paletteSource === "derived"
+                    onClicked: themeTab.paletteSource =
+                        themeTab.paletteSource === "derived" ? "" : "derived"
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: themeTab.visiblePalettes.length + " / " + themeTab.paletteList.length
+                    color: Color.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                }
+            }
+
+            Flow {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Repeater {
+                    model: themeTab.visiblePalettes
+
+                    delegate: Chip {
+                        id: palChip
+                        required property var modelData
+
+                        readonly property bool isActive:
+                            String(themeTab.cfg["theme.custom.accent"] || "").toLowerCase()
+                            === String(palChip.modelData.accent || "").toLowerCase()
+                            && String(palChip.modelData.accent || "").length > 0
+
+                        label: palChip.modelData.label
+                        active: palChip.isActive
+                        swatches: palChip.modelData.colors
+                        ramp: palChip.modelData.ramp
+
+                        onClicked: {
+                            if (themeTab.service && themeTab.service.applyPalette)
+                                themeTab.service.applyPalette(palChip.modelData.key)
+                        }
+
+                        // Hovering previews the palette against your CURRENT
+                        // prompt without applying it -- the thing this picker
+                        // could never do.
+                        HoverHandler {
+                            onHoveredChanged: {
+                                if (hovered) themeTab.previewPalette(palChip.modelData, false)
+                                else if (themeTab.service) themeTab.service.cancelPreview()
+                            }
                         }
                     }
+                }
+            }
+        }
+
+        Column {
+            width: parent.width
+            spacing: Style.space(12)
+            visible: themeTab.subTab === 2
+
+            // ── Gradient ──────────────────────────────────────────────────
+            //
+            // Surfaced because it was invisible and wrong. The ramp's far end
+            // used to be an ANSI slot picked by comparing two channel bytes,
+            // so Synthwave — "purple all the way down" — swept purple to
+            // teal, and nothing in the UI ever drew the ramp to show it.
+            Text {
+                text: "GRADIENT"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+            }
+
+            Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Repeater {
+                    model: [
+                        { key: "auto", label: "auto", hint: "An analogous sweep off your accent" },
+                        { key: "full", label: "full", hint: "A wider sweep, same hue family" },
+                        { key: "off",  label: "off",  hint: "Flat accent, no gradient anywhere" }
+                    ]
+
+                    delegate: Chip {
+                        id: gradChip
+                        required property var modelData
+
+                        anchors.verticalCenter: parent.verticalCenter
+                        label: gradChip.modelData.label
+                        // Unset means "auto" — the daemon's own default.
+                        active: String(themeTab.cfg["theme.gradient"] || "auto")
+                                === gradChip.modelData.key
+                        onClicked: {
+                            if (themeTab.service && themeTab.service.setGradient)
+                                themeTab.service.setGradient(gradChip.modelData.key)
+                        }
+                    }
+                }
+
+                Ramp {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Style.space(160)
+                    barHeight: Style.space(8)
+                    stops: themeTab.currentRamp
                 }
             }
         }

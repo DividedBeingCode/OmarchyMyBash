@@ -18,6 +18,8 @@ Flickable {
     property var service: null
     /// Injected by Studio: the pinned preview pane this tab drives.
     property var previewPane: null
+    /// Second-level sub-tab: 0 Style, 1 Glyphs, 2 Segments.
+    property int subTab: 0
 
     contentWidth: width
     contentHeight: body.implicitHeight
@@ -195,214 +197,236 @@ Flickable {
         width: promptTab.width
         spacing: Style.space(14)
 
-        // ── Style preset ───────────────────────────────────────────────────
-        Text {
-            text: "STYLE PRESET"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
+        SubRail {
+            width: parent.width
+            tabs: ["Style", "Glyphs", "Segments"]
+            current: promptTab.subTab
+            onSwitched: (i) => promptTab.subTab = i
         }
 
-        Flow {
+        Column {
             width: parent.width
-            spacing: Style.space(8)
+            spacing: Style.space(14)
+            visible: promptTab.subTab === 0
 
-            Repeater {
-                model: promptTab.presets
-                delegate: Rectangle {
-                    id: presetChip
-                    required property string modelData
-                    readonly property bool active:
-                        promptTab._get("style.preset", "omarchy") === presetChip.modelData
-                    width: presetText.implicitWidth + Style.space(20)
-                    height: presetText.implicitHeight + Style.space(12)
-                    radius: Fx.radius(Style.cornerRadius) / 2
-                    color: presetChip.active ? Color.accent
-                        : (presetArea.containsMouse ? Style.hoverFill : Style.normalFill)
+            // ── Style preset ───────────────────────────────────────────────
+            Text {
+                text: "STYLE PRESET"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+            }
 
-                    Text {
-                        id: presetText
-                        anchors.centerIn: parent
-                        text: presetChip.modelData
-                        color: presetChip.active ? Color.background : Color.foreground
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                    }
+            Flow {
+                width: parent.width
+                spacing: Style.space(8)
 
-                    MouseArea {
-                        id: presetArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: promptTab._set("style.preset", presetChip.modelData)
+                Repeater {
+                    model: promptTab.presets
+                    delegate: Rectangle {
+                        id: presetChip
+                        required property string modelData
+                        readonly property bool active:
+                            promptTab._get("style.preset", "omarchy") === presetChip.modelData
+                        width: presetText.implicitWidth + Style.space(20)
+                        height: presetText.implicitHeight + Style.space(12)
+                        radius: Fx.radius(Style.cornerRadius) / 2
+                        color: presetChip.active ? Color.accent
+                            : (presetArea.containsMouse ? Style.hoverFill : Style.normalFill)
+
+                        Text {
+                            id: presetText
+                            anchors.centerIn: parent
+                            text: presetChip.modelData
+                            color: presetChip.active ? Color.background : Color.foreground
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.bodySmall
+                        }
+
+                        MouseArea {
+                            id: presetArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: promptTab._set("style.preset", presetChip.modelData)
+                        }
                     }
                 }
             }
-        }
 
-        // ── Separators ─────────────────────────────────────────────────────
-        Text {
-            text: "SEPARATOR"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
+            // ── Separators ─────────────────────────────────────────────────
+            Text {
+                text: "SEPARATOR"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+            }
 
-        Flow {
-            width: parent.width
-            spacing: Style.space(8)
+            Flow {
+                width: parent.width
+                spacing: Style.space(8)
 
-            Repeater {
-                model: promptTab.separators
-                delegate: Rectangle {
-                    id: sepChip
-                    required property var modelData
-                    readonly property bool active:
-                        promptTab._get("style.separators.shape", "") === sepChip.modelData.key
-                    width: Style.space(52)
-                    height: Style.space(34)
-                    radius: Fx.radius(Style.cornerRadius) / 2
-                    color: sepChip.active ? Color.accent
-                        : (sepArea.containsMouse ? Style.hoverFill : Style.normalFill)
+                Repeater {
+                    model: promptTab.separators
+                    delegate: Rectangle {
+                        id: sepChip
+                        required property var modelData
+                        readonly property bool active:
+                            promptTab._get("style.separators.shape", "") === sepChip.modelData.key
+                        width: Style.space(52)
+                        height: Style.space(34)
+                        radius: Fx.radius(Style.cornerRadius) / 2
+                        color: sepChip.active ? Color.accent
+                            : (sepArea.containsMouse ? Style.hoverFill : Style.normalFill)
 
-                    Text {
-                        anchors.centerIn: parent
-                        text: sepChip.modelData.glyph
-                        color: sepChip.active ? Color.background : Color.foreground
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.body
+                        Text {
+                            anchors.centerIn: parent
+                            text: sepChip.modelData.glyph
+                            color: sepChip.active ? Color.background : Color.foreground
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.body
+                        }
+
+                        MouseArea {
+                            id: sepArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                promptTab._set("style.separators.shape", sepChip.modelData.key)
+                                promptTab._set("style.separators.left", sepChip.modelData.key)
+                                promptTab._set("style.separators.right", sepChip.modelData.key)
+                            }
+                        }
                     }
+                }
+            }
 
-                    MouseArea {
-                        id: sepArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            promptTab._set("style.separators.shape", sepChip.modelData.key)
-                            promptTab._set("style.separators.left", sepChip.modelData.key)
-                            promptTab._set("style.separators.right", sepChip.modelData.key)
+            // ── Prompt character ──────────────────────────────────────────
+            Text {
+                text: "PROMPT CHARACTER"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+            }
+
+            Flow {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Repeater {
+                    model: promptTab.promptChars
+                    delegate: Rectangle {
+                        id: charChip
+                        required property var modelData
+                        readonly property bool active:
+                            promptTab._get("segments.character.success", "chevron")
+                            === charChip.modelData.key
+                        width: Style.space(42)
+                        height: Style.space(34)
+                        radius: Fx.radius(Style.cornerRadius) / 2
+                        color: charChip.active ? Color.accent
+                            : (charArea.containsMouse ? Style.hoverFill : Style.normalFill)
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: charChip.modelData.glyph
+                            color: charChip.active ? Color.background : Color.foreground
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.body
+                        }
+
+                        MouseArea {
+                            id: charArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                // The three character roles move together
+                                // here; per-role editing lives in the Looks
+                                // Studio.
+                                promptTab._set("segments.character.success", charChip.modelData.key)
+                                promptTab._set("segments.character.error", charChip.modelData.key)
+                                promptTab._set("segments.character.transient", charChip.modelData.key)
+                            }
                         }
                     }
                 }
             }
         }
 
-        // ── Prompt character ───────────────────────────────────────────────
-        Text {
-            text: "PROMPT CHARACTER"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
-
-        Flow {
+        Column {
             width: parent.width
-            spacing: Style.space(8)
+            spacing: Style.space(14)
+            visible: promptTab.subTab === 1
 
-            Repeater {
-                model: promptTab.promptChars
-                delegate: Rectangle {
-                    id: charChip
-                    required property var modelData
-                    readonly property bool active:
-                        promptTab._get("segments.character.success", "chevron")
-                        === charChip.modelData.key
-                    width: Style.space(42)
-                    height: Style.space(34)
-                    radius: Fx.radius(Style.cornerRadius) / 2
-                    color: charChip.active ? Color.accent
-                        : (charArea.containsMouse ? Style.hoverFill : Style.normalFill)
+            // ── Glyph browser ─────────────────────────────────────────────
+            Text {
+                text: "ALL GLYPHS"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+            }
 
-                    Text {
-                        anchors.centerIn: parent
-                        text: charChip.modelData.glyph
-                        color: charChip.active ? Color.background : Color.foreground
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.body
-                    }
-
-                    MouseArea {
-                        id: charArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            // The three character roles move together here;
-                            // per-role editing lives in the Looks Studio.
-                            promptTab._set("segments.character.success", charChip.modelData.key)
-                            promptTab._set("segments.character.error", charChip.modelData.key)
-                            promptTab._set("segments.character.transient", charChip.modelData.key)
-                        }
-                    }
+            GlyphBrowser {
+                width: parent.width
+                catalog: promptTab.glyphCatalog
+                selected: promptTab._get("segments.character.success", "")
+                // Preview in the terminal's font, not the panel's: a glyph
+                // that is tofu in the terminal must look like tofu here.
+                previewFont: (promptTab.service && promptTab.service.terminalFont)
+                    ? promptTab.service.terminalFont : Style.font.family
+                onPicked: function (key) {
+                    promptTab._set("segments.character.success", key)
+                    promptTab._set("segments.character.error", key)
+                    promptTab._set("segments.character.transient", key)
                 }
             }
         }
 
-        PanelSeparator { foreground: Color.foreground }
-
-        // ── Glyph browser ──────────────────────────────────────────────────
-        Text {
-            text: "ALL GLYPHS"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
-
-        GlyphBrowser {
+        Column {
             width: parent.width
-            catalog: promptTab.glyphCatalog
-            selected: promptTab._get("segments.character.success", "")
-            // Preview in the terminal's font, not the panel's: a glyph that
-            // is tofu in the terminal must look like tofu here.
-            previewFont: (promptTab.service && promptTab.service.terminalFont)
-                ? promptTab.service.terminalFont : Style.font.family
-            onPicked: function (key) {
-                promptTab._set("segments.character.success", key)
-                promptTab._set("segments.character.error", key)
-                promptTab._set("segments.character.transient", key)
+            spacing: Style.space(14)
+            visible: promptTab.subTab === 2
+
+            // ── Behavior toggles ──────────────────────────────────────────
+            Text {
+                text: "BEHAVIOR"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
             }
-        }
 
-        PanelSeparator { foreground: Color.foreground }
+            Repeater {
+                model: [
+                    { key: "prompt.newline",      label: "Two-line prompt" },
+                    { key: "prompt.transient",    label: "Transient prompt" },
+                    { key: "prompt.blank_line",   label: "Blank line before prompt" },
+                    { key: "prompt.right_prompt", label: "Right prompt rail" },
+                    { key: "git.enabled",         label: "Git segment" },
+                    { key: "style.frame.enabled", label: "Frame lines" },
+                    { key: "terminal.title.enabled", label: "Set terminal title" }
+                ]
 
-        // ── Behavior toggles ───────────────────────────────────────────────
-        Text {
-            text: "BEHAVIOR"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
+                delegate: SettingRow {
+                    id: row
+                    required property var modelData
+                    width: body.width
+                    label: row.modelData.label
+                    value: promptTab._get(row.modelData.key, undefined)
+                    defaultValue: promptTab._default(row.modelData.key)
+                    onResetRequested: promptTab.service
+                        ? promptTab.service.resetConfigValue(row.modelData.key) : undefined
 
-        Repeater {
-            model: [
-                { key: "prompt.newline",      label: "Two-line prompt" },
-                { key: "prompt.transient",    label: "Transient prompt" },
-                { key: "prompt.blank_line",   label: "Blank line before prompt" },
-                { key: "prompt.right_prompt", label: "Right prompt rail" },
-                { key: "git.enabled",         label: "Git segment" },
-                { key: "style.frame.enabled", label: "Frame lines" },
-                { key: "terminal.title.enabled", label: "Set terminal title" }
-            ]
-
-            delegate: SettingRow {
-                id: row
-                required property var modelData
-                width: body.width
-                label: row.modelData.label
-                value: promptTab._get(row.modelData.key, undefined)
-                defaultValue: promptTab._default(row.modelData.key)
-                onResetRequested: promptTab.service
-                    ? promptTab.service.resetConfigValue(row.modelData.key) : undefined
-
-                Toggle {
-                    checked: row.value === true
-                    onClicked: promptTab._set(row.modelData.key, !(row.value === true))
+                    Toggle {
+                        checked: row.value === true
+                        onClicked: promptTab._set(row.modelData.key, !(row.value === true))
+                    }
                 }
             }
         }

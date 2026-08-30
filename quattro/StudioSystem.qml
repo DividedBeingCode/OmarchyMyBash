@@ -17,6 +17,8 @@ Flickable {
 
     property var service: null
     property var shell: null
+    /// Second-level sub-tab: 0 Sessions, 1 Plugins, 2 Layer.
+    property int subTab: 0
 
     contentWidth: width
     contentHeight: body.implicitHeight
@@ -152,201 +154,222 @@ Flickable {
         width: systemTab.width
         spacing: Style.space(14)
 
-        // ── Sessions ───────────────────────────────────────────────────────
-        Text {
-            text: "SESSIONS"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
-
-        Repeater {
-            model: systemTab.service && systemTab.service.sessions
-                ? systemTab.service.sessions : []
-            delegate: Row {
-                id: sessionRow
-                required property var modelData
-                spacing: Style.space(10)
-
-                Text {
-                    text: "shell " + (sessionRow.modelData.shellPid || "?")
-                    color: Color.foreground
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
-                }
-
-                Text {
-                    text: sessionRow.modelData.cwd || ""
-                    color: Color.muted
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
-                    elide: Text.ElideMiddle
-                    width: Math.max(0, body.width - Style.space(160))
-                }
-            }
-        }
-
-        Text {
-            visible: !systemTab.service || !systemTab.service.sessions
-                     || systemTab.service.sessions.length === 0
-            text: "No shell sessions found."
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-        }
-
-        PanelSeparator { foreground: Color.foreground }
-
-        // ── Segment plugins ────────────────────────────────────────────────
-        Text {
-            text: "SEGMENT PLUGINS"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
-
-        Repeater {
-            model: systemTab.plugins
-            delegate: SettingRow {
-                id: pluginRow
-                required property var modelData
-                width: body.width
-                label: pluginRow.modelData.state === "missing"
-                    ? pluginRow.modelData.name + " — enabled but not installed"
-                    : pluginRow.modelData.name
-                value: pluginRow.modelData.enabled
-                // No recorded default for a third-party plugin, so the row
-                // never claims "modified" — see SettingRow.
-                defaultValue: undefined
-
-                Toggle {
-                    checked: pluginRow.modelData.enabled
-                    // A plugin that is missing from disk or has an unreadable
-                    // manifest has nothing to enable.
-                    enabled: pluginRow.modelData.state === "enabled"
-                             || pluginRow.modelData.state === "disabled"
-                    onClicked: systemTab.togglePlugin(pluginRow.modelData.name,
-                                                      pluginRow.modelData.enabled)
-                }
-            }
-        }
-
-        Text {
-            visible: systemTab.plugins.length === 0
-            text: "No segment plugins installed.\n"
-                  + "Add one:  omarchy10k plugin add <git-url>"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
+        SubRail {
             width: parent.width
+            tabs: ["Sessions", "Plugins", "Layer"]
+            current: systemTab.subTab
+            onSwitched: (i) => systemTab.subTab = i
         }
 
-        PanelSeparator { foreground: Color.foreground }
-
-        // ── Shell layer ────────────────────────────────────────────────────
-        Text {
-            text: "SHELL LAYER"
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
-        }
-
-        Text {
-            text: "Who owns ls, cd, cat and friends in your shell."
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-        }
-
-        Repeater {
-            model: systemTab.layerClaims
-            delegate: Row {
-                id: claimRow
-                required property var modelData
-                spacing: Style.space(10)
-
-                Text {
-                    width: Style.space(110)
-                    text: claimRow.modelData.name
-                    color: Color.foreground
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
-                }
-
-                Rectangle {
-                    width: actionText.implicitWidth + Style.space(12)
-                    height: actionText.implicitHeight + Style.space(4)
-                    radius: Fx.radius(Style.cornerRadius) / 2
-                    color: Style.normalFill
-
-                    Text {
-                        id: actionText
-                        anchors.centerIn: parent
-                        text: claimRow.modelData.action
-                        color: claimRow.modelData.action === "defer"
-                            ? Color.muted : Color.accent
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
-                    }
-                }
-
-                Text {
-                    text: claimRow.modelData.note
-                    color: Color.muted
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                    width: Math.max(0, body.width - Style.space(220))
-                }
-            }
-        }
-
-        Text {
-            visible: systemTab.layerClaims.length === 0
-            text: "Claim map unavailable (needs omarchy10k on PATH)."
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-        }
-
-        PanelSeparator { foreground: Color.foreground }
-
-        // ── Diagnostics ────────────────────────────────────────────────────
-        Row {
-            spacing: Style.space(8)
-
-            Button {
-                text: "Run doctor"
-                bordered: true
-                onClicked: doctorRunner.running = true
-            }
-
-            Button {
-                text: "Refresh"
-                bordered: true
-                onClicked: systemTab.refresh()
-            }
-        }
-
-        Card {
+        Column {
             width: parent.width
-            height: Math.min(Style.space(220), doctorOut.implicitHeight + Style.space(20))
-            visible: systemTab.doctorText.length > 0
-            elevation: "flat"
+            spacing: Style.space(12)
+            visible: systemTab.subTab === 0
 
+            // ── Sessions ──────────────────────────────────────────────────
             Text {
-                id: doctorOut
-                anchors.fill: parent
-                anchors.margins: Style.space(10)
-                text: systemTab.doctorText
-                color: Color.foreground
+                text: "SESSIONS"
+                color: Color.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
-                wrapMode: Text.NoWrap
+                font.bold: true
+            }
+
+            Repeater {
+                model: systemTab.service && systemTab.service.sessions
+                    ? systemTab.service.sessions : []
+                delegate: Row {
+                    id: sessionRow
+                    required property var modelData
+                    spacing: Style.space(10)
+
+                    Text {
+                        text: "shell " + (sessionRow.modelData.shellPid || "?")
+                        color: Color.foreground
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                    }
+
+                    Text {
+                        text: sessionRow.modelData.cwd || ""
+                        color: Color.muted
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                        elide: Text.ElideMiddle
+                        width: Math.max(0, body.width - Style.space(160))
+                    }
+                }
+            }
+
+            Text {
+                visible: !systemTab.service || !systemTab.service.sessions
+                         || systemTab.service.sessions.length === 0
+                text: "No shell sessions found."
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+            }
+        }
+
+        Column {
+            width: parent.width
+            spacing: Style.space(12)
+            visible: systemTab.subTab === 1
+
+            // ── Segment plugins ───────────────────────────────────────────
+            Text {
+                text: "SEGMENT PLUGINS"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+            }
+
+            Repeater {
+                model: systemTab.plugins
+                delegate: SettingRow {
+                    id: pluginRow
+                    required property var modelData
+                    width: body.width
+                    label: pluginRow.modelData.state === "missing"
+                        ? pluginRow.modelData.name + " — enabled but not installed"
+                        : pluginRow.modelData.name
+                    value: pluginRow.modelData.enabled
+                    // No recorded default for a third-party plugin, so the
+                    // row never claims "modified" — see SettingRow.
+                    defaultValue: undefined
+
+                    Toggle {
+                        checked: pluginRow.modelData.enabled
+                        // A plugin that is missing from disk or has an
+                        // unreadable manifest has nothing to enable.
+                        enabled: pluginRow.modelData.state === "enabled"
+                                 || pluginRow.modelData.state === "disabled"
+                        onClicked: systemTab.togglePlugin(pluginRow.modelData.name,
+                                                          pluginRow.modelData.enabled)
+                    }
+                }
+            }
+
+            Text {
+                visible: systemTab.plugins.length === 0
+                text: "No segment plugins installed.\n"
+                      + "Add one:  omarchy10k plugin add <git-url>"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+        }
+
+        Column {
+            width: parent.width
+            spacing: Style.space(12)
+            visible: systemTab.subTab === 2
+
+            // ── Shell layer ───────────────────────────────────────────────
+            Text {
+                text: "SHELL LAYER"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+            }
+
+            Text {
+                text: "Who owns ls, cd, cat and friends in your shell."
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+                model: systemTab.layerClaims
+                delegate: Row {
+                    id: claimRow
+                    required property var modelData
+                    spacing: Style.space(10)
+
+                    Text {
+                        width: Style.space(110)
+                        text: claimRow.modelData.name
+                        color: Color.foreground
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                    }
+
+                    Rectangle {
+                        width: actionText.implicitWidth + Style.space(12)
+                        height: actionText.implicitHeight + Style.space(4)
+                        radius: Fx.radius(Style.cornerRadius) / 2
+                        color: Style.normalFill
+
+                        Text {
+                            id: actionText
+                            anchors.centerIn: parent
+                            text: claimRow.modelData.action
+                            color: claimRow.modelData.action === "defer"
+                                ? Color.muted : Color.accent
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption
+                        }
+                    }
+
+                    Text {
+                        text: claimRow.modelData.note
+                        color: Color.muted
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                        width: Math.max(0, body.width - Style.space(220))
+                    }
+                }
+            }
+
+            Text {
+                visible: systemTab.layerClaims.length === 0
+                text: "Claim map unavailable (needs omarchy10k on PATH)."
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+            }
+
+            PanelSeparator { foreground: Color.foreground }
+
+            // ── Diagnostics ───────────────────────────────────────────────
+            Row {
+                spacing: Style.space(8)
+
+                Button {
+                    text: "Run doctor"
+                    bordered: true
+                    onClicked: doctorRunner.running = true
+                }
+
+                Button {
+                    text: "Refresh"
+                    bordered: true
+                    onClicked: systemTab.refresh()
+                }
+            }
+
+            Card {
+                width: parent.width
+                height: Math.min(Style.space(220), doctorOut.implicitHeight + Style.space(20))
+                visible: systemTab.doctorText.length > 0
+                elevation: "flat"
+
+                Text {
+                    id: doctorOut
+                    anchors.fill: parent
+                    anchors.margins: Style.space(10)
+                    text: systemTab.doctorText
+                    color: Color.foreground
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.NoWrap
+                }
             }
         }
     }
