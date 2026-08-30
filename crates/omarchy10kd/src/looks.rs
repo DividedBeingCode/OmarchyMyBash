@@ -278,11 +278,10 @@ pub fn curated() -> Vec<LookDef> {
             &["structure", "nerd-font"],
             serde_json::json!({
                 "style": { "preset": "omarchy", "separators": { "shape": "auto" }, "frame": { "enabled": false, "gap_char": "", "gap_gradient": "off" } },
-                "segments": { "os": { "icon": "arch", "enabled": true },
+                "segments": { "os": { "icon": "arch" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
                 "theme": { "source": "omarchy" },
-                "directory": { "unique": false },
             })),
         look("lean-pure", "Lean Pure",
             "No icons, no fills. Just the path, the branch and a lambda.",
@@ -862,8 +861,10 @@ pub fn all(config: &Config) -> Vec<LookDef> {
 /// Applying a Look CLEARS these before merging its patch, so a Look is the
 /// atomic bundle it is presented as everywhere in the product. Without it a
 /// patch is a delta: every key it omits inherits from whatever preset was
-/// applied last, which is why 168 of 812 ordered (apply A, then B) pairs
-/// rendered differently from B's own gallery card.
+/// applied last, which is why 168 of the 812 ordered (apply A, then B) pairs
+/// of the then-29-Look library rendered differently from B's own gallery
+/// card. The library is 52 Looks now — 2652 pairs — and the sweep in
+/// `server.rs` runs all of them.
 ///
 /// Deliberately excludes what belongs to the user rather than the preset:
 /// segment enable/disable, `git.mode`, `directory.*`, `terminal.*`, plugins,
@@ -924,6 +925,32 @@ pub fn apply_look(current: &Config, patch: &serde_json::Value) -> Result<Config,
     merge_patch(current, patch, true)
 }
 
+/// A patch that sets a palette sets the WHOLE palette.
+///
+/// Without this the deep merge leaves the previous palette's keys behind:
+/// switching from Gruvbox (which ships an art-directed `ramp`) to a palette
+/// that derives its own would keep Gruvbox's mustard ramp, and a partial user
+/// palette would blend with whatever preceded it into a scheme nobody
+/// designed.
+///
+/// One implementation, called from BOTH the in-memory merge (`merge_patch`)
+/// and the on-disk merge (`server::write_patch`). They used to diverge: the
+/// file kept the stale `ramp`, and because persisting reloads the config from
+/// the file, the file's copy won and the in-memory clear was thrown away.
+pub fn clear_replaced_palette(doc: &mut toml::Table, patch: &toml::Value) {
+    let replaces_palette = patch
+        .get("theme")
+        .and_then(|t| t.as_table())
+        .is_some_and(|t| t.contains_key("custom"));
+    if !replaces_palette {
+        return;
+    }
+    if let Some(theme) = doc.get_mut("theme").and_then(|t| t.as_table_mut()) {
+        theme.remove("custom");
+        theme.remove("ramp");
+    }
+}
+
 fn merge_patch(
     current: &Config,
     patch: &serde_json::Value,
@@ -940,21 +967,7 @@ fn merge_patch(
     if atomic {
         clear_look_owned(&mut doc);
     }
-    // A patch that sets a palette sets the WHOLE palette. Without this the
-    // deep merge leaves the previous palette's keys behind: switching from
-    // Gruvbox (which ships an art-directed `ramp`) to a palette that derives
-    // its own would keep Gruvbox's mustard ramp, and a partial user palette
-    // would blend with whatever preceded it into a scheme nobody designed.
-    if patch_val
-        .get("theme")
-        .and_then(|t| t.as_table())
-        .is_some_and(|t| t.contains_key("custom"))
-    {
-        if let Some(theme) = doc.get_mut("theme").and_then(|t| t.as_table_mut()) {
-            theme.remove("custom");
-            theme.remove("ramp");
-        }
-    }
+    clear_replaced_palette(&mut doc, &patch_val);
     if let Some(obj) = patch_val.as_table() {
         for (k, v) in obj {
             crate::server::merge_toml_value(
@@ -1105,17 +1118,91 @@ mod tests {
 
     #[test]
     fn applying_a_look_leaves_your_own_settings_alone() {
-        let mut base = Config::default();
-        base.segments.battery.enabled = true;
-        base.git.mode = "always".into();
-        base.directory.max_length = 17;
+        // Swept across EVERY curated Look, not one hand-picked example: the
+        // contract is a property of the table, and a single Look cannot
+        // notice a new entry that reaches outside what a Look owns.
+        for def in curated() {
+            let mut base = Config::default();
+            base.segments.battery.enabled = true;
+            base.git.mode = "always".into();
+            base.directory.max_length = 17;
+            base.directory.unique = true;
+            base.segments.os.enabled = false;
 
-        let after = apply_look(&base, &resolve("framed-focus", &base).expect("curated").patch)
-            .expect("apply");
+            let after = apply_look(&base, &def.patch)
+                .unwrap_or_else(|e| panic!("{} failed to apply: {e}", def.name));
 
-        assert!(after.segments.battery.enabled, "segment toggles are yours");
-        assert_eq!(after.git.mode, "always", "git.mode is yours");
-        assert_eq!(after.directory.max_length, 17, "directory settings are yours");
+            assert!(
+                after.segments.battery.enabled,
+                "{}: segment toggles are yours",
+                def.name
+            );
+            assert!(
+                !after.segments.os.enabled,
+                "{}: segment toggles are yours",
+                def.name
+            );
+            assert_eq!(after.git.mode, "always", "{}: git.mode is yours", def.name);
+            assert_eq!(
+                after.directory.max_length, 17,
+                "{}: directory settings are yours",
+                def.name
+            );
+            assert!(
+                after.directory.unique,
+                "{}: directory settings are yours",
+                def.name
+            );
+        }
+    }
+
+    /// Every leaf path a curated patch writes, as dotted strings.
+    fn leaf_paths(value: &serde_json::Value, prefix: &str, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (k, v) in map {
+                    let path = if prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{prefix}.{k}")
+                    };
+                    leaf_paths(v, &path, out);
+                }
+            }
+            _ => out.push(prefix.to_string()),
+        }
+    }
+
+    #[test]
+    fn every_curated_patch_stays_inside_what_a_look_owns() {
+        // `clear_look_owned` can only clear what LOOK_OWNED names. A patch
+        // that writes anything else leaks it into the live config and then
+        // into every subsequent Look -- the exact delta bug atomic apply was
+        // built to end, reintroduced one table row at a time. `omnarchy` did
+        // this with `segments.os.enabled` and `directory.unique`, both of
+        // which the LOOK_OWNED doc comment promises survive an apply.
+        //
+        // `theme` is legitimately outside LOOK_OWNED: it is governed by the
+        // structure/complete rule and the palette-replacement clear instead.
+        let mut offenders: Vec<String> = Vec::new();
+        for def in curated() {
+            let mut paths = Vec::new();
+            leaf_paths(&def.patch, "", &mut paths);
+            for path in paths {
+                let owned = LOOK_OWNED.iter().any(|owned| {
+                    path == *owned || path.starts_with(&format!("{owned}."))
+                });
+                if !owned && path != "theme" && !path.starts_with("theme.") {
+                    offenders.push(format!("{}: {path}", def.name));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "curated patches write {} path(s) no Look can clear: {:?}",
+            offenders.len(),
+            offenders
+        );
     }
 
     #[test]
@@ -1393,7 +1480,11 @@ mod preset_tests {
     #[test]
     fn the_collection_is_worth_browsing() {
         // The point of the pass: enough breadth that the gallery is a gallery.
-        assert!(curated().len() >= 28, "expected at least 28 curated Looks");
+        // Pinned exactly, not floored: a floor of 28 against a library of 52
+        // cannot notice a Look being dropped, which is precisely the drift
+        // this branch had to repair. Adding or removing a Look is a
+        // deliberate act; update the number with it.
+        assert_eq!(curated().len(), 52, "expected exactly 52 curated Looks");
         assert!(
             curated_palettes().len() >= 38,
             "expected at least 38 curated palettes"

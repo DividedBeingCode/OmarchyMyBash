@@ -1495,11 +1495,22 @@ async fn handle_connection(
 }
 
 /// Merge a `config_set`-shaped patch into the config file atomically
-/// (tmp+rename) and reload the in-memory config. Single source of truth for
-/// config_set and looks_apply.
-async fn write_config_patch(
+/// (tmp+rename) and reload the in-memory config.
+///
+/// `atomic` mirrors `looks::merge_patch`: it clears the Look-owned keys
+/// before merging, so applying a Look writes the bundle it is presented as
+/// rather than a delta over whatever was applied last.
+///
+/// The FILE needs exactly the same treatment as the in-memory config —
+/// including the palette-replacement rule, which is why that rule lives in
+/// `looks::clear_replaced_palette` and is called from here as well as from
+/// the in-memory merge. Persisting reloads the config FROM the file, so any
+/// rule the file skips is a rule that does not happen at all: the in-memory
+/// result is discarded moments later.
+async fn write_patch(
     state: &Arc<DaemonState>,
     patch: &serde_json::Value,
+    atomic: bool,
 ) -> Result<(), String> {
     let config_path = state.config_path.clone();
     let mut doc: toml::Table = match std::fs::read_to_string(&config_path) {
@@ -1509,16 +1520,17 @@ async fn write_config_patch(
         },
         Err(_) => toml::Table::new(),
     };
+    if atomic {
+        crate::looks::clear_look_owned(&mut doc);
+    }
 
     let mut failed_keys: Vec<String> = Vec::new();
+    let mut patch_table = toml::Table::new();
     if let Some(obj) = patch.as_object() {
         for (k, v) in obj {
             match serde_json::from_value::<toml::Value>(v.clone()) {
                 Ok(toml_val) => {
-                    merge_toml_value(
-                        doc.entry(k.clone()).or_insert(toml::Value::Table(toml::Table::new())),
-                        toml_val,
-                    );
+                    patch_table.insert(k.clone(), toml_val);
                 }
                 Err(e) => failed_keys.push(format!("{k} ({e})")),
             }
@@ -1529,51 +1541,38 @@ async fn write_config_patch(
             "values for keys {} are not representable in TOML",
             failed_keys.join(", ")
         ));
+    }
+
+    let patch_val = toml::Value::Table(patch_table);
+    crate::looks::clear_replaced_palette(&mut doc, &patch_val);
+    if let Some(obj) = patch_val.as_table() {
+        for (k, v) in obj {
+            merge_toml_value(
+                doc.entry(k.clone()).or_insert(toml::Value::Table(toml::Table::new())),
+                v.clone(),
+            );
+        }
     }
 
     persist_config_doc(state, doc).await
 }
 
-/// Persist a Look atomically: clear the Look-owned keys from config.toml,
+/// Persist a plain `config_set` patch as a DELTA — keys the patch omits keep
+/// whatever the file already had. Used by config_set and by looks_save.
+async fn write_config_patch(
+    state: &Arc<DaemonState>,
+    patch: &serde_json::Value,
+) -> Result<(), String> {
+    write_patch(state, patch, false).await
+}
+
+/// Persist a Look ATOMICALLY: clear the Look-owned keys from config.toml,
 /// then merge the patch.
-///
-/// The FILE needs the same treatment as the in-memory config, or a daemon
-/// restart resurrects exactly the leftovers the in-memory clear removed.
 async fn write_look_patch(
     state: &Arc<DaemonState>,
     patch: &serde_json::Value,
 ) -> Result<(), String> {
-    let config_path = state.config_path.clone();
-    let mut doc: toml::Table = match std::fs::read_to_string(&config_path) {
-        Ok(existing) => match toml::from_str(&existing) {
-            Ok(t) => t,
-            Err(e) => return Err(format!("config.toml has syntax errors: {e}")),
-        },
-        Err(_) => toml::Table::new(),
-    };
-    crate::looks::clear_look_owned(&mut doc);
-
-    let mut failed_keys: Vec<String> = Vec::new();
-    if let Some(obj) = patch.as_object() {
-        for (k, v) in obj {
-            match serde_json::from_value::<toml::Value>(v.clone()) {
-                Ok(toml_val) => {
-                    merge_toml_value(
-                        doc.entry(k.clone()).or_insert(toml::Value::Table(toml::Table::new())),
-                        toml_val,
-                    );
-                }
-                Err(e) => failed_keys.push(format!("{k} ({e})")),
-            }
-        }
-    }
-    if !failed_keys.is_empty() {
-        return Err(format!(
-            "values for keys {} are not representable in TOML",
-            failed_keys.join(", ")
-        ));
-    }
-    persist_config_doc(state, doc).await
+    write_patch(state, patch, true).await
 }
 
 /// Validate a `looks_delete` target: curated Looks are compiled-in and
@@ -1591,7 +1590,7 @@ fn validate_look_deletion(name: &str, config: &Config) -> Result<(), String> {
 }
 
 /// Remove one user Look (`[looks.<name>]`) from config.toml by rewriting
-/// the file without the entry (the merge in write_config_patch cannot
+/// the file without the entry (the merge in write_patch cannot
 /// delete keys). Same atomic tmp+rename path, then reload.
 async fn delete_user_look(state: &Arc<DaemonState>, name: &str) -> Result<(), String> {
     let config_path = state.config_path.clone();
@@ -1623,7 +1622,7 @@ async fn delete_user_look(state: &Arc<DaemonState>, name: &str) -> Result<(), St
 }
 
 /// Atomically persist a merged config doc (tmp+rename) and reload the
-/// in-memory config. Shared by write_config_patch and delete_user_look.
+/// in-memory config. Shared by write_patch and delete_user_look.
 async fn persist_config_doc(
     state: &Arc<DaemonState>,
     doc: toml::Table,
@@ -2123,6 +2122,61 @@ mod tests {
         );
     }
 
+    // A palette is a WHOLE palette, on disk as much as in memory. Three
+    // curated palettes ship an art-directed `ramp` (gruvbox, ayu-mirage,
+    // cobalt2); every other Look derives its ramp from its colors and its
+    // patch therefore never mentions `ramp` at all. The persistent path used
+    // to skip the palette-replacement clear that the in-memory merge did, and
+    // because persisting RELOADS the config from the file, the file's stale
+    // ramp won: apply `gruvbox-drift` then `synthwave` and the card showed
+    // magenta while the committed prompt kept Gruvbox's mustard, forever.
+    #[tokio::test]
+    async fn applying_a_look_persistently_replaces_the_palette_ramp() {
+        let dir = temp_config_dir("look-palette-ramp");
+        let path = dir.join("config.toml");
+        // The state applying `gruvbox-drift` leaves behind.
+        std::fs::write(
+            &path,
+            "[theme]\nsource = \"hybrid\"\nramp = [\"#d79921\", \"#b8bb26\"]\n\n\
+             [theme.custom]\naccent = \"#d79921\"\n",
+        )
+        .unwrap();
+        let state = std::sync::Arc::new(DaemonState::new(
+            Config::load(&path).expect("load config"),
+            ThemePalette::default(),
+            path.clone(),
+            dir.join("d.sock"),
+        ));
+
+        // Synthwave's palette derives its ramp; its patch sets `theme.custom`
+        // but never `theme.ramp`.
+        let look = crate::looks::resolve("synthwave", &Config::default()).expect("curated");
+        assert!(
+            look.patch.pointer("/theme/ramp").is_none(),
+            "fixture assumption: synthwave must not carry its own ramp"
+        );
+        write_look_patch(&state, &look.patch).await.expect("write ok");
+
+        let doc: toml::Table =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).expect("valid toml");
+        let ramp = doc.get("theme").and_then(|v| v.get("ramp"));
+        assert!(
+            ramp.is_none(),
+            "the previous palette's ramp survived on disk: {ramp:?}"
+        );
+        assert_eq!(
+            doc.get("theme")
+                .and_then(|v| v.get("custom"))
+                .and_then(|v| v.get("accent"))
+                .and_then(|v| v.as_str()),
+            crate::looks::curated_palette("synthwave-alpha")
+                .as_ref()
+                .and_then(|p| p.pointer("/theme/custom/accent"))
+                .and_then(|v| v.as_str()),
+            "the incoming palette must have landed"
+        );
+    }
+
     #[tokio::test]
     async fn looks_delete_unknown_reports_error() {
         let dir = temp_config_dir("delete-unknown");
@@ -2153,7 +2207,7 @@ mod tests {
     }
 
     /// Render a config the way a card and an applied prompt both render.
-    fn render_card_sized(cfg: &Config) -> String {
+    fn render_card_at(cfg: &Config, cols: u16) -> String {
         let palette = crate::theme::ThemePalette::resolve_palette(cfg);
         let renderer = PromptRenderer::new(cfg, &palette);
         let git_status = crate::git::GitStatus {
@@ -2164,20 +2218,37 @@ mod tests {
             ..Default::default()
         };
         strip_np(&renderer.render_with_ssh(
-            "~/app", 0, 0, 38, 0, &git_status, false, Some(false), None, Vec::new(),
+            "~/app", 0, 0, cols, 0, &git_status, false, Some(false), None, Vec::new(),
         ).left).to_string()
+    }
+
+    /// At the gallery card's own width.
+    fn render_card_sized(cfg: &Config) -> String {
+        render_card_at(cfg, 38)
     }
 
     #[test]
     fn a_look_looks_the_same_applied_as_it_did_in_the_gallery() {
-        // The headline invariant. Measured before the fix: 36 of these 812
-        // ordered pairs differed, because the card was built with a delta
-        // apply and the actual Apply was atomic. An earlier diagnostic
-        // reported 168 by comparing against a `Config::default()` baseline
-        // instead of look A on both sides, which also counted incidental
-        // `theme` differences rather than isolating the structural leak
-        // (`gap_char`, `gap_gradient`, `prompt.newline`, ...) this test
-        // targets.
+        // WHAT THIS GUARDS, exactly: that the gallery card and the Apply
+        // button run the SAME function. With no patch, no profile and no
+        // style knobs, `effective_preview_config` reduces to
+        // `apply_look(after_a, patch)` -- literally the other side of the
+        // comparison -- so this is f(x) == f(x) and cannot detect a bug
+        // INSIDE `apply_look`. Stubbing `clear_look_owned` to a no-op leaves
+        // it passing. What it does catch is the card path drifting back to
+        // `apply_transient`, which is the regression it was written for and
+        // which does fail it. The invariant that atomicity actually holds
+        // end-to-end is `..._through_the_persisted_path` below.
+        //
+        // Measured before the fix: 36 differing pairs out of the 812 the
+        // then-29-Look library produced (29 x 28). The library is 52 Looks
+        // now, so the sweep below runs 2652 pairs (52 x 51). The cause was
+        // that the card was built with a delta apply while the actual Apply
+        // was atomic. An earlier diagnostic reported 168 by comparing against
+        // a `Config::default()` baseline instead of look A on both sides,
+        // which also counted incidental `theme` differences rather than
+        // isolating the structural leak (`gap_char`, `gap_gradient`,
+        // `prompt.newline`, ...) this test targets.
         let base = Config::default();
         let names: Vec<String> =
             crate::looks::all(&base).iter().map(|d| d.name.clone()).collect();
@@ -2208,6 +2279,91 @@ mod tests {
             "{} of {} ordered pairs differ, e.g. {:?}",
             mismatches.len(),
             names.len() * (names.len() - 1),
+            &mismatches[..mismatches.len().min(5)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_look_looks_the_same_applied_as_it_did_in_the_gallery_through_the_persisted_path() {
+        // The invariant the sweep above only looks like it checks. Here the
+        // "applied" side goes through the path that actually commits:
+        // write_look_patch -> config.toml -> reload. That path reloads the
+        // config FROM the file, so any clear the file skips is a clear that
+        // did not happen -- which is how a stale `theme.ramp` survived every
+        // subsequent Look while the card showed the new palette.
+        //
+        // Rendered at 80 columns, not the card's 38: `segments.os` has
+        // `hide_below_cols: 40`, so a 38-column render never emits
+        // `segments.os.icon` -- a LOOK_OWNED key, and one of the few whose
+        // leak is visible only in the prompt.
+        //
+        // Every Look as B, against three fixed predecessors rather than all
+        // 2652 ordered pairs: each iteration is two file writes and two
+        // config reloads, and the full cross product through disk is far too
+        // slow for a unit test. `gruvbox-drift` is mandatory -- it is the
+        // only kind of predecessor (an art-directed `ramp`) that exposed the
+        // persistence bug.
+        let base = Config::default();
+        let names: Vec<String> =
+            crate::looks::all(&base).iter().map(|d| d.name.clone()).collect();
+        let predecessors = ["gruvbox-drift", "synthwave", "lean-pure"];
+
+        let mut mismatches: Vec<String> = Vec::new();
+        let mut pairs = 0usize;
+        for a in predecessors {
+            for b in &names {
+                if a == b {
+                    continue;
+                }
+                pairs += 1;
+                let dir = temp_config_dir(&format!("persisted-{a}-{b}"));
+                let path = dir.join("config.toml");
+                std::fs::write(&path, "").unwrap();
+                let state = std::sync::Arc::new(DaemonState::new(
+                    Config::load(&path).expect("load config"),
+                    ThemePalette::default(),
+                    path.clone(),
+                    dir.join("d.sock"),
+                ));
+
+                // Get onto Look A the same way a user would.
+                let look_a = crate::looks::resolve(a, &base).expect("curated a");
+                write_look_patch(&state, &look_a.patch).await.expect("apply a");
+
+                // B's gallery card, rendered on the live config.
+                let card = {
+                    let cfg = state.config.read().await;
+                    let req = preview_req(None, Some(b));
+                    effective_preview_config(&req, &cfg, None).expect("card")
+                };
+
+                // B applied for real, then read back out of the daemon.
+                let look_b = {
+                    let cfg = state.config.read().await;
+                    crate::looks::resolve(b, &cfg).expect("curated b")
+                };
+                write_look_patch(&state, &look_b.patch).await.expect("apply b");
+                let applied = state.config.read().await.clone();
+
+                if render_card_at(&card, 80) != render_card_at(&applied, 80) {
+                    mismatches.push(format!("{a} then {b} (render)"));
+                } else if toml::Value::try_from(&card) != toml::Value::try_from(&applied) {
+                    // The renders agreeing is necessary but not sufficient:
+                    // a leaked `style.frame.gap_char` is invisible while the
+                    // frame is off, and would come back the moment the user
+                    // turned it on. Compare the configs too, so every
+                    // LOOK_OWNED key counts whether or not it happens to
+                    // reach the screen in this scene.
+                    mismatches.push(format!("{a} then {b} (config)"));
+                }
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{} of {} persisted pairs differ from their card, e.g. {:?}",
+            mismatches.len(),
+            pairs,
             &mismatches[..mismatches.len().min(5)]
         );
     }
