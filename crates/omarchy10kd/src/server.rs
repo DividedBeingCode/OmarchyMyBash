@@ -2100,6 +2100,52 @@ mod tests {
         );
     }
 
+    // The in-memory clear (inside `apply_look`) and the on-disk clear (inside
+    // `write_look_patch`, via `clear_look_owned`) are two separate code
+    // paths. Only the on-disk one survives a daemon restart: if
+    // `write_look_patch` ever stopped clearing the file before merging, a
+    // stale Look-owned value would sit in config.toml forever and come back
+    // on every reload, even though the in-memory config looked clean right
+    // after Apply.
+    #[tokio::test]
+    async fn write_look_patch_clears_the_owned_keys_on_disk() {
+        let dir = temp_config_dir("write-look-patch-clear");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[style.frame]\ngap_gradient = \"full\"\n\n[git]\nmode = \"always\"\n",
+        )
+        .unwrap();
+        let state = std::sync::Arc::new(DaemonState::new(
+            Config::load(&path).expect("load config"),
+            ThemePalette::default(),
+            path.clone(),
+            dir.join("d.sock"),
+        ));
+
+        // lean-pure's patch touches `style.frame.enabled` but never mentions
+        // `gap_gradient` -- exactly the kind of patch that used to leave a
+        // stale value behind.
+        let look = crate::looks::resolve("lean-pure", &Config::default()).expect("curated");
+        write_look_patch(&state, &look.patch).await.expect("write ok");
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        let doc: toml::Table = toml::from_str(&on_disk).expect("valid toml");
+        let gap_gradient = doc
+            .get("style")
+            .and_then(|v| v.get("frame"))
+            .and_then(|v| v.get("gap_gradient"));
+        assert!(
+            gap_gradient.is_none(),
+            "gap_gradient survived on disk: {gap_gradient:?}"
+        );
+        assert_eq!(
+            doc.get("git").and_then(|v| v.get("mode")).and_then(|v| v.as_str()),
+            Some("always"),
+            "an unrelated, non-Look-owned key must survive the clear"
+        );
+    }
+
     #[tokio::test]
     async fn looks_delete_unknown_reports_error() {
         let dir = temp_config_dir("delete-unknown");
@@ -2176,9 +2222,14 @@ mod tests {
 
     #[test]
     fn a_look_looks_the_same_applied_as_it_did_in_the_gallery() {
-        // The headline invariant. Measured before the fix: 168 of these 812
-        // ordered pairs differed, because the card was built atomically and the
-        // apply was a delta.
+        // The headline invariant. Measured before the fix: 36 of these 812
+        // ordered pairs differed, because the card was built with a delta
+        // apply and the actual Apply was atomic. An earlier diagnostic
+        // reported 168 by comparing against a `Config::default()` baseline
+        // instead of look A on both sides, which also counted incidental
+        // `theme` differences rather than isolating the structural leak
+        // (`gap_char`, `gap_gradient`, `prompt.newline`, ...) this test
+        // targets.
         let base = Config::default();
         let names: Vec<String> =
             crate::looks::all(&base).iter().map(|d| d.name.clone()).collect();
