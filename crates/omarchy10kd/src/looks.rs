@@ -636,9 +636,78 @@ pub fn all(config: &Config) -> Vec<LookDef> {
     out
 }
 
-/// Try-mode apply: merge the patch into the CURRENT in-memory config only —
-/// no file write. The caller reverts with `reload_config`.
+/// The config paths a Look owns.
+///
+/// Applying a Look CLEARS these before merging its patch, so a Look is the
+/// atomic bundle it is presented as everywhere in the product. Without it a
+/// patch is a delta: every key it omits inherits from whatever preset was
+/// applied last, which is why 168 of 812 ordered (apply A, then B) pairs
+/// rendered differently from B's own gallery card.
+///
+/// Deliberately excludes what belongs to the user rather than the preset:
+/// segment enable/disable, `git.mode`, `directory.*`, `terminal.*`, plugins,
+/// rice and statusline all survive an apply untouched.
+///
+/// `theme` is NOT here. It stays governed by the structure/complete rule: a
+/// `complete` Look's patch carries a `theme` block (and the palette-replacement
+/// rule below applies), a `structure` Look carries none and leaves your
+/// palette alone.
+pub const LOOK_OWNED: &[&str] = &[
+    "style",
+    "prompt.layout",
+    "prompt.newline",
+    "prompt.blank_line",
+    "segments.os.icon",
+    "segments.character.success",
+    "segments.character.error",
+    "segments.character.transient",
+    "git.branch_icon",
+];
+
+/// Remove the Look-owned paths from a config table.
+///
+/// Removal rather than writing explicit defaults: an absent key reads as
+/// "default" everywhere, keeps `config.toml` readable, and leaves the bar
+/// popout's modified-vs-default ink honest. Writing defaults would mark every
+/// owned key as user-modified.
+pub fn clear_look_owned(doc: &mut toml::Table) {
+    for path in LOOK_OWNED {
+        clear_path(doc, path);
+    }
+}
+
+fn clear_path(table: &mut toml::Table, path: &str) {
+    match path.split_once('.') {
+        None => {
+            table.remove(path);
+        }
+        Some((head, rest)) => {
+            if let Some(toml::Value::Table(inner)) = table.get_mut(head) {
+                clear_path(inner, rest);
+            }
+        }
+    }
+}
+
+/// Merge a patch onto the current config as a DELTA — keys the patch omits
+/// keep their current values. Used by the Look editor's working patch and by
+/// project profiles, both of which genuinely want a delta.
 pub fn apply_transient(current: &Config, patch: &serde_json::Value) -> Result<Config, String> {
+    merge_patch(current, patch, false)
+}
+
+/// Apply a Look ATOMICALLY: clear everything the Look owns, then merge its
+/// patch. This is what makes a gallery card match what you get when you press
+/// Apply — both go through here.
+pub fn apply_look(current: &Config, patch: &serde_json::Value) -> Result<Config, String> {
+    merge_patch(current, patch, true)
+}
+
+fn merge_patch(
+    current: &Config,
+    patch: &serde_json::Value,
+    atomic: bool,
+) -> Result<Config, String> {
     let patch_val = serde_json::from_value::<toml::Value>(patch.clone())
         .map_err(|e| format!("look patch not representable in TOML: {e}"))?;
     let cur = toml::Value::try_from(current)
@@ -647,6 +716,9 @@ pub fn apply_transient(current: &Config, patch: &serde_json::Value) -> Result<Co
         Some(t) => t.clone(),
         None => toml::Table::new(),
     };
+    if atomic {
+        clear_look_owned(&mut doc);
+    }
     // A patch that sets a palette sets the WHOLE palette. Without this the
     // deep merge leaves the previous palette's keys behind: switching from
     // Gruvbox (which ships an art-directed `ramp`) to a palette that derives
@@ -766,6 +838,75 @@ mod tests {
         assert_ne!(tried.style.preset, disk.style.preset);
         let reloaded = Config::default();
         assert_eq!(reloaded.style.preset, disk.style.preset, "reload reverts try");
+    }
+
+    #[test]
+    fn clear_look_owned_removes_rather_than_writing_defaults() {
+        // Removal, not explicit defaults: writing defaults would mark every
+        // owned key as user-modified and break the panel's modified-vs-default
+        // ink and its per-row reset.
+        let value = toml::Value::try_from(Config::default()).expect("serialize");
+        let mut doc = value.as_table().expect("table").clone();
+        assert!(doc.contains_key("style"), "precondition");
+
+        clear_look_owned(&mut doc);
+
+        assert!(!doc.contains_key("style"), "style is Look-owned");
+        let prompt = doc.get("prompt").and_then(|v| v.as_table()).expect("prompt survives");
+        assert!(!prompt.contains_key("newline"), "prompt.newline is Look-owned");
+        assert!(!prompt.contains_key("layout"), "prompt.layout is Look-owned");
+        assert!(
+            prompt.contains_key("right_prompt"),
+            "prompt.right_prompt belongs to the user and must survive"
+        );
+        let git = doc.get("git").and_then(|v| v.as_table()).expect("git survives");
+        assert!(!git.contains_key("branch_icon"), "git.branch_icon is Look-owned");
+        assert!(git.contains_key("mode"), "git.mode belongs to the user");
+    }
+
+    #[test]
+    fn applying_a_look_resets_what_the_previous_look_set() {
+        // The headline bug: framed-focus sets gap_gradient, lean-pure does not,
+        // so under a delta merge lean-pure silently kept framed-focus's rule.
+        let base = Config::default();
+        let framed = apply_look(&base, &resolve("framed-focus", &base).expect("curated").patch)
+            .expect("apply framed-focus");
+        assert_eq!(framed.style.frame.gap_gradient.as_deref(), Some("off"));
+
+        let lean = apply_look(&framed, &resolve("lean-pure", &base).expect("curated").patch)
+            .expect("apply lean-pure");
+        assert_eq!(
+            lean.style.frame.gap_gradient,
+            Config::default().style.frame.gap_gradient,
+            "lean-pure inherited framed-focus's gap_gradient"
+        );
+    }
+
+    #[test]
+    fn applying_a_look_leaves_your_own_settings_alone() {
+        let mut base = Config::default();
+        base.segments.battery.enabled = true;
+        base.git.mode = "always".into();
+        base.directory.max_length = 17;
+
+        let after = apply_look(&base, &resolve("framed-focus", &base).expect("curated").patch)
+            .expect("apply");
+
+        assert!(after.segments.battery.enabled, "segment toggles are yours");
+        assert_eq!(after.git.mode, "always", "git.mode is yours");
+        assert_eq!(after.directory.max_length, 17, "directory settings are yours");
+    }
+
+    #[test]
+    fn apply_transient_still_merges_as_a_delta() {
+        // The Look editor and project profiles genuinely want a delta; only
+        // Apply is atomic.
+        let base = Config::default();
+        let framed = apply_transient(&base, &resolve("framed-focus", &base).expect("curated").patch)
+            .expect("apply");
+        let lean = apply_transient(&framed, &resolve("lean-pure", &base).expect("curated").patch)
+            .expect("apply");
+        assert_eq!(lean.style.frame.gap_gradient.as_deref(), Some("off"));
     }
 }
 
