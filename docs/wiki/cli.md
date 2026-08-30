@@ -461,3 +461,34 @@ shell variable, not an environment variable, so a CLI invoked from a process
 tree that never had the adapter's export (e.g. an editor's embedded terminal
 before `init bash` ran) still computes `omarchy10k-0.sock`. `prompt` degrades
 silently to the hardcoded fallback string in that case, masking the failure.
+
+## `doctor` — Terminal section
+
+```
+  Terminal          ghostty 1.3.1-arch2 ✓ via O10K_TERM (probe or override)
+      caps          OSC7 ✓  OSC8 ✓  OSC52 ✓  sixel ✘  kitty-gfx ✓  sync ✓
+      theme include ghostty/config → o10k-ghostty.conf ✓
+```
+
+Reports the identity, the version, **how it was identified**, the capability
+profile, and whether the terminal's own config still includes our themed file.
+
+The detection *method* is printed because that is what every terminal-integration
+fault has turned on. The previous version printed `TERM_PROGRAM` with an
+unconditional `✓`, so it reported "healthy" while foot was being misidentified
+for the entire life of a session.
+
+The theme-include check matters because the `include` **line** lives in the
+user's terminal config, not in anything Omarchy regenerates: a refresh or a
+hand-edit silently drops it, and the only symptom is that the terminal quietly
+stops following theme switches. Nothing is auto-written — this project never
+edits terminal configs.
+
+An unidentified terminal prints a hint rather than a bare `⚠`:
+
+```
+  Terminal          unknown         ⚠ unidentified — conservative profile
+      via           TERM
+      hint          set O10K_TERM=<name>, or start an interactive shell
+                    so the XTVERSION probe can run
+```

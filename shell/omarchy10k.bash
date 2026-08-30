@@ -576,14 +576,20 @@ __o10k_json_escape() {
 # Builds the env allowlist JSON (0.1 env channel) with pure parameter
 # expansions — zero subprocesses. Frozen allowlist (12 env keys + the three
 # agent-signal keys for the 1.3 ai segment + the vi-mode key for the prompt
-# character): only non-empty values are sent; unset variables are skipped.
+# character + O10K_TERM): only non-empty values are sent; unset variables are
+# skipped.
+#
+# O10K_TERM is on the list because the daemon cannot work the terminal out
+# for itself: it is a background process with no controlling tty, so it can
+# neither probe nor trust its own inherited environment — a daemon reused
+# across shells inherited whichever terminal happened to start it first.
 # Sets __O10K_ENV_JSON.
 __o10k_env_json() {
     local env_json="" k v esc
     for k in VIRTUAL_ENV CONDA_DEFAULT_ENV MISE_NODE_VERSION MISE_PYTHON_VERSION \
              MISE_RUBY_VERSION MISE_GO_VERSION MISE_RUST_VERSION IN_NIX_SHELL \
              DISTROBOX_ENTER_PATH container KUBECONFIG DIRENV_DIR \
-             CLAUDE_CODE_ENTRYPOINT CODEX_SANDBOX CODEX_HOME; do
+             CLAUDE_CODE_ENTRYPOINT CODEX_SANDBOX CODEX_HOME O10K_TERM; do
         v="${!k:-}"
         [[ -n "$v" ]] || continue
         esc="${v//[[:cntrl:]]/}"

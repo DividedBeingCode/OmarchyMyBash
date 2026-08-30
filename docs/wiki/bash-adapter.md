@@ -697,3 +697,73 @@ The adapter keeps running shells synchronized with theme switches. `__o10k_sourc
 ## Modern CLI Layer
 
 After hook installation the adapter sources `~/.config/omarchy10k/tools.sh` (installed by `install.sh` from `config/tools.sh` in the repo). It upgrades interactive Unix defaults with modern replacements that take on the standard command names — `ls`→eza, `cat`→bat (plus themed `MANPAGER`), `grep`→rg, `top`→btop, `du`→dust, `df`→duf, `ps`→procs, `cd`→zoxide (`--cmd cd`), plus atuin (Ctrl-R history, up-arrow untouched), fzf key bindings (`fzf --bash`), and the `y` yazi wrapper. Guards: every block checks `command -v` first, so missing tools degrade silently; the whole layer is skipped with `O10K_NO_TOOLS=1`; aliases never affect scripts (interactive shells only). Underlying packages are ensured by `install.sh` (skippable with `O10K_SKIP_TOOLS=1`).
+
+## Terminal identification (`O10K_TERM`)
+
+Resolved **once per shell**, before the shell-integration guard. Everything
+downstream reads it: the OSC 133 gate, the daemon's capability profile, and
+`omarchy10k doctor`.
+
+Guessing from the environment does not work, and **foot** is why. foot
+deliberately unsets `TERM_PROGRAM` — its man page lists the variable under
+*"Variables unset in the child process"* — and Omarchy sets
+`term=xterm-256color` in `foot.ini`. A real foot session therefore looks like:
+
+```
+TERM=xterm-256color   COLORTERM=truecolor   (no TERM_PROGRAM at all)
+```
+
+It carries no identifying signal whatsoever, and used to resolve to
+`unknown`, whose profile denies OSC 8, OSC 52, sixel, undercurl and
+synchronised output — every one of which foot supports.
+
+### Resolution order
+
+| # | Signal | Notes |
+|---|--------|-------|
+| 1 | `O10K_TERM` already set | Manual override, and what the probe writes |
+| 2 | `GHOSTTY_RESOURCES_DIR`, `TERM=xterm-ghostty`, `TERM=foot*`, `KITTY_WINDOW_ID` | Free. **Ghostty always lands here and never probes** |
+| 3 | XTVERSION probe (`CSI > q`) | Only when the above are inconclusive — in practice, foot |
+| 4 | `TERM_PROGRAM` | As before |
+| 5 | `unknown` | A real answer: selects the conservative profile rather than pretending |
+
+Real replies, captured 2026-08-30:
+
+```
+ghostty   ESC P > | ghostty 1.3.1-arch2 ESC \
+foot      ESC P > | foot(1.27.0)        ESC \
+```
+
+### Probe rules
+
+- **Interactive shells only.** A script or pipeline has no business writing
+  escape sequences at a terminal. `O10K_FORCE_PROBE=1` overrides, for tests.
+- **Skipped under `TMUX`.** tmux answers as itself and interposes its own
+  capability set.
+- **NOT skipped over ssh**, deliberately. Over ssh the pty runs back to the
+  *local* terminal, which answers with its real identity — and that terminal
+  is precisely the one rendering the prompt. Environment variables are least
+  trustworthy over ssh, which makes the probe most valuable there.
+- **250 ms** for the first byte (`O10K_PROBE_TIMEOUT`), 20 ms thereafter. 80 ms
+  was tried first and was measurably flaky: the same foot window answered on
+  one run and timed out on the next, because a cold-starting terminal is
+  still bringing up its window and fonts.
+- `stty` state is restored by a `trap ... RETURN`. A raw tty left behind is
+  the one unacceptable outcome.
+
+`O10K_TERM` is on the env-channel allowlist, so the daemon gets the shell's
+answer rather than guessing. It has no controlling tty and cannot probe, and
+a daemon reused across shells would otherwise inherit whichever terminal
+started it first.
+
+## OSC 133;C/D gating
+
+Emitted when `[terminal.semantic_prompts].enabled`, the terminal is known,
+and Ghostty has **not** injected its own integration.
+
+The signal for that last condition is the injected function
+`__ghostty_precmd`. It is **not** `GHOSTTY_SHELL_FEATURES`: Ghostty sets that
+identically whether `shell-integration` is `none` or `detect`, because it is
+populated from `shell-integration-features` — a different key naming which
+features are configured, not whether the integration was injected. Testing it
+meant the gate always returned, so 133;C/D never fired in Ghostty at all.
