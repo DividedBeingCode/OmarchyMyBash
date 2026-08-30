@@ -34,6 +34,28 @@ Item {
 
     signal picked(string key)
 
+    /// Category chips, DERIVED from the catalog rather than hand-listed.
+    ///
+    /// The list used to be a literal `["", "Prompt", "Animals", "Japan",
+    /// "Kaomoji"]` while the catalog's actual string is "Japan / Geek". The
+    /// filter is an exact compare, so the japan chip matched nothing and hid
+    /// 21 glyphs -- the whole ninja/torii/sushi/noodles/tea/katana family.
+    /// Deriving it means the chips cannot drift from the data again.
+    ///
+    /// "" is the "all" chip and always leads.
+    readonly property var categories: {
+        var seen = {}
+        var out = [""]
+        for (var i = 0; i < browser.catalog.length; i++) {
+            var c = String(browser.catalog[i].category || "")
+            if (c.length > 0 && !seen[c]) {
+                seen[c] = true
+                out.push(c)
+            }
+        }
+        return out
+    }
+
     readonly property var results: {
         var q = browser.query.trim().toLowerCase()
         var cat = browser.category
@@ -60,14 +82,14 @@ Item {
         width: parent.width
         spacing: Style.space(10)
 
-        // 76 glyphs in one grid is a wall. The catalog already carries a
+        // 78 glyphs in one grid is a wall. The catalog already carries a
         // category per entry; these just surface it.
         Row {
             width: parent.width
             spacing: Style.space(6)
 
             Repeater {
-                model: ["", "Prompt", "Animals", "Japan", "Kaomoji"]
+                model: browser.categories
 
                 delegate: Chip {
                     required property string modelData

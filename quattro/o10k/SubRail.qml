@@ -6,7 +6,7 @@ import qs.Commons
 //
 // Three tabs stacked more than a screen: Prompt ran STYLE PRESET → SEPARATOR →
 // PROMPT CHARACTER → ALL GLYPHS → BEHAVIOR, so the per-segment toggles — the
-// controls changed most often — sat below a 76-tile glyph wall.
+// controls changed most often — sat below a 78-tile glyph wall.
 //
 // Deliberately lighter than Studio.qml's top rail: underline rather than an
 // accent fill, so the two levels read as a hierarchy instead of competing.
@@ -15,29 +15,34 @@ Item {
 
     /// Sub-tab labels, in order.
     property var tabs: []
-    /// Selected index. Always clamped into range — a tab body keyed on this
-    /// would render nothing at all for an out-of-range value, which looks
-    /// like a blank tab with no error anywhere.
+    /// Selected index — an INPUT, owned by the call site.
+    ///
+    /// Every call site binds this (`current: promptTab.subTab`) and owns the
+    /// value through `onSwitched`. Nothing in here ever assigns it: a single
+    /// imperative write destroys that binding permanently, and the rail would
+    /// then quietly stop following its tab's own state. Clamping happens in
+    /// `clamped` instead, which is what the rail actually renders from.
     property int current: 0
 
-    signal switched(int index)
+    /// `current` pulled into range, for rendering.
+    ///
+    /// A tab body keyed on an out-of-range index renders nothing at all —
+    /// a blank tab with no error anywhere — so the rail must never point at
+    /// one, even while `tabs` is mid-swap and `current` still holds the old
+    /// tab's index.
+    readonly property int clamped: rail._clamp(rail.current)
 
-    onTabsChanged: rail.current = rail._clamp(rail.current)
-    onCurrentChanged: {
-        var c = rail._clamp(rail.current)
-        if (c !== rail.current) rail.current = c
-    }
+    signal switched(int index)
 
     function _clamp(i) {
         if (!rail.tabs || rail.tabs.length === 0) return 0
         return Math.max(0, Math.min(rail.tabs.length - 1, i))
     }
 
-    /// Select a sub-tab and notify. Setting `current` directly does not emit.
+    /// Notify that a sub-tab was chosen. The call site moves `current`; the
+    /// rail does not move it itself, or the binding would be gone.
     function select(index) {
-        var c = rail._clamp(index)
-        rail.current = c
-        rail.switched(c)
+        rail.switched(rail._clamp(index))
     }
 
     visible: rail.tabs && rail.tabs.length > 1
@@ -59,7 +64,7 @@ Item {
                 implicitWidth: text.implicitWidth + Style.space(18)
                 implicitHeight: text.implicitHeight + Style.space(14)
 
-                readonly property bool isCurrent: rail.current === item.index
+                readonly property bool isCurrent: rail.clamped === item.index
 
                 Text {
                     id: text

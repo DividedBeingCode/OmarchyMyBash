@@ -31,12 +31,23 @@ Rectangle {
     color: tile.active ? Color.accent
         : (area.containsMouse ? Style.hoverFill : Style.normalFill)
 
+    // Bounded, not just centred. `glyphSize` is the MAXIMUM, not a fixed
+    // size: the catalog holds multi-character kaomoji (`¯\_(ツ)_/¯`,
+    // `(╯°□°)╯`), and an unbounded centred Text renders those ~250px wide in
+    // a ~72px tile, painting straight over its neighbours. The Kaomoji
+    // category is a contiguous block of 11 tiles, so filtering to it turned
+    // the grid into a smear. HorizontalFit shrinks those to fit while a
+    // single glyph still gets the full tile-derived size.
     Text {
         anchors.centerIn: parent
+        width: parent.width - Style.space(6)
+        horizontalAlignment: Text.AlignHCenter
         text: tile.glyph
         color: tile.active ? Color.background : Color.foreground
         font.family: tile.previewFont
         font.pixelSize: tile.glyphSize
+        fontSizeMode: Text.HorizontalFit
+        minimumPixelSize: Style.font.caption
     }
 
     Text {

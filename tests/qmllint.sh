@@ -78,6 +78,22 @@ if grep -rnoE '\\u[0-9a-fA-F]{5,6}' *.qml o10k/*.qml 2>/dev/null | grep -v 'u{' 
     FAIL=1
 fi
 
+# The glyph browser's category chips are DERIVED from the catalog now, but
+# the QML test's fixture is still hand-written. It used to invent a category
+# ("Japan") that exists nowhere in the shipped catalog ("Japan / Geek"), so
+# the test asserting the category filter works passed while the shipped chip
+# matched nothing and hid 21 glyphs. A fixture that does not speak the real
+# vocabulary tests the fixture. Every category string the product ships must
+# appear in the test fixture.
+TESTFIX="$ROOT/tests/qml/tst_glyphbrowser.qml"
+while IFS= read -r cat; do
+    if ! grep -qF "category: \"$cat\"" "$TESTFIX"; then
+        echo "GLYPH CATEGORY \"$cat\" is shipped in StudioPrompt.qml but absent from"
+        echo "  tests/qml/tst_glyphbrowser.qml -- the fixture has drifted from the catalog."
+        FAIL=1
+    fi
+done < <(grep -o 'category: "[^"]*"' StudioPrompt.qml | sed 's/category: "//; s/"$//' | sort -u)
+
 total=$(for f in *.qml o10k/*.qml; do
             [[ -e "$f" ]] && "$LINT" -I "$SHIM" "$f" 2>&1
         done | grep -c "^Warning:")
