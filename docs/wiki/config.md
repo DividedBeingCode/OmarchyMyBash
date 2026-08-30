@@ -218,11 +218,10 @@ orange = "#ff9e64"
 
 ## `[looks.<name>]`
 
-Named Looks: a patch bundle over the config plus a palette directive. Curated
-Looks are compiled into the daemon (`omnarchy`, `tokyo-rainbow`,
-`framed-gradient`, `lean-pure`, `slanted-owl`, `gruvbox-drift`,
-`rose-classic`, `polar-lean`); user entries defined in `config.toml` shadow a
-curated Look of the same name. Added in protocol 0.5 / crate 0.4.0.
+Named Looks: a patch bundle over the config plus a palette directive. 52
+curated Looks are compiled into the daemon (see `omarchy10k look list` for
+the full set); user entries defined in `config.toml` shadow a curated Look of
+the same name. Added in protocol 0.5 / crate 0.4.0.
 
 | Key | Type | Default | Values | Description |
 |-----|------|---------|--------|-------------|

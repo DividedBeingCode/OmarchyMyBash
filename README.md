@@ -10,7 +10,7 @@ The visual language of Powerlevel10k, built the way Omarchy Quattro is built.
 
 </div>
 
-![The Studio — 29 presets, each rendered by the daemon, with a live six-scene preview](docs/img/studio-looks.png)
+![The Studio — 52 presets, each rendered by the daemon, with a live six-scene preview](docs/img/studio-looks.png)
 
 ---
 
@@ -40,7 +40,7 @@ Studio is produced by the same code that draws your prompt.
 | | |
 |---|---|
 | **Prompt engine** | 25 segments · 11 style presets · 14 separator shapes · hue-anchored gradients · frames · transient prompts · right rail · vi-mode character · git and worktree awareness |
-| **Presets** | 28 curated Looks and 53 palettes — 39 hand-tuned plus one derived from every Omarchy theme you have installed |
+| **Presets** | 52 curated Looks and 53 palettes — 39 hand-tuned plus one derived from every Omarchy theme you have installed |
 | **Control Center** | A summonable Studio and a bar popout, both driven by live daemon renders |
 | **Bash layer** | Hook broker, per-shell daemon lifecycle, instant prompt, env channel — *coexisting* with Omarchy's own bash layer rather than replacing it |
 | **Terminal integration** | OSC 7/8/52/133, XTVERSION probing, kitty graphics, DECSCUSR cursor shapes |
@@ -102,7 +102,7 @@ from the control you are turning.
 
 | Tab | What it does |
 |---|---|
-| **Looks** | Browse 28 presets. Every card is a real prompt rendered in that preset's own colors. Hover previews, click selects, Apply commits |
+| **Looks** | Browse 52 presets. Every card is a real prompt rendered in that preset's own colors. Hover previews, click selects, Apply commits |
 | **Prompt** | Presets, separators, prompt characters, a searchable browser of 80 glyphs, per-segment toggles |
 | **Theme** | Apply an Omarchy theme desktop-wide, or pin terminal colors independently. Every chip carries its actual palette |
 | **Rice** | Terminal, git, and system-tool theming through the `o10k` templates |
@@ -248,7 +248,7 @@ NDJSON socket protocol in [protocol.md](docs/wiki/protocol.md).
 
 ## Status
 
-- **370 unit tests** (267 daemon, 103 CLI), 77 QML component tests, 7 JS
+- **396 unit tests** (293 daemon, 103 CLI), 77 QML component tests, 7 JS
   suites, plus integration and real-terminal end-to-end suites
 - A `qmllint` gate that fails on parse errors and unqualified access
 - Protocol 0.5 · crate 0.4.0

@@ -549,6 +549,227 @@ pub fn curated() -> Vec<LookDef> {
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "text" },
             }), "catppuccin-latte")),
+
+        // ── Ukiyo: the Japan glyph family, unused until now ───────────────
+        look("torii-dusk", "Torii Dusk",
+            "Ink-wash blues and a gate at the end of the path.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "slanted", "separators": { "shape": "slanted" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "torii", "error": "torii", "transient": "torii" } },
+                "git": { "branch_icon": "octicon" },
+            }), "kanagawa")),
+        look("sushi-bar", "Sushi Bar",
+            "Muted rose, plain bars, one piece at a time.",
+            &["complete", "minimal"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "classic", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "sushi", "error": "kaomoji_rage", "transient": "sushi" } },
+                "git": { "branch_icon": "text" },
+            }), "rose-pine")),
+        look("ramen-shop", "Ramen Shop",
+            "Warm broth colors, dense as a full counter.",
+            &["complete", "dense"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "dense", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "noodles", "error": "kaomoji_rage", "transient": "noodles" } },
+                "git": { "branch_icon": "octicon" },
+            }), "gruvbox")),
+        look("sakura-drift", "Sakura Drift",
+            "Petals dissolving between segments.",
+            &["complete", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "gradient", "separators": { "shape": "fade" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "sakura", "error": "sakura", "transient": "sakura" } },
+                "git": { "branch_icon": "nerd" },
+            }), "rose-pine-moon")),
+        look("tea-house", "Tea House",
+            "Green-grey calm and nothing you did not ask for.",
+            &["complete", "minimal"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "tea", "error": "tea", "transient": "tea" } },
+                "git": { "branch_icon": "text" },
+            }), "everforest")),
+        look("steel-katana", "Steel Katana",
+            "Cold blue-grey with a flame-cut edge.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "powerline", "separators": { "shape": "flame" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "katana", "error": "katana", "transient": "katana" } },
+                "git": { "branch_icon": "powerline" },
+            }), "iceberg")),
+        look("noh-mask", "Noh Mask",
+            "Muted stage colors behind a framed rule.",
+            &["complete", "framed", "two-line", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "framed", "separators": { "shape": "slanted" }, "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "subtle" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "mask", "error": "drama", "transient": "mask" } },
+                "git": { "branch_icon": "octicon" },
+                "prompt": { "newline": true },
+            }), "zenburn")),
+
+        // ── Sci-fi ────────────────────────────────────────────────────────
+        look("xenomorph", "Xenomorph",
+            "Acid green on black, flame-cut. Something is in the vents.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "gradient", "separators": { "shape": "flame" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "alien", "error": "alien", "transient": "alien" } },
+                "git": { "branch_icon": "nerd" },
+            }), "scarlet-protocol")),
+        look("bot-farm", "Bot Farm",
+            "Flat IBM Carbon, arrows, and no personality whatsoever.",
+            &["complete", "powerline"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "powerline", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "robot", "error": "robot", "transient": "robot" } },
+                "git": { "branch_icon": "powerline" },
+            }), "oxocarbon")),
+        look("ghost-shell", "Ghost Shell",
+            "Segments that fade out before you finish reading them.",
+            &["complete", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "gradient", "separators": { "shape": "fade" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "ghost", "error": "ghost", "transient": "ghost" } },
+                "git": { "branch_icon": "nerd" },
+            }), "poimandres")),
+        look("blue-cascade", "Blue Cascade",
+            "Falling green on blue-black. Dense and unblinking.",
+            &["complete", "dense"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "dense", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "lambda", "error": "lambda", "transient": "lambda" } },
+                "git": { "branch_icon": "text" },
+            }), "blue-matrix")),
+        look("deep-space", "Deep Space",
+            "Navy with a magenta pulse, full rainbow segments.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "triangle", "error": "triangle", "transient": "triangle" } },
+                "git": { "branch_icon": "powerline" },
+                "prompt": { "newline": true },
+            }), "andromeda")),
+
+        // ── Expressive: the kaomoji family ────────────────────────────────
+        look("shrug-life", "Shrug Life",
+            "Bright and friendly, and completely unbothered by exit 1.",
+            &["complete", "minimal"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "kaomoji_shrug", "error": "kaomoji_shrug", "transient": "kaomoji_shrug" } },
+                "git": { "branch_icon": "text" },
+            }), "snazzy")),
+        look("sleepy-dev", "Sleepy Dev",
+            "Dusky blues for the 2am session.",
+            &["complete", "minimal", "two-line"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "pure", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "kaomoji_sleepy", "error": "kaomoji_rage", "transient": "kaomoji_sleepy" } },
+                "git": { "branch_icon": "text" },
+                "prompt": { "newline": true },
+            }), "nightfox")),
+        look("hype-machine", "Hype Machine",
+            "Maximum voltage and a prompt that is thrilled for you.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "kaomoji_cheer", "error": "kaomoji_rage", "transient": "kaomoji_cheer" } },
+                "git": { "branch_icon": "powerline" },
+            }), "neon")),
+        look("zen-mode", "Zen Mode",
+            "The least prompt that is still a prompt.",
+            &["complete", "minimal"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "minimal", "separators": { "shape": "none" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "kaomoji_relaxed", "error": "kaomoji_relaxed", "transient": "kaomoji_relaxed" } },
+                "git": { "branch_icon": "none" },
+            }), "iceberg")),
+
+        // ── Regal ─────────────────────────────────────────────────────────
+        look("crown-jewels", "Crown Jewels",
+            "Saturated violet with rounded caps.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "powerline", "separators": { "shape": "round" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "crown", "error": "crown", "transient": "crown" } },
+                "git": { "branch_icon": "powerline" },
+            }), "aura")),
+        look("swordsman", "Swordsman",
+            "Hot coral, slanted cuts, one clean stroke.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "slanted", "separators": { "shape": "slanted" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "sword", "error": "sword", "transient": "sword" } },
+                "git": { "branch_icon": "octicon" },
+            }), "horizon")),
+
+        // ── Structure only: your palette, a different shape ───────────────
+        look("ascii-only", "ASCII Only",
+            "No Nerd Font anywhere. For a console, an SSH session, or a tmux that lies about its font.",
+            &["structure", "ascii-safe", "minimal"],
+            serde_json::json!({
+                "style": { "preset": "classic", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "dollar", "error": "dollar", "transient": "dollar" } },
+                "git": { "branch_icon": "text" },
+            })),
+        look("single-line", "Single Line",
+            "Everything on one row, no blank line above it.",
+            &["structure", "minimal"],
+            serde_json::json!({
+                "style": { "preset": "lean", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
+                "git": { "branch_icon": "octicon" },
+                "prompt": { "newline": false, "blank_line": false },
+            })),
+        look("wide-load", "Wide Load",
+            "Every segment, packed tight, thin arrows between.",
+            &["structure", "dense", "powerline", "nerd-font"],
+            serde_json::json!({
+                "style": { "preset": "dense", "separators": { "shape": "powerline_thin" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "linux" },
+                              "character": { "success": "angle", "error": "angle", "transient": "angle" } },
+                "git": { "branch_icon": "octicon" },
+            })),
+        look("round-trip", "Round Trip",
+            "Powerline with rounded caps instead of arrows.",
+            &["structure", "powerline", "nerd-font"],
+            serde_json::json!({
+                "style": { "preset": "powerline", "separators": { "shape": "round" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
+                "git": { "branch_icon": "powerline" },
+            })),
+        look("diamond-cut", "Diamond Cut",
+            "Faceted separators. Sharper than round, softer than flame.",
+            &["structure", "powerline", "nerd-font"],
+            serde_json::json!({
+                "style": { "preset": "powerline", "separators": { "shape": "diamond" }, "frame": { "enabled": false } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "triangle", "error": "triangle", "transient": "triangle" } },
+                "git": { "branch_icon": "powerline" },
+            })),
     ]
 }
 
@@ -949,6 +1170,34 @@ mod tests {
             character.contains_key("vi_mode"),
             "segments.character.vi_mode belongs to the user"
         );
+    }
+
+    #[test]
+    fn the_library_covers_its_own_glyph_families() {
+        // 29 Looks drew on four glyph families and left Japan, sci-fi and most
+        // kaomoji entirely unused.
+        let all: Vec<String> = curated()
+            .iter()
+            .map(|l| serde_json::to_string(&l.patch).unwrap_or_default())
+            .collect();
+        let joined = all.join(" ");
+        for glyph in ["torii", "sushi", "noodles", "sakura", "tea", "katana",
+                      "alien", "robot", "ghost", "crown", "sword",
+                      "kaomoji_shrug", "kaomoji_sleepy", "kaomoji_cheer"] {
+            assert!(joined.contains(glyph), "no Look uses the {glyph} glyph");
+        }
+        assert_eq!(curated().len(), 52, "expected 52 curated Looks");
+    }
+
+    #[test]
+    fn every_look_name_is_unique() {
+        let mut seen = std::collections::BTreeSet::new();
+        let dupes: Vec<String> = curated()
+            .iter()
+            .filter(|l| !seen.insert(l.name.clone()))
+            .map(|l| l.name.clone())
+            .collect();
+        assert!(dupes.is_empty(), "duplicate Look names: {dupes:?}");
     }
 }
 
