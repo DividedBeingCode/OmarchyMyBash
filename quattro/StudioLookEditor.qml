@@ -285,7 +285,11 @@ Item {
                 bordered: true
                 enabled: saveAs.text.trim().length > 0
                 onClicked: {
-                    if (editor.service) editor.service.saveLook(saveAs.text.trim())
+                    // Hand over the edited theme, or the palette rows above
+                    // are decorative.
+                    if (editor.service)
+                        editor.service.saveLook(saveAs.text.trim(), null,
+                                                editor.workingPatch.theme)
                     saveAs.text = ""
                 }
             }
@@ -298,7 +302,8 @@ Item {
                 enabled: editor.isUserLook
                 onClicked: {
                     if (editor.service && editor.look)
-                        editor.service.saveLook(editor.look.name)
+                        editor.service.saveLook(editor.look.name, null,
+                                                editor.workingPatch.theme)
                 }
             }
 

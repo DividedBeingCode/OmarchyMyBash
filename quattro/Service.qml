@@ -415,13 +415,20 @@ Item {
     /// Lives here rather than on each surface because Panel.qml and
     /// Gallery.qml each had their own copy writing to their own socket —
     /// the duplication this pass exists to remove.
-    function saveLook(name, cb) {
+    /// Save the daemon's current effective config as a named Look.
+    ///
+    /// `theme` is an optional `{ source, custom }` object. The daemon can only
+    /// snapshot the colours it is currently rendering with, so without this
+    /// the Studio's palette editor -- the one place eleven roles can be tuned
+    /// by hand -- discarded every edit the moment you pressed Save.
+    function saveLook(name, cb, theme) {
         var safe = String(name || "").trim()
         if (safe.length === 0) return service._err("a Look needs a name")
         var id = service._nextId("looksave")
-        var sent = service._rpc(JSON.stringify({
-            type: "control", command: "looks_save", name: safe, label: safe, id: id
-        }) + "\n", id, function (resp) {
+        var msg = { type: "control", command: "looks_save",
+                    name: safe, label: safe, id: id }
+        if (theme && Object.keys(theme).length > 0) msg.theme = theme
+        var sent = service._rpc(JSON.stringify(msg) + "\n", id, function (resp) {
             service.fetchLooks()
             // A new Look changes nothing about existing renders, but the
             // saved one must not inherit a cache entry keyed on its name.

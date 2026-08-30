@@ -165,6 +165,32 @@ const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(25
 /// Access and metadata-only events must NOT trigger a reload: `reload_config`
 /// reads the very directories being watched, so treating a read as a change
 /// makes the watcher feed itself forever.
+/// Perform the reloads a coalesced burst asked for.
+///
+/// Shared by the immediate path and the trailing flush so the two cannot
+/// drift. `config` and `plugin` both mean "re-read config.toml and re-scan
+/// plugins", so they collapse to one call rather than two.
+fn run_reload(state: &Arc<DaemonState>, config: bool, plugin: bool, theme: bool) {
+    if config || plugin {
+        let state = Arc::clone(state);
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                if let Err(e) = state.reload_config().await {
+                    warn!("auto-reload failed: {e}");
+                }
+            });
+        });
+    }
+    if theme {
+        let state = Arc::clone(state);
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                state.reload_theme().await;
+            });
+        });
+    }
+}
+
 fn is_content_change(kind: &notify::EventKind) -> bool {
     use notify::event::{EventKind, ModifyKind};
     match kind {
@@ -235,8 +261,40 @@ async fn run_watchers(
         let mut last_reload = std::time::Instant::now()
             .checked_sub(RELOAD_DEBOUNCE)
             .unwrap_or_else(std::time::Instant::now);
+        // Pending work seen during a debounce window, flushed once things go
+        // quiet. The debounce used to be leading-edge ONLY: the first event
+        // reloaded and every event for the next 250ms was dropped with no
+        // trailing pass. `omarchy theme set` rewrites a directory of files,
+        // so the reload ran against the first one and discarded the rest,
+        // leaving the daemon on stale colours until something unrelated
+        // changed. The three flags are separate because one shared timer
+        // also meant a config write within 250ms of a theme write vanished.
+        let (mut pending_config, mut pending_plugin, mut pending_theme) =
+            (false, false, false);
         loop {
-            match rx.recv() {
+            // Block outright while idle. Only poll while a burst is being
+            // coalesced -- otherwise every daemon would wake four times a
+            // second forever, and a shell session runs one daemon each.
+            let pending_any = pending_config || pending_plugin || pending_theme;
+            let received = if pending_any {
+                rx.recv_timeout(RELOAD_DEBOUNCE)
+            } else {
+                rx.recv().map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected)
+            };
+            match received {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // Quiet period: flush whatever the window swallowed.
+                    if pending_config || pending_plugin || pending_theme {
+                        let (c, p, t) = (pending_config, pending_plugin, pending_theme);
+                        pending_config = false;
+                        pending_plugin = false;
+                        pending_theme = false;
+                        last_reload = std::time::Instant::now();
+                        run_reload(&state, c, p, t);
+                    }
+                    continue;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 Ok(event) => {
                     // Only real content changes may trigger a reload.
                     //
@@ -269,42 +327,20 @@ async fn run_watchers(
                         .iter()
                         .any(|p| p.starts_with(&plugins_root));
 
-                    if (is_config || is_plugin || is_theme)
-                        && last_reload.elapsed() < RELOAD_DEBOUNCE
-                    {
+                    if !(is_config || is_plugin || is_theme) {
                         continue;
                     }
-                    if is_config || is_plugin || is_theme {
-                        last_reload = std::time::Instant::now();
+                    if last_reload.elapsed() < RELOAD_DEBOUNCE {
+                        // Remember it instead of dropping it; the timeout arm
+                        // above flushes once the burst ends.
+                        pending_config |= is_config;
+                        pending_plugin |= is_plugin;
+                        pending_theme |= is_theme;
+                        continue;
                     }
+                    last_reload = std::time::Instant::now();
 
-                    if is_config {
-                        let state = Arc::clone(&state);
-                        tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                if let Err(e) = state.reload_config().await {
-                                    warn!("auto-reload config failed: {e}");
-                                }
-                            });
-                        });
-                    } else if is_plugin {
-                        let state = Arc::clone(&state);
-                        tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                if let Err(e) = state.reload_config().await {
-                                    warn!("auto-reload plugins failed: {e}");
-                                }
-                            });
-                        });
-                    }
-                    if is_theme {
-                        let state = Arc::clone(&state);
-                        tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                state.reload_theme().await;
-                            });
-                        });
-                    }
+                    run_reload(&state, is_config, is_plugin, is_theme);
                 }
                 Err(_) => break,
             }

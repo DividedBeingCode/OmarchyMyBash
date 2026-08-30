@@ -553,6 +553,20 @@ async fn handle_control(
                     },
                     "prompt": { "blank_line": current.prompt.blank_line },
                 });
+                // An explicit `theme` object from the caller is folded into the
+                // saved patch. Without it a Look could only ever capture the
+                // daemon's CURRENT colours, so the Studio's palette editor --
+                // the one place you can tune eleven roles by hand -- silently
+                // discarded every edit on save.
+                //
+                // `palette` stays "keep" so the directive does not overwrite
+                // the patch's own theme at resolve time.
+                let mut entry_patch = entry_patch;
+                if let Some(theme) = rest.get("theme").filter(|t| t.is_object()) {
+                    if let Some(obj) = entry_patch.as_object_mut() {
+                        obj.insert("theme".into(), theme.clone());
+                    }
+                }
                 let entry = serde_json::json!({ "label": label, "palette": "keep", "patch": entry_patch });
                 let mut looks_tbl = serde_json::Map::new();
                 looks_tbl.insert(name.clone(), entry);
@@ -733,7 +747,12 @@ async fn handle_prompt(
     };
     let home = std::env::var("HOME").unwrap_or_default();
     let in_ssh = std::env::var("SSH_TTY").is_ok() || std::env::var("SSH_CONNECTION").is_ok();
-    let term_caps = crate::terminal::TermCaps::detect();
+    // The shell's terminal, like the main renderer -- not the daemon's own
+    // environment. Plugin segments gate OSC 8 and undercurl on this too, so
+    // leaving it as detect() meant built-in segments and plugin segments in
+    // the SAME prompt could disagree about what the terminal supports.
+    let term_caps =
+        crate::terminal::TermCaps::for_kind(crate::terminal::kind_from_channel(req.env.as_ref()));
     let renderer = PromptRenderer::new(config, &palette);
 
     // Plugin segments: rendered against the effective (profile-merged)
