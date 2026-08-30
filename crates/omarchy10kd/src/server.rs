@@ -90,21 +90,6 @@ pub struct PreviewRequest {
     /// which is what the CLI and the bar panel still use.
     #[serde(default)]
     pub scenes: Option<Vec<PreviewScene>>,
-    /// What the Look/patch is layered onto: `"current"` (default) or
-    /// `"default"`.
-    ///
-    /// A gallery of preset cards needs `"default"`. Layering every card on
-    /// the LIVE config meant applying one preset silently rewrote all the
-    /// others: a Look patch is a delta, so every key it does not mention was
-    /// inherited from whatever was applied last. Applying `synthwave` changed
-    /// how 27 of the other 28 cards rendered — it left `frame.gap_char` and
-    /// `frame.gap_gradient` behind, and every card that drew a frame picked
-    /// them up.
-    ///
-    /// The live `theme` still travels, because a `structure` Look is
-    /// documented to respect whatever palette you are on.
-    #[serde(default)]
-    pub base: Option<String>,
 }
 
 /// One shell state to render the previewed config against.
@@ -856,7 +841,6 @@ async fn handle_preview(
         if req.look.is_some()
             || req.patch.is_some()
             || profile_patch.is_some()
-            || req.base.is_some()
         {
             // Unknown look names fall back to the base config (gallery
             // behavior); an unrepresentable patch is a preview error.
@@ -1159,13 +1143,7 @@ fn effective_preview_config(
     current: &Config,
     profile: Option<&toml::Value>,
 ) -> Result<Config, String> {
-    let mut effective = if req.base.as_deref() == Some("default") {
-        let mut c = Config::default();
-        c.theme = current.theme.clone();
-        c
-    } else {
-        current.clone()
-    };
+    let mut effective = current.clone();
     if let Some(look_name) = &req.look {
         if let Some(l) = crate::looks::resolve(look_name, &effective) {
             // apply_look, not apply_transient: a card must show what pressing
@@ -1788,7 +1766,6 @@ mod tests {
     /// Minimal fully-specified PreviewRequest for override tests.
     pub(super) fn preview_req(patch: Option<serde_json::Value>, look: Option<&str>) -> PreviewRequest {
         PreviewRequest {
-            base: None,
             cwd: "~/projects/my-app".into(),
             exit_code: 0,
             cmd_duration_ms: 0,
@@ -2170,38 +2147,9 @@ mod tests {
     // applied last. Measured before the fix: applying `synthwave` changed 27
     // of the other 28 cards; `framed-focus` changed 25.
 
-    fn card_config(look: &str, base: &Config, baseline: Option<&str>) -> Config {
-        let mut req = preview_req(None, Some(look));
-        req.base = baseline.map(String::from);
+    fn card_config(look: &str, base: &Config) -> Config {
+        let req = preview_req(None, Some(look));
         effective_preview_config(&req, base, None).expect("card renders")
-    }
-
-    #[test]
-    fn applying_a_look_does_not_rewrite_the_other_cards() {
-        let base = Config::default();
-        for applied in ["synthwave", "framed-focus", "tokyo-rainbow"] {
-            let after = {
-                let l = crate::looks::resolve(applied, &base).expect("curated");
-                crate::looks::apply_transient(&base, &l.patch).expect("apply")
-            };
-            for def in crate::looks::all(&base) {
-                if def.name == applied {
-                    continue;
-                }
-                let before = card_config(&def.name, &base, Some("default"));
-                let now = card_config(&def.name, &after, Some("default"));
-                assert_eq!(
-                    before.style, now.style,
-                    "applying {applied} changed the {} card's style",
-                    def.name
-                );
-                assert_eq!(
-                    before.prompt.newline, now.prompt.newline,
-                    "applying {applied} changed the {} card's line count",
-                    def.name
-                );
-            }
-        }
     }
 
     /// Render a config the way a card and an applied prompt both render.
@@ -2294,7 +2242,7 @@ mod tests {
             red: None, green: None, yellow: None, blue: None,
             magenta: None, cyan: None, orange: None,
         });
-        let card = card_config("dot-matrix", &base, Some("default"));
+        let card = card_config("dot-matrix", &base);
         assert_eq!(card.theme, base.theme, "structure card lost your palette");
     }
 
@@ -2308,7 +2256,7 @@ mod tests {
             red: None, green: None, yellow: None, blue: None,
             magenta: None, cyan: None, orange: None,
         });
-        let card = card_config("synthwave", &base, Some("default"));
+        let card = card_config("synthwave", &base);
         let accent = card.theme.custom.as_ref().and_then(|c| c.accent.clone());
         assert_ne!(accent.as_deref(), Some("#ff0000"), "complete card kept the old accent");
     }

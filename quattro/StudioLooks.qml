@@ -138,11 +138,9 @@ Item {
 
     function _fetchCard(look) {
         if (!looks.service) return
-        // `base: "default"` — a card shows what the PRESET is, not what your
-        // config plus the preset happens to be. Layered on the live config,
-        // applying one preset visibly rewrote the frame and glyphs on all the
-        // others, because a Look patch is a delta and every key it omits was
-        // inherited from whatever was applied last.
+        // Rendered on your LIVE config on purpose: applying a Look is atomic,
+        // so a card is stable across applies without a synthetic baseline —
+        // and this way the card also reflects segments you have switched off.
         looks.service.requestPreview(look.name, null,
             Preview.cardScenes(looks.cardCols), true,
             function (res) {
@@ -152,7 +150,7 @@ Item {
                 // Reassigned, not mutated: a plain JS object mutated in place
                 // never re-evaluates the bindings that read it.
                 looks.cardRenders = next
-            }, looks.cardCols, "default")
+            }, looks.cardCols)
     }
 
     function refreshCards() {

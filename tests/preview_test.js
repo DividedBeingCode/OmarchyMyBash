@@ -164,30 +164,20 @@ function fakeClock() {
 })();
 
 
-// ── Card baseline ──────────────────────────────────────────────────────────
-//
-// Preset cards render on `base: "default"` so applying one preset cannot
-// rewrite how the others look. That makes the baseline part of a render's
-// identity, and therefore part of its cache key: the same Look rendered as a
-// card and in the pinned pane are two different renders.
-(() => {
-    const card = P.cacheKey('synthwave', null, P.CARD_SCENES, 38, 'default');
-    const pane = P.cacheKey('synthwave', null, P.CARD_SCENES, 38, undefined);
-    check('the baseline separates card and pane renders', card !== pane, true);
-
-    const same = P.cacheKey('synthwave', null, P.CARD_SCENES, 38, 'default');
-    check('the same baseline still shares a cache entry', card === same, true);
-})();
-
+// The card baseline flag is gone: applying a Look is atomic, so a card
+// rendered on the live config is already stable across applies — and it also
+// reflects the user's own segment toggles, which the default baseline hid.
 (() => {
     const req = JSON.parse(P.buildRequest(
-        { cwd: '~/app', cols: 38, base: 'default' }, null, 'synthwave', null, 'x1'));
-    check('base reaches the daemon', req.base, 'default');
+        { cwd: '~/app', cols: 38 }, null, 'synthwave', null, 'x1'));
+    check('no baseline field is sent', Object.prototype.hasOwnProperty.call(req, 'base'), false);
 
-    const plain = JSON.parse(P.buildRequest(
-        { cwd: '~/app', cols: 38, base: undefined }, null, 'synthwave', null, 'x2'));
-    check('an absent baseline is omitted, not sent as null',
-          Object.prototype.hasOwnProperty.call(plain, 'base'), false);
+    const a = P.cacheKey('synthwave', null, P.CARD_SCENES, 38);
+    const b = P.cacheKey('synthwave', null, P.CARD_SCENES, 38);
+    check('the same request shares a cache entry', a === b, true);
+    check('width still separates renders',
+          P.cacheKey('synthwave', null, P.CARD_SCENES, 38) !==
+          P.cacheKey('synthwave', null, P.CARD_SCENES, 80), true);
 })();
 
 if (failures) {

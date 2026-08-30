@@ -166,17 +166,14 @@ function buildRequest(ctx, patch, look, scenes, id) {
 /// `cols` is part of the key. Without it a render made for a narrow pane is
 /// served back to a wide one and vice versa -- the prompt is laid out to a
 /// column count, so two widths are two different renders.
-function cacheKey(look, patch, scenes, cols, base) {
+function cacheKey(look, patch, scenes, cols) {
     var sceneKeys = [];
     if (scenes) {
         for (var i = 0; i < scenes.length; i++)
             sceneKeys.push(scenes[i].key || scenes[i].label || String(i));
     }
-    // `base` is part of the key: the same Look rendered as a gallery card
-    // (on default) and in the pinned pane (on your live config) are two
-    // different renders, and sharing one entry served whichever arrived first.
     return [String(look || ""), _stableStringify(patch),
-            sceneKeys.join(","), String(cols || ""), String(base || "")].join("|");
+            sceneKeys.join(","), String(cols || "")].join("|");
 }
 
 function _stableStringify(value) {

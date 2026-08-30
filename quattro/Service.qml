@@ -261,12 +261,12 @@ Item {
     /// Cached: an identical (look, patch, scenes) triple resolves from the
     /// broker without touching the socket. `immediate` skips the hover
     /// debounce, which is what a click wants.
-    function requestPreview(look, patch, scenes, immediate, cb, cols, base) {
+    function requestPreview(look, patch, scenes, immediate, cb, cols) {
         // The pane knows how wide it is; the service does not. A render is
         // laid out to a column count, so the width has to reach both the
         // daemon and the cache key.
         var useCols = (cols && cols > 0) ? cols : service.previewCols
-        var key = Preview.cacheKey(look, patch, scenes, useCols, base)
+        var key = Preview.cacheKey(look, patch, scenes, useCols)
 
         // Fast path: already rendered. No socket, no timer, no frame cost.
         var probe = Store.brokerLookup(service._previewCache, key)
@@ -317,7 +317,7 @@ Item {
             }
 
             controlSocket.write(Preview.buildRequest(
-                { cwd: service.previewCwd, cols: useCols, base: base },
+                { cwd: service.previewCwd, cols: useCols },
                 patch, look, scenes, id))
             controlSocket.flush()
         }
