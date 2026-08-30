@@ -357,3 +357,80 @@ Both templates are emit-gated by `[rice]` config keys (both default `true`): `bl
 `BAT_THEME` regression fixed: the env template no longer emits a hardcoded Catppuccin theme; it emits a BAT_THEME export only when `[rice].bat_theme = "themed"` in the user config (grep-gated at source time — the Omarchy template engine is a flat sed pass with no conditionals). Default `ansi` inherits the theme-synced palette.
 
 The terminal include wiring (static `~/.config/omarchy10k/ghostty.conf` with `shell-integration = none` + the two optional config-file lines) is installed by `install.sh` idempotently, after a timestamped backup, and is removable by `--uninstall`.
+
+## Palette derivation (`palette_derive.rs`)
+
+Omarchy ships 22 themes; Omarchy10k shipped 8 curated prompt palettes, so 14
+themes — and every theme a user installs later — had no prompt colors at all.
+`palette_derive` closes that gap.
+
+An Omarchy `colors.toml` already **names** its roles (`accent`, `red`,
+`muted`, …), so derivation is not hue-bucketing. It is:
+
+1. **Map** the named roles across. Missing roles follow a fixed fallback
+   chain (`orange` → `yellow` → `red` → `accent`; `cyan` → `blue`; …). The
+   `white` theme ships no `orange`, so this path is exercised by a real theme.
+2. **Repair** contrast. Each role is measured against the theme's own
+   background with APCA; below its floor, lightness walks away from the
+   background in OKLCH (0.02 steps) until it clears or saturates.
+3. **Preserve character.** Hue and chroma are never invented — only lightness
+   moves. `vantablack` and `white` stay monochrome.
+
+Repair is not academic: `hackerman` ships `muted = "#2d3450"` on
+`background = "#0B0C16"`, and `matte-black` is no better. Both measure
+**APCA Lc 0.0** against their own background — invisible.
+
+### Contrast floors, and how they were chosen
+
+```
+LC_FOREGROUND = 45    LC_ACCENT = 32    LC_HUE = 25    LC_MUTED = 18
+```
+
+These repair what is *unreadable*; they do not enforce what would be ideal,
+because the colors belong to the theme the user picked.
+
+APCA rather than WCAG 2.x because these palettes are dark, and WCAG 2.x
+overstates contrast for dark colors badly enough that its own analysis
+concludes it cannot guide dark-mode design. OKLCH is the repair space because
+equal lightness steps are equal *perceived* steps, so hue and chroma hold
+still.
+
+But APCA is used as a **relative** instrument, not an absolute standard. Its
+tiers assume prose on a page; a prompt is one short token, and APCA weights
+green at 0.715 so saturated reds score low however visible they are. Two
+earlier drafts used APCA's own tiers (Lc 60, then Lc 45) and both flagged
+**Solarized Dark as broken on nine of its eleven roles**, along with Nord's,
+Dracula's and Gruvbox's reds. That is the instrument being wrong about the
+goal.
+
+The floors are therefore calibrated against the 16 curated palettes
+themselves — schemes read daily for up to fifteen years. Measured on their own
+backgrounds, the floor of that validated practice is:
+
+| role | minimum | (palette) | median |
+|------|---------|-----------|--------|
+| foreground | 46.4 | solarized-dark | 79.7 |
+| accent | 34.3 | solarized-dark | 54.9 |
+| hue roles | 27.2 | solarized-dark | 56.1 |
+| muted | 19.5 | tokyo-night | 40.2 |
+
+Each floor sits just under its role's validated minimum. The result: the
+deriver repairs **8% of roles** across the 22 shipped themes, and 8 themes
+come through untouched. `muted` dominates what it does touch — the
+well-known bright-black-as-text problem.
+
+### The gate
+
+`every_installed_omarchy_theme_derives_a_readable_palette` enumerates
+`/usr/share/omarchy/themes/` and fails if any shipped theme derives a palette
+below its floors, so a newly shipped theme that breaks derivation fails CI
+rather than shipping a washed-out prompt. It skips cleanly where Omarchy is
+not installed. A companion test holds the **curated** palettes to the same
+bar — they are the reference and are never auto-repaired, so they have to
+clear it on their own.
+
+`DerivedPalette` reports `repaired` (roles adjusted) and `shortfall` (roles
+that could not reach their floor). A palette with entries in `shortfall` is
+surfaced as `low_contrast` by the `palettes` verb rather than shipped
+silently.
+

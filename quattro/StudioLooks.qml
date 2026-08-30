@@ -29,6 +29,15 @@ Item {
     property string query: ""
     property string activeTag: ""
     property string selected: ""
+    property bool editing: false
+
+    readonly property var selectedLook: {
+        for (var i = 0; i < looks.allLooks.length; i++) {
+            if (looks.allLooks[i].name === looks.selected)
+                return looks.allLooks[i]
+        }
+        return null
+    }
 
     readonly property var allLooks: looks.service && looks.service.looks
         ? looks.service.looks : []
@@ -216,6 +225,8 @@ Item {
                         // whole reason the pane is pinned.
                         onEntered: looks.preview(card.modelData, false)
                         onClicked: {
+                            if (looks.selected !== card.modelData.name)
+                                looks.editing = false
                             looks.selected = card.modelData.name
                             looks.preview(card.modelData, true)
                         }
@@ -236,7 +247,7 @@ Item {
                     : "Nothing matches that search."
             }
 
-            // ── Apply ──────────────────────────────────────────────────────
+            // ── Apply / edit ───────────────────────────────────────────────
             Row {
                 width: parent.width
                 spacing: Style.space(8)
@@ -259,6 +270,27 @@ Item {
                             looks.service.applyLook(looks.selected, true)
                     }
                 }
+
+                Button {
+                    text: looks.editing ? "Close editor" : "Edit\u2026"
+                    bordered: true
+                    onClicked: {
+                        looks.editing = !looks.editing
+                        // Leaving the editor puts the pane back on the preset
+                        // itself rather than on an abandoned edit.
+                        if (!looks.editing && looks.selectedLook)
+                            looks.preview(looks.selectedLook, true)
+                    }
+                }
+            }
+
+            // Behind a Loader: the editor is a dozen text fields and a ramp
+            // strip that most visits never open.
+            Loader {
+                id: editorLoader
+                width: parent.width
+                active: looks.editing && looks.selected.length > 0
+                sourceComponent: editorPage
             }
 
             PanelSeparator { foreground: Color.foreground }
@@ -293,6 +325,20 @@ Item {
                         saveName.text = ""
                     }
                 }
+            }
+        }
+    }
+
+    Component {
+        id: editorPage
+
+        StudioLookEditor {
+            service: looks.service
+            look: looks.selectedLook
+            previewPane: looks.previewPane
+            onClosed: {
+                looks.editing = false
+                looks.selected = ""
             }
         }
     }

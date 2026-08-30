@@ -97,7 +97,7 @@ Omarchy10k exists because shell prompts are a hot path that most tools treat as 
 │    │       extracted bucket panes; PanelKit.qml → shared unbound     │
 │    │       components (bound inline components cannot instantiate    │
 │    │       cross-file — the KEY FINDING of the C4 decomposition)     │
-│    ├── Gallery.qml → full-screen Looks gallery overlay + Looks Studio│
+│    ├── StudioLooks.qml → preset browser (was Gallery.qml, deleted) │
 │    │   editor (palette/cycle rows, Gradient Ramp Designer)           │
 │    ├── SessionPicker.qml → live session list overlay                 │
 │    ├── Service.qml → persistent connection hub for all sockets       │
@@ -197,7 +197,7 @@ Quattro no longer reads or writes the TOML file directly. All config access goes
 ## Data Flow: Look Apply (protocol 0.5)
 
 ```
-1. User clicks a Look card in Panel.qml or Gallery.qml, or runs `omarchy10k look apply <name>`
+1. User clicks a Look card in Panel.qml or StudioLooks.qml, or runs `omarchy10k look apply <name>`
 2. The client sends `looks_apply {name, transient}` (the `looks` verb lists curated + user Looks)
 3. looks.rs resolves the Look: user `[looks.<name>]` entries shadow curated names; glyph
    shortcuts expand and the palette directive merges into a `theme` sub-patch, producing a
@@ -210,7 +210,7 @@ Quattro no longer reads or writes the TOML file directly. All config access goes
    (option fields normalized to preset defaults so the TOML stays valid)
 6. `palettes` returns the curated palette set (moved daemon-side from Model.js); `defaults`
    returns Config::default() for the panel's modified-vs-default ink bars and per-row reset
-7. Dry-run renders: `preview` accepts a `look` override, so panel and Gallery cards render a
+7. Dry-run renders: `preview` accepts a `look` override, so panel and preset cards render a
    Look without applying it
 ```
 
@@ -347,7 +347,7 @@ Features gate rendering behavior: OSC 8 wraps directory paths in clickable hyper
 
 **Preview** (`type: "preview"`) renders a prompt with simulated context — no git subprocess, no OSC 133 markers. Quattro sends optional fields (`cwd`, `exit_code`, `git_branch`, `git_staged`, `git_unstaged`, `cols`, `in_ssh`, etc.) to drive live prompt preview in the Control Center, plus an optional `look` name to dry-run a Look without applying it.
 
-**Palette** (`command: "palette"`) returns the daemon's in-memory `ThemePalette` as hex strings (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`). Quattro uses this for theme color swatches without reading `colors.toml` directly. **`palettes`** returns the full curated palette set (moved daemon-side so CLI, panel, and Gallery resolve identically); **`defaults`** returns `Config::default()` for the panel's modified-vs-default ink bars.
+**Palette** (`command: "palette"`) returns the daemon's in-memory `ThemePalette` as hex strings (`accent`, `foreground`, `muted`, `background`, `red`, `green`, `yellow`, `blue`). Quattro uses this for theme color swatches without reading `colors.toml` directly. **`palettes`** returns the curated palette set plus one derived from every installed Omarchy theme that lacks a curated entry (30 on a stock install), each with flat `colors` for swatches — moved daemon-side so CLI, panel, and Studio resolve identically; **`defaults`** returns `Config::default()` for the panel's modified-vs-default ink bars.
 
 **Looks** (`command: "looks"` / `"looks_apply"` / `"looks_save"`) list, apply, and snapshot appearance bundles. `looks_apply` merges the resolved patch through the config_set path, or patches the in-memory config only when `transient` is true. See [Data Flow: Look Apply](#data-flow-look-apply-protocol-05).
 

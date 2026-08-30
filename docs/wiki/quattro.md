@@ -62,6 +62,24 @@ The Quattro plugin provides a desktop Control Center for Omarchy10k, surfaced as
 
 ## The `o10k/` Component Kit
 
+Beautification pass (2026-08-29) added five components and one JS library:
+
+| File | Purpose | Bound? |
+|------|---------|--------|
+| `TerminalPreview.qml` | Framed terminal mock rendering N ANSI scenes on the **previewed palette's own background** | yes |
+| `PresetCard.qml` | A preset card that *is* its preview: live prompt line, blurb, tags, swatch strip | no |
+| `Swatches.qml` | Palette strip (8 hue roles); `joined: true` renders one bar for chip-scale use | yes |
+| `Chip.qml` | The selectable chip, extracted from 5 copies; optional `swatch` / `swatches` slots | no |
+| `Preview.js` | Scene catalog, request builder, stable cache key, hover debouncer | n/a |
+
+**Property names avoid `QQuickItem` members.** `TerminalPreview` and
+`PresetCard` expose `colors` (not `palette`) and `renderState` (not `state`),
+because `Item.palette` and `Item.state` both exist — and shadowing `state`
+puts QML's state machine in play, trying to match `"loading"` against a
+`StateGroup`. The lint gate's `[property-override]` warnings catch this class.
+
+
+
 Shared components every new surface is built from. Two libraries plus three
 components; the libraries are `.pragma library` JavaScript so they are
 unit-testable under Node (`tests/fx_test.js`, `tests/motion_test.js`,
@@ -127,6 +145,43 @@ collapsed the detail sheet at runtime. The plugin-wide legacy backlog
 could land before the rewrite finished.
 
 ## Studio (`Studio.qml`, panel kind)
+
+### Layout: two panes
+
+Controls left, a **pinned** live preview right. Pinned rather than inline so
+it never scrolls away from the control being turned. The preview pane is
+shown on Looks, Prompt, Theme and Setup; Rice and System have nothing to
+preview and use the full width.
+
+Canvas is `min(1440, w*0.92) x min(920, h*0.90)`. It was previously a
+hardcoded `1040x720` with content ending around y=530.
+
+`Studio._wirePreview()` resets the pane **before** assigning `previewPane` to
+the freshly loaded tab. Assigning it fires the tab's `onPreviewPaneChanged`,
+which starts that tab's first render; clearing afterwards clobbered it and
+left the pane reading "No daemon" while the daemon was plainly running.
+
+### Tabs
+
+`Looks` · `Prompt` · `Theme` · `Rice` · `System` · `Setup`
+
+**The Looks tab IS the gallery.** `Gallery.qml` was deleted in the
+beautification pass — 1550 lines owning a second socket, a second IPC handler
+and hand-rolled widgets duplicating `Service.qml`, which is why its buttons
+drifted from the ones that worked. `StudioLooks.qml` replaces it on the
+shared service.
+
+Both entry points still work and land on the Looks tab:
+
+```bash
+omarchy-shell shell summon community.omarchy10k '{"page":"gallery"}'
+omarchy-shell call community.omarchy10k.gallery
+```
+
+`Service.openGallery()` is unchanged for callers. `{"page":"sessions"}` still
+delegates to `SessionPicker.qml`.
+
+
 
 The full-screen Control Center, summonable with
 `omarchy-shell shell summon community.omarchy10k`. Six lazily-loaded tabs —
@@ -228,7 +283,7 @@ Panel (qs.Ui.Panel, manageIpc: false)
 
 SessionPicker (Item, overlay kind — summoned on demand)
 ├── open(payloadJson) / close() entry-point contract
-├── page mode: payload {"page":"gallery"} → Loader → Gallery.qml; else sessions
+├── sessions only (the gallery is now the Studio's Looks tab)
 ├── PanelWindow (WlrLayer.Overlay, exclusive keyboard) + scrim + Escape/dismiss
 ├── ListView of live sessions (CWD, branch, dirty, last duration, age, ws label)
 ├── hyprctl -j clients → workspace id per shell pid (no timer, skipped off-Hyprland)
@@ -366,7 +421,18 @@ Above the rail, a hero preview box shows the rendered left prompt with simulated
 
 The daemon response `left` field is converted with `Model.ansiToRich()` (not stripped) and rendered in a monospace `Text` with `textFormat: Text.StyledText`, so SGR colors (3x/9x, 38;5, 38;2, 48;* backgrounds, bold/italic/underline) show as real colors. Pill toggles (Error, SSH, Long cmd) flip boolean preview properties and call `requestPreview()`. `Model.stripAnsi()` remains in use for doctor/benchmark output where color is not wanted.
 
-### `Model.ansiToRich(text)`
+### `Model.ansiToRich(text, palette)`
+
+**The `palette` argument is not optional in practice.** Without it, indexed
+SGR colors (30-37, 90-97, and 256-color indices below 16) resolve against a
+hardcoded Tokyo Night table, so a Gruvbox user was shown previews that were
+not of their prompt. Pass the palette the render was produced with.
+
+Index 0 ("black") maps to the palette's `muted` role, not `background` —
+resolving it to the background would paint prompt text invisibly. Truecolor
+(`38;2;r;g;b`) is absolute and never remapped.
+
+### `Model.ansiToRich(text)` — legacy notes
 
 Same tokenizer family as `stripAnsi`, but SGR state is carried across the stream and emitted as inline `<span style="…">` markup:
 
@@ -444,7 +510,14 @@ One persistent connection hub replacing the three duplicated poll/reconnect life
 
 ## Session Picker Overlay: `SessionPicker.qml` (2.3)
 
-Fullscreen overlay (summoned by the `picker` or `gallery` IPC method, a Hyprland keybind, or `omarchy-shell shell summon community.omarchy10k '<payloadJson>'`). The payload's `page` field selects the mode: `{"page":"gallery"}` activates the gallery `Loader` (Gallery.qml) instead of the session card; any other/absent payload shows the session list.
+Fullscreen session list. Reached as `{"page":"sessions"}` through `Studio.open()`, which owns the panel entry point.
+
+> **Note:** the host resolves exactly **one** kind per plugin and `panel`
+> outranks `overlay`, so `SessionPicker.qml` is no longer mounted as an
+> overlay — `Studio.qml` delegates to it via a `Loader`. It used to also host
+> the Looks gallery under `{"page":"gallery"}`; that gallery is now the
+> Studio's Looks tab, and `Studio.open()` routes the payload there without
+> reaching this file.
 
 - Lists every live session with **CWD, git branch (+ dirty dot), last command duration, session age**, pid, and — under Hyprland — the **workspace label** (`ws <id>`), resolved by one `hyprctl -j clients` call per refresh cycle into `workspaceByPid` (pid→workspace id). No timer; outside Hyprland or on hyprctl failure the map is empty and rows simply omit the suffix.
 - **Enter / click** activates: under Hyprland (`HYPRLAND_INSTANCE_SIGNATURE` set) it runs `hyprctl dispatch focuswindow pid:<shellPid>`; on nonzero exit (or non-Hyprland) it falls back to `omarchy-launch-floating-terminal` from the session's CWD, then closes.
@@ -457,29 +530,73 @@ Fullscreen overlay (summoned by the `picker` or `gallery` IPC method, a Hyprland
 
 The gallery's detail sheet is an editor: palette hex rows (accent/foreground/muted/background with swatches), cycle rows (style preset over the daemon's 11, separator shape over the 14, frame enabled/gap char, prompt character over the 8, OS icon over the 17), and a gradient ramp designer (two hex endpoints → live 8-step client-side lerp strip; Apply maps start→accent, end→magenta onto `theme.custom` so the daemon's shipped lerp engine previews the ramp). Every edit writes the working patch (config_set-shaped) and re-requests the preview with the `{ look, patch }` override for instant dry-run re-render; preview error responses keep the last good render. Save-as-new writes the edited patch via `config_set` on the looks table; Overwrite (user looks only) does the same; Delete uses `looks_delete` with a two-tap confirm (`_deleteArmed`). Curated looks force Save-as-new.
 
-## Looks Gallery Overlay: `Gallery.qml`
+## Preset browser: `StudioLooks.qml`
 
-The gallery lives in the plugin tree but is **not** a manifest entry point: the manifest's `overlay` entry point is `SessionPicker.qml`, and the gallery is the `page: "gallery"` mode of that overlay (loaded via `Loader` from SessionPicker; the payload `{"page":"gallery"}` routes there). Gallery.qml additionally registers its own `IpcHandler { target: "community.omarchy10k.gallery" }` with `toggle()` / `open()` / `close()` — callable while the overlay component is loaded (`omarchy-shell call community.omarchy10k.gallery toggle`).
+Replaced `Gallery.qml` in the 2026-08-29 beautification pass. That file ran to
+1550 lines and owned its **own** `Socket`, its own `IpcHandler` and its own
+hand-rolled widgets, duplicating everything `Service.qml` already does — which
+is why its buttons drifted out of sync with the ones that worked. There is now
+one socket and one code path.
 
-### Data flow
+The browse experience it replaced showed a name on grey in the Studio, and in
+the gallery a single prompt line elided to `…` a third of the way through, on
+the panel's background rather than the preset's.
 
-1. `open()` → `ensureConnection()` discovers the first live `omarchy10k-*.sock` and connects a single shared `gallerySocket`.
-2. On connect: `buildHello("gallery-handshake")` → on the hello reply, sends `looks` (list) and `config_get` (seeds old values for the diff sheet).
-3. Each Look card lazily requests a **real daemon dry-run preview**: a `preview` message with `look: "<name>"` (protocol 0.4+ `look` override — the daemon renders one-shot with that Look, no config mutation). Responses route by `id` (`look-<name>`) into `previewCache`; the first `eagerPreviews` cards and the visible grid are fetched eagerly. A daemon that ignores `look` renders the current look on every card (graceful degradation, same as the preset cards).
+### What it does
 
-### UI
+- **Search** across label, name, blurb and tags.
+- **Tag filters** built from the tags actually present, so the row never
+  offers an empty result. Clicking the active tag clears it.
+- **`PresetCard` grid**, responsive column count (2-4) from available width.
+  Each card renders a real prompt in the preset's own colors at 44 columns —
+  narrow on purpose, because at the preview pane's width the daemon pads
+  frame rules past the card edge and every card elides.
+- **Hover previews, click selects.** Hovering drives the Studio's pinned
+  `TerminalPreview` through `Service.requestPreview`, debounced at
+  `Motion.MICRO_MS` and served from the broker cache, so browsing 18 presets
+  costs at most 18 renders and then zero.
+- **Apply** / **Try without saving** (`looks_apply` with `transient`).
+- **Save current as a preset** via `Service.saveLook`.
 
-- **Category chips** — derived from each Look's patch top-level keys (`theme→Theme`, `style→Style`, `segments`/`os→Segments`, `frame→Frame`, `git→Git`, `directory→Directory`, `prompt→Prompt`), always prefixed by `All`; clicking a chip filters the grid and re-runs eager previews.
-- **Search field** filters by Look name/label; daemon-down state disables it ("No omarchy10k daemon running").
-- **Card grid** — preview box (StyledText live render) + label per Look; keyboard navigable (arrows + Enter opens the detail sheet).
-- **Detail sheet** — large real render plus `_patchSummary`: every patch leaf as `old → new` (old values from the flattened live `config_get` when available).
-- **Try (transient)** → `looks_apply {name, transient:true}` (in-memory; reverted by `reload_config`); **Apply** → persistent `looks_apply`. Confirmation/failure via toast; per-request id tracks completion.
+### Palette shown per card
 
-### Curated Looks
+A `complete` Look carries `theme.custom`, so its card previews in its own
+colors. A `structure` Look respects whatever palette you are on, so its card
+previews on the **current** palette — inventing a background for it would show
+something the preset does not actually do.
 
-8 curated Looks ship compiled-in (`crates/omarchy10kd/src/looks.rs::curated()`): omnarchy, tokyo-rainbow, framed-gradient, lean-pure, slanted-owl, gruvbox-drift, rose-classic, polar-lean. User entries in `[looks.<name>]` shadow curated names (`looks::all` filters shadowed curated entries). Curated **palettes** moved daemon-side (`looks.rs::curated_palette`), so the CLI, gallery, and panel resolve them identically; the `palettes` control verb exposes `{key, theme}` rows from that table (see [protocol.md](protocol.md)).
+### Detail editor: `StudioLookEditor.qml`
 
-CLI: `omarchy10k look list|apply <name> [--transient]|save <name>` (main.rs `LookAction`).
+Carried over from `Gallery.qml`'s detail sheet rather than dropped with the
+rest of that file — it is the only way to tune a palette by hand, design a
+gradient ramp, or remove a Look you saved. Rebuilt on `Service`, so its edits
+share the same preview broker and config debounce as every other surface.
+
+- **Palette rows** for all 11 roles, each with a live swatch and a hex field.
+  Committed on Enter or focus loss, not on every keystroke — otherwise typing
+  `#7aa2f7` fires six renders for the six invalid prefixes.
+- **Gradient ramp designer**: two endpoints, an 8-step client-side strip for
+  the preview only. Applying maps start→`accent` and end→`magenta` and lets
+  the **daemon's** shipped ramp engine do the real interpolation; a second
+  implementation here could disagree with the prompt.
+- **Save as new** / **Overwrite** / **Delete** (two-tap confirm). Overwrite
+  and Delete are disabled for curated presets, which are compiled into the
+  daemon — the UI says so rather than failing the call.
+- Behind a `Loader`: a dozen text fields and a ramp strip most visits never
+  open.
+
+The working patch is a deep copy of the Look's own patch. Editing never
+writes until Save/Overwrite, so browsing an edit costs nothing, and mutating
+the service's copy in place would have corrupted the Look list.
+
+### Entry points (unchanged for callers)
+
+```bash
+omarchy-shell shell summon community.omarchy10k '{"page":"gallery"}'
+omarchy-shell call community.omarchy10k.gallery
+```
+
+Both land on the Looks tab. `Service.openGallery()` keeps its signature.
 
 ## Config Undo
 

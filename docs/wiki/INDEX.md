@@ -102,7 +102,8 @@ omarchy10k/
 │   ├── PanelBehavior.qml            # Behavior bucket
 │   ├── PanelSystem.qml              # System bucket
 │   ├── PanelKit.qml                 # Shared QML controls (intentionally unbound components)
-│   ├── Gallery.qml                  # Full-screen Looks gallery overlay (live dry-run renders)
+│   ├── StudioLooks.qml              # Preset browser: search, tags, live preview cards
+│   ├── StudioLookEditor.qml         # Palette rows, ramp designer, save/overwrite/delete
 │   ├── SessionPicker.qml            # Live session picker overlay
 │   ├── Service.qml                  # Persistent connection hub (service-kind plugin)
 │   └── Model.js                     # TOML parser, CONFIG_MAP, protocol helpers

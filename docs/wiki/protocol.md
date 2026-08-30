@@ -731,7 +731,64 @@ v0.3 additions:
 
 On config save or preview context change, the panel sends a `preview` request and updates the preview text (ANSI stripped for display).
 
-### Theme Hook (`hooks/theme-set`)
+## Preview scenes (v0.6, additive)
+
+`preview` takes an optional `scenes` array and renders every entry against
+**one** effective config, returning them in a `renders` array.
+
+```json
+{"type":"preview","cwd":"~/projects/my-app","cols":88,"look":"polar-lean",
+ "scenes":[{"label":"clean","git_branch":"main"},
+           {"label":"failed","git_branch":"main","exit_code":127,
+            "cmd_duration_ms":2400},
+           {"label":"ssh","cwd":"~/dotfiles","in_ssh":true}]}
+```
+
+```json
+{"type":"preview","status":"ok","left":"…","right":null,
+ "renders":[{"label":"clean","left":"…","right":"…"}, …]}
+```
+
+Why it exists: a prompt has to survive a dirty repo, a failed command, an SSH
+host and a deep path, and the Studio shows six such rows. Six requests would
+be six round-trips and six entries in Quattro's preview broker, on a surface
+that re-renders while you hover.
+
+- Every scene field defaults, so a scene specifies only what it varies and
+  inherits the rest from the request.
+- Scene fields are `cwd`, `exit_code`, `cmd_duration_ms`, `cols`, `jobs`,
+  `in_ssh`, `git_branch`, `git_staged`, `git_unstaged`, `label`. `label` is
+  echoed back so the UI can caption a row without re-deriving it.
+- `cols` is per-scene: gallery cards render at 44, the Studio pane at 88.
+- Capped at `MAX_PREVIEW_SCENES` (12).
+- **Omitting `scenes` returns the exact response shape it always did**, with
+  top-level `left`/`right` and no `renders` key. The CLI, the bar panel and
+  the configure wizard are unaffected.
+
+Top-level `left`/`right` are always present, even alongside `renders`.
+
+## Palettes verb (enriched)
+
+`{"type":"control","command":"palettes"}` returns the curated table **plus one
+palette derived from every installed Omarchy theme without a curated entry** —
+30 entries on a stock install (16 curated + 14 derived).
+
+```json
+{"key":"osaka-jade","label":"Osaka Jade",
+ "blurb":"Derived from the Osaka Jade theme, with muted adjusted for contrast.",
+ "source":"derived","low_contrast":false,
+ "colors":{"accent":"#509475","background":"#111c18", …},
+ "theme":{"source":"hybrid","custom":{…}}}
+```
+
+`colors` is sent **flat** on purpose: without it a UI has to reconstruct
+swatches out of the `theme` patch, which is precisely the duplicated
+derivation this design removes. Curated entries lead the list; derived follow
+in sorted order, so a picker does not reshuffle between opens.
+`low_contrast` is true when derivation could not reach its floor for some
+role — see [Theme](theme.md).
+
+## Theme Hook (`hooks/theme-set`)
 
 Fan-out sender. Globs all `omarchy10k-*.sock` files and sends `reload_theme` to each. Fire-and-forget — errors ignored.
 
