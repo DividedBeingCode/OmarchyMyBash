@@ -908,6 +908,48 @@ mod tests {
             .expect("apply");
         assert_eq!(lean.style.frame.gap_gradient.as_deref(), Some("off"));
     }
+
+    #[test]
+    fn clear_look_owned_reaches_three_levels_deep_and_spares_siblings() {
+        // These are the deepest paths in LOOK_OWNED. A recursion bug in
+        // clear_path would either miss them entirely or remove a whole parent
+        // table, neither of which the existing depth-1 and depth-2 tests would
+        // catch. This test guards both the recursion working and the crucial
+        // property that non-owned siblings in the same table survive the clear.
+        let value = toml::Value::try_from(Config::default()).expect("serialize");
+        let mut doc = value.as_table().expect("table").clone();
+
+        clear_look_owned(&mut doc);
+
+        // Three-level paths are cleared.
+        let segments = doc.get("segments").and_then(|v| v.as_table()).expect("segments survives");
+        let os = segments.get("os").and_then(|v| v.as_table()).expect("segments.os survives");
+        let character = segments
+            .get("character")
+            .and_then(|v| v.as_table())
+            .expect("segments.character survives");
+
+        assert!(!os.contains_key("icon"), "segments.os.icon is Look-owned");
+        assert!(
+            !character.contains_key("success"),
+            "segments.character.success is Look-owned"
+        );
+        assert!(
+            !character.contains_key("error"),
+            "segments.character.error is Look-owned"
+        );
+        assert!(
+            !character.contains_key("transient"),
+            "segments.character.transient is Look-owned"
+        );
+
+        // Non-owned siblings in the same tables survive.
+        assert!(os.contains_key("enabled"), "segments.os.enabled belongs to the user");
+        assert!(
+            character.contains_key("vi_mode"),
+            "segments.character.vi_mode belongs to the user"
+        );
+    }
 }
 
 #[cfg(test)]
