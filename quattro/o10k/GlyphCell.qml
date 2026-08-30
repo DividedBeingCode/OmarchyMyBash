@@ -16,6 +16,13 @@ Rectangle {
     property bool active: false
     /// The TERMINAL's font, so a glyph that is tofu there looks like tofu here.
     property string previewFont: Style.font.family
+    /// Glyph size, derived from the tile rather than fixed.
+    ///
+    /// Was Style.font.subtitle — a flat 13px inside a ~64px tile, so the
+    /// glyph took up about a fifth of its own cell. A browser whose entire
+    /// job is showing how a glyph renders has to render it big enough to
+    /// judge.
+    property real glyphSize: Math.max(Style.font.subtitle, tile.width * 0.5)
 
     signal clicked()
 
@@ -29,7 +36,21 @@ Rectangle {
         text: tile.glyph
         color: tile.active ? Color.background : Color.foreground
         font.family: tile.previewFont
-        font.pixelSize: Style.font.subtitle
+        font.pixelSize: tile.glyphSize
+    }
+
+    Text {
+        visible: tile.active && tile.label.length > 0
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Style.space(3)
+        width: parent.width - Style.space(6)
+        horizontalAlignment: Text.AlignHCenter
+        elide: Text.ElideRight
+        text: tile.label
+        color: Color.background
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
     }
 
     MouseArea {

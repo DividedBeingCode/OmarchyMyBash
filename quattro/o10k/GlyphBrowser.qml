@@ -26,24 +26,29 @@ Item {
     /// [{ key, glyph, label, category }]
     property var catalog: []
     property string query: ""
+    property string category: ""
     property string selected: ""
     /// Font to preview in — should match the terminal's, not the UI's.
     property string previewFont: Style.font.family
-    property int columns: 10
+    property int columns: 8
 
     signal picked(string key)
 
     readonly property var results: {
         var q = browser.query.trim().toLowerCase()
-        if (q.length === 0)
-            return browser.catalog
+        var cat = browser.category
         var out = []
         for (var i = 0; i < browser.catalog.length; i++) {
             var e = browser.catalog[i]
-            var hay = String(e.label || "") + " " + String(e.key || "")
-                    + " " + String(e.category || "")
-            if (hay.toLowerCase().indexOf(q) >= 0)
-                out.push(e)
+            if (cat.length > 0 && String(e.category || "") !== cat)
+                continue
+            if (q.length > 0) {
+                var hay = String(e.label || "") + " " + String(e.key || "")
+                        + " " + String(e.category || "")
+                if (hay.toLowerCase().indexOf(q) < 0)
+                    continue
+            }
+            out.push(e)
         }
         return out
     }
@@ -54,6 +59,24 @@ Item {
         id: layout
         width: parent.width
         spacing: Style.space(10)
+
+        // 76 glyphs in one grid is a wall. The catalog already carries a
+        // category per entry; these just surface it.
+        Row {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+                model: ["", "Prompt", "Animals", "Japan", "Kaomoji"]
+
+                delegate: Chip {
+                    required property string modelData
+                    label: modelData.length === 0 ? "all" : modelData.toLowerCase()
+                    active: browser.category === modelData
+                    onClicked: browser.category = modelData
+                }
+            }
+        }
 
         Row {
             width: parent.width
