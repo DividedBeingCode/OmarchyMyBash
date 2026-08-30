@@ -81,9 +81,11 @@ three sections each in the same way.
 ### 4. The preset library under-uses its own material
 
 29 Looks are built from 11 style presets, 14 separators, 39 curated palettes,
-16 OS icons and 76 glyphs. Whole glyph families are unused: `ninja torii sushi
-noodles rice tea fan mask drama katana`, `alien robot ghost`, `sakura crown
-sword`, and every kaomoji but four.
+16 OS icons and 78 glyphs. Whole glyph families go unused in the
+prompt-character slot: `ninja torii sushi noodles rice tea fan mask drama
+katana`, `alien robot ghost`, `sakura crown sword`, and every kaomoji but
+four. (The OS-icon slot is a separate, closed set of distro keys and cannot
+take these — see the note on the tables in Section 4.)
 
 ## Design
 
@@ -211,8 +213,11 @@ Applied to the three tabs that stack:
 | **System** | Sessions · Plugins · Layer | `SESSIONS` / `SEGMENT PLUGINS` / `SHELL LAYER` |
 
 Each tab keeps its existing `Flickable` and its `WheelBoost`; the sub-tab
-selects which section is instantiated. The pinned preview pane is unaffected —
-it is owned by `Studio.qml`, not by the tab bodies.
+selects which section is SHOWN — every section stays instantiated and is
+toggled with `visible:` on its `Column`. Sub-tab state is therefore preserved
+across switches at the cost of building all three up front, which is cheap
+here and is what the implementation does. The pinned preview pane is
+unaffected — it is owned by `Studio.qml`, not by the tab bodies.
 
 Sub-tab selection is held in each tab component (`property int subTab: 0`) and
 therefore persists while the Studio is open and resets when it closes. Not
@@ -224,25 +229,33 @@ Each entry names a curated palette, a style preset, a separator shape and its
 characters. Every key below was verified to exist in
 `available_symbol_chars`, `available_separators` and `CURATED_PALETTES`.
 
-**Ukiyo** (`complete`, uses the untouched `Japan` glyph family)
+> **OS icon:** every Look in the three tables below ships `os.icon: "none"`.
+> The tables originally assigned the theme's own glyph (`torii-dusk` →
+> `torii`), which does not work: `GlyphCatalog::os_icon` maps a closed set of
+> distro keys and falls through as `_ => Some(key)`, so an unmapped key
+> renders as the literal word "torii" in the prompt. The themed glyph appears
+> in the prompt-CHARACTER slot only, which is where these Looks put it.
+
+**Ukiyo** (`complete`, brings the `Japan / Geek` glyph family into the
+prompt-character slot — the OS-icon slot cannot take it)
 
 | name | palette | preset · separator | os icon / character |
 |------|---------|--------------------|---------------------|
-| `torii-dusk` | kanagawa | slanted · slanted | `torii` / `torii` |
-| `sushi-bar` | rose-pine | classic · dot | `sushi` / `sushi` |
-| `ramen-shop` | gruvbox | dense · vertical | `noodles` / `noodles` |
-| `sakura-drift` | rose-pine-moon | gradient · fade | `sakura` / `sakura` |
-| `tea-house` | everforest | lean · vertical | `tea` / `tea` |
-| `steel-katana` | iceberg | powerline · flame | `katana` / `katana` |
-| `noh-mask` | zenburn | framed · slanted | `mask` / `drama` |
+| `torii-dusk` | kanagawa | slanted · slanted | none / `torii` |
+| `sushi-bar` | rose-pine | classic · dot | none / `sushi` |
+| `ramen-shop` | gruvbox | dense · vertical | none / `noodles` |
+| `sakura-drift` | rose-pine-moon | gradient · fade | none / `sakura` |
+| `tea-house` | everforest | lean · vertical | none / `tea` |
+| `steel-katana` | iceberg | powerline · flame | none / `katana` |
+| `noh-mask` | zenburn | framed · slanted | none / `mask` (error: `drama`) |
 
 **Sci-fi** (`complete`)
 
 | name | palette | preset · separator | os icon / character |
 |------|---------|--------------------|---------------------|
-| `xenomorph` | scarlet-protocol | gradient · flame | `alien` / `alien` |
-| `bot-farm` | oxocarbon | powerline · powerline | `robot` / `robot` |
-| `ghost-shell` | poimandres | gradient · fade | `ghost` / `ghost` |
+| `xenomorph` | scarlet-protocol | gradient · flame | none / `alien` |
+| `bot-farm` | oxocarbon | powerline · powerline | none / `robot` |
+| `ghost-shell` | poimandres | gradient · fade | none / `ghost` |
 | `blue-cascade` | blue-matrix | dense · dot | none / `lambda` |
 | `deep-space` | andromeda | rainbow · powerline | none / `triangle` |
 
@@ -259,8 +272,8 @@ characters. Every key below was verified to exist in
 
 | name | palette | preset · separator | os icon / character |
 |------|---------|--------------------|---------------------|
-| `crown-jewels` | aura | powerline · round | `crown` / `crown` |
-| `swordsman` | horizon | slanted · slanted | `sword` / `sword` |
+| `crown-jewels` | aura | powerline · round | none / `crown` |
+| `swordsman` | horizon | slanted · slanted | none / `sword` |
 
 **Structure-only** (`structure` — respect whatever palette you are on)
 

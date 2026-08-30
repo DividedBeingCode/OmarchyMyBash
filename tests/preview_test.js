@@ -172,12 +172,25 @@ function fakeClock() {
         { cwd: '~/app', cols: 38 }, null, 'synthwave', null, 'x1'));
     check('no baseline field is sent', Object.prototype.hasOwnProperty.call(req, 'base'), false);
 
-    const a = P.cacheKey('synthwave', null, P.CARD_SCENES, 38);
-    const b = P.cacheKey('synthwave', null, P.CARD_SCENES, 38);
-    check('the same request shares a cache entry', a === b, true);
+    // Collisions, not identity: `cacheKey` is a pure function, so comparing
+    // two identical calls only asserts that JavaScript is deterministic and
+    // cannot fail. What can actually go wrong is two DIFFERENT card requests
+    // hashing the same, which serves one card's render for another.
+    check('two different Looks at the same width do not collide',
+          P.cacheKey('synthwave', null, P.CARD_SCENES, 38) !==
+          P.cacheKey('gruvbox-drift', null, P.CARD_SCENES, 38), true);
+    check('two different scene sets at the same width do not collide',
+          P.cacheKey('synthwave', null, P.CARD_SCENES, 38) !==
+          P.cacheKey('synthwave', null, P.SCENES, 38), true);
     check('width still separates renders',
           P.cacheKey('synthwave', null, P.CARD_SCENES, 38) !==
           P.cacheKey('synthwave', null, P.CARD_SCENES, 80), true);
+    // The identity direction still matters — two hovers over the same card
+    // must share an entry — but it is only meaningful next to the collision
+    // checks above, which is what makes the key non-trivial.
+    check('the same request still shares a cache entry',
+          P.cacheKey('synthwave', null, P.CARD_SCENES, 38) ===
+          P.cacheKey('synthwave', null, P.CARD_SCENES, 38), true);
 })();
 
 if (failures) {

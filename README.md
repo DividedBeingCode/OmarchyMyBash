@@ -103,7 +103,7 @@ from the control you are turning.
 | Tab | What it does |
 |---|---|
 | **Looks** | Browse 52 presets. Every card is a real prompt rendered in that preset's own colors. Hover previews, click selects, Apply commits |
-| **Prompt** | Presets, separators, prompt characters, a searchable browser of 80 glyphs, per-segment toggles |
+| **Prompt** | Presets, separators, prompt characters, a searchable browser of 78 glyphs, per-segment toggles |
 | **Theme** | Apply an Omarchy theme desktop-wide, or pin terminal colors independently. Every chip carries its actual palette |
 | **Rice** | Terminal, git, and system-tool theming through the `o10k` templates |
 | **System** | Doctor, benchmark, sessions, segment plugins, and the shell-layer claim map |
