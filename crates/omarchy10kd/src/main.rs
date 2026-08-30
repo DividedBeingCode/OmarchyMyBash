@@ -1,6 +1,7 @@
 mod config;
 mod git;
 mod looks;
+mod palette_derive;
 mod plugins;
 mod profiles;
 mod layout;
