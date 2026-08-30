@@ -504,7 +504,7 @@ async fn handle_control(
                         if transient {
                             // Try: in-memory only. Revert = reload_config.
                             let current = state.config.read().await.clone();
-                            match crate::looks::apply_transient(&current, &l.patch) {
+                            match crate::looks::apply_look(&current, &l.patch) {
                                 Ok(new_config) => {
                                     state.set_config(new_config).await;
                                     state.reload_theme().await;
@@ -519,7 +519,7 @@ async fn handle_control(
                                 }
                             }
                         } else {
-                            match write_config_patch(state, &l.patch).await {
+                            match write_look_patch(state, &l.patch).await {
                                 Ok(()) => {
                                     write_response(writer, serde_json::json!({
                                         "type": "control", "status": "ok",
@@ -1168,7 +1168,10 @@ fn effective_preview_config(
     };
     if let Some(look_name) = &req.look {
         if let Some(l) = crate::looks::resolve(look_name, &effective) {
-            effective = crate::looks::apply_transient(&effective, &l.patch)?;
+            // apply_look, not apply_transient: a card must show what pressing
+            // Apply produces, and the only way to guarantee that is for both
+            // to be the same function.
+            effective = crate::looks::apply_look(&effective, &l.patch)?;
         }
     }
     // Project profile (Tier C): wins over the Look, loses to the client
@@ -1550,6 +1553,48 @@ async fn write_config_patch(
         ));
     }
 
+    persist_config_doc(state, doc).await
+}
+
+/// Persist a Look atomically: clear the Look-owned keys from config.toml,
+/// then merge the patch.
+///
+/// The FILE needs the same treatment as the in-memory config, or a daemon
+/// restart resurrects exactly the leftovers the in-memory clear removed.
+async fn write_look_patch(
+    state: &Arc<DaemonState>,
+    patch: &serde_json::Value,
+) -> Result<(), String> {
+    let config_path = state.config_path.clone();
+    let mut doc: toml::Table = match std::fs::read_to_string(&config_path) {
+        Ok(existing) => match toml::from_str(&existing) {
+            Ok(t) => t,
+            Err(e) => return Err(format!("config.toml has syntax errors: {e}")),
+        },
+        Err(_) => toml::Table::new(),
+    };
+    crate::looks::clear_look_owned(&mut doc);
+
+    let mut failed_keys: Vec<String> = Vec::new();
+    if let Some(obj) = patch.as_object() {
+        for (k, v) in obj {
+            match serde_json::from_value::<toml::Value>(v.clone()) {
+                Ok(toml_val) => {
+                    merge_toml_value(
+                        doc.entry(k.clone()).or_insert(toml::Value::Table(toml::Table::new())),
+                        toml_val,
+                    );
+                }
+                Err(e) => failed_keys.push(format!("{k} ({e})")),
+            }
+        }
+    }
+    if !failed_keys.is_empty() {
+        return Err(format!(
+            "values for keys {} are not representable in TOML",
+            failed_keys.join(", ")
+        ));
+    }
     persist_config_doc(state, doc).await
 }
 
@@ -2113,24 +2158,77 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_leak_is_real_without_the_default_baseline() {
-        // Guards the guard: if this ever stops failing, `base: "default"` has
-        // stopped being the thing that fixes it and these tests are vacuous.
-        let base = Config::default();
-        let after = {
-            let l = crate::looks::resolve("synthwave", &base).expect("curated");
-            crate::looks::apply_transient(&base, &l.patch).expect("apply")
+    /// Render a config the way a card and an applied prompt both render.
+    fn render_card_sized(cfg: &Config) -> String {
+        let palette = crate::theme::ThemePalette::resolve_palette(cfg);
+        let renderer = PromptRenderer::new(cfg, &palette);
+        let git_status = crate::git::GitStatus {
+            is_repo: true,
+            branch: "main".into(),
+            staged: 2,
+            unstaged: 1,
+            ..Default::default()
         };
-        let leaked = crate::looks::all(&base)
-            .iter()
-            .filter(|d| d.name != "synthwave")
-            .filter(|d| {
-                card_config(&d.name, &base, None).style
-                    != card_config(&d.name, &after, None).style
-            })
-            .count();
-        assert!(leaked > 0, "expected the live-config baseline to leak");
+        strip_np(&renderer.render_with_ssh(
+            "~/app", 0, 0, 38, 0, &git_status, false, Some(false), None, Vec::new(),
+        ).left).to_string()
+    }
+
+    #[test]
+    fn a_look_looks_the_same_applied_as_it_did_in_the_gallery() {
+        // The headline invariant. Measured before the fix: 168 of these 812
+        // ordered pairs differed, because the card was built atomically and the
+        // apply was a delta.
+        let base = Config::default();
+        let names: Vec<String> =
+            crate::looks::all(&base).iter().map(|d| d.name.clone()).collect();
+
+        let mut mismatches: Vec<String> = Vec::new();
+        for a in &names {
+            let after_a = crate::looks::apply_look(
+                &base, &crate::looks::resolve(a, &base).expect("curated").patch,
+            ).expect("apply a");
+            for b in &names {
+                if a == b {
+                    continue;
+                }
+                let card = {
+                    let req = preview_req(None, Some(b));
+                    effective_preview_config(&req, &after_a, None).expect("card")
+                };
+                let applied = crate::looks::apply_look(
+                    &after_a, &crate::looks::resolve(b, &after_a).expect("curated").patch,
+                ).expect("apply b");
+                if render_card_sized(&card) != render_card_sized(&applied) {
+                    mismatches.push(format!("{a} then {b}"));
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{} of {} ordered pairs differ, e.g. {:?}",
+            mismatches.len(),
+            names.len() * (names.len() - 1),
+            &mismatches[..mismatches.len().min(5)]
+        );
+    }
+
+    #[test]
+    fn the_leak_is_real_without_atomic_apply() {
+        // Guards the guard. If delta apply ever stops leaking, the invariant
+        // above has become vacuous and this fails to say so.
+        let base = Config::default();
+        let framed = crate::looks::apply_transient(
+            &base, &crate::looks::resolve("framed-focus", &base).expect("curated").patch,
+        ).expect("apply");
+        let lean = crate::looks::apply_transient(
+            &framed, &crate::looks::resolve("lean-pure", &base).expect("curated").patch,
+        ).expect("apply");
+        assert_eq!(
+            lean.style.frame.gap_gradient.as_deref(),
+            Some("off"),
+            "delta apply no longer leaks; the invariant test may be vacuous"
+        );
     }
 
     #[test]
