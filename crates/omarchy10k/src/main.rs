@@ -1,3 +1,10 @@
+// One definition of the terminal capability table, shared with the daemon by
+// path rather than duplicated. These are two binary crates with no library
+// between them, and a second copy of the table is exactly how the two would
+// drift apart. Declared at the crate root because both `doctor` (reporting)
+// and `intro` (kitty graphics) need it.
+#[path = "../../omarchy10kd/src/terminal.rs"]
+mod terminal;
 mod bridge;
 mod configure;
 mod doctor;

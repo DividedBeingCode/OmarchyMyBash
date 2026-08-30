@@ -355,3 +355,161 @@ mod tests {
     }
 }
 
+
+// ── Kitty graphics protocol ────────────────────────────────────────────────
+//
+// Where the terminal supports it (Ghostty, kitty, wezterm), a sprite can be
+// sent as a real image instead of half-block approximations. Half-blocks give
+// two vertical samples per cell; this gives the terminal the actual PNG.
+//
+// foot deliberately keeps half-blocks: it implements sixel, not kitty
+// graphics. One high-quality path plus one universal fallback beats three
+// partial ones.
+
+/// Max base64 payload per escape, fixed by the protocol.
+const KITTY_CHUNK: usize = 4096;
+
+/// Base64 for the kitty payload.
+///
+/// A local implementation rather than a dependency, matching the one in
+/// `share.rs` for OSC 52 — the alphabet is eleven lines and a crate would be
+/// a supply-chain edge for something this small.
+fn base64(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18 & 63) as usize] as char);
+        out.push(TABLE[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// Encode PNG bytes as a kitty graphics escape sequence, scaled into a box of
+/// `cols` x `rows` terminal cells.
+///
+/// The payload is chunked at 4096 base64 bytes because the protocol requires
+/// it: every chunk but the last carries `m=1`, the last carries `m=0`, and a
+/// terminal that never sees `m=0` waits forever for the rest of an image.
+///
+/// Returns `None` for empty input rather than emitting a zero-length image,
+/// which some terminals render as a stray placeholder.
+pub fn kitty_encode(png: &[u8], cols: usize, rows: usize) -> Option<String> {
+    if png.is_empty() || cols == 0 || rows == 0 {
+        return None;
+    }
+    let payload = base64(png);
+    let mut out = String::with_capacity(payload.len() + 256);
+
+    let chunks: Vec<&str> = payload
+        .as_bytes()
+        .chunks(KITTY_CHUNK)
+        .map(|c| std::str::from_utf8(c).expect("base64 is ascii"))
+        .collect();
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        let more = if i + 1 < chunks.len() { 1 } else { 0 };
+        if i == 0 {
+            // a=T transmit-and-display, f=100 PNG, t=d inline base64,
+            // c/r scale into a cell box.
+            out.push_str(&format!(
+                "\x1b_Ga=T,f=100,t=d,c={cols},r={rows},m={more};{chunk}\x1b\\"
+            ));
+        } else {
+            out.push_str(&format!("\x1b_Gm={more};{chunk}\x1b\\"));
+        }
+    }
+    Some(out)
+}
+
+/// Render `path` as a kitty graphics image, or `None` when it cannot be read.
+///
+/// The caller decides whether the terminal supports the protocol; this only
+/// does the encoding.
+pub fn render_kitty(path: &Path, cols: usize, rows: usize) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    kitty_encode(&bytes, cols, rows)
+}
+
+#[cfg(test)]
+mod kitty_tests {
+    use super::*;
+
+    fn png_bytes(n: usize) -> Vec<u8> {
+        // Not a real PNG; the encoder is format-agnostic and the terminal
+        // does the decoding. Size is what matters here.
+        (0..n).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[test]
+    fn base64_matches_known_vectors() {
+        // RFC 4648 test vectors, including both padding lengths.
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foob"), "Zm9vYg==");
+        assert_eq!(base64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn a_small_image_is_one_escape() {
+        let out = kitty_encode(&png_bytes(64), 20, 10).unwrap();
+        assert_eq!(out.matches("\x1b_G").count(), 1);
+        assert!(out.starts_with("\x1b_Ga=T,f=100,t=d,c=20,r=10,m=0;"));
+        assert!(out.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn a_large_image_is_chunked_and_terminated() {
+        // The failure this guards: a terminal that never receives m=0 waits
+        // forever for the rest of the image.
+        let out = kitty_encode(&png_bytes(20_000), 40, 20).unwrap();
+        let escapes = out.matches("\x1b_G").count();
+        assert!(escapes > 1, "20KB should chunk, got {escapes} escape(s)");
+        assert_eq!(out.matches("m=1;").count(), escapes - 1, "all but the last continue");
+        assert_eq!(out.matches("m=0;").count(), 1, "exactly one terminator");
+        // And the terminator must be last, not merely present.
+        let last = out.rfind("m=0;").unwrap();
+        assert!(out[..last].matches("m=1;").count() == escapes - 1);
+    }
+
+    #[test]
+    fn no_chunk_exceeds_the_protocol_limit() {
+        let out = kitty_encode(&png_bytes(30_000), 40, 20).unwrap();
+        for part in out.split("\x1b\\").filter(|p| !p.is_empty()) {
+            let payload = part.rsplit(';').next().unwrap_or("");
+            assert!(payload.len() <= KITTY_CHUNK, "chunk of {} bytes", payload.len());
+        }
+    }
+
+    #[test]
+    fn only_the_first_escape_carries_the_geometry() {
+        // Repeating c=/r= on continuation chunks is a protocol error.
+        let out = kitty_encode(&png_bytes(20_000), 40, 20).unwrap();
+        assert_eq!(out.matches("c=40").count(), 1);
+        assert_eq!(out.matches("a=T").count(), 1);
+    }
+
+    #[test]
+    fn empty_or_zero_sized_input_emits_nothing() {
+        // A zero-length image renders as a stray placeholder in some
+        // terminals, which is worse than no image.
+        assert!(kitty_encode(&[], 10, 10).is_none());
+        assert!(kitty_encode(&png_bytes(10), 0, 10).is_none());
+        assert!(kitty_encode(&png_bytes(10), 10, 0).is_none());
+    }
+
+    #[test]
+    fn a_missing_file_is_none_not_a_panic() {
+        assert!(render_kitty(Path::new("/nonexistent/mascot.png"), 20, 10).is_none());
+    }
+}

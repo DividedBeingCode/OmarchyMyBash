@@ -117,6 +117,25 @@ fn mascot_rows() -> Vec<String> {
     let Some(path) = mascot_path() else {
         return Vec::new();
     };
+    // Where the terminal implements the kitty graphics protocol -- Ghostty,
+    // kitty, wezterm -- send the real image instead of a half-block
+    // approximation. Half-blocks give two vertical samples per cell; this
+    // gives the terminal the PNG.
+    //
+    // foot stays on half-blocks deliberately: it implements sixel, not kitty
+    // graphics. One high-quality path plus one universal fallback beats three
+    // partial ones.
+    let caps = crate::terminal::TermCaps::for_kind(crate::terminal::kind_from_env());
+    if caps.has_kitty_graphics {
+        // 32x16 cells matches the half-block footprint below, so the intro
+        // lays out identically either way.
+        if let Some(img) = crate::sprite::render_kitty(&path, 32, 16) {
+            return vec![img];
+        }
+        // Falls through to half-blocks if the file could not be read -- the
+        // same outcome the half-block path would reach.
+    }
+
     // 32 columns keeps the sprite beside the framed preview rather than
     // dwarfing it, and bounds the work regardless of the source image size.
     crate::sprite::render(&path, 32, "  ").unwrap_or_default()

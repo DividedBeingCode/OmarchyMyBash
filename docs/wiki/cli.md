@@ -492,3 +492,25 @@ An unidentified terminal prints a hint rather than a bare `⚠`:
       hint          set O10K_TERM=<name>, or start an interactive shell
                     so the XTVERSION probe can run
 ```
+
+## Mascot rendering
+
+`omarchy10k intro` renders an optional user-supplied PNG
+(`$XDG_CONFIG_HOME/omarchy10k/mascot.png`) beside the prompt preview. Which
+renderer is used depends on the terminal:
+
+| Terminal | Renderer | Why |
+|----------|----------|-----|
+| ghostty, kitty, wezterm | kitty graphics protocol | The terminal receives the actual PNG |
+| foot, everything else | half-blocks (`▀`) | foot implements sixel, not kitty graphics |
+
+foot keeps half-blocks deliberately rather than gaining a sixel path: one
+high-quality renderer plus one universal fallback is easier to keep correct
+than three partial ones, and half-blocks work everywhere with truecolor.
+
+The kitty payload is chunked at 4096 base64 bytes because the protocol
+requires it — every chunk but the last carries `m=1`, the last carries `m=0`,
+and a terminal that never sees `m=0` waits forever for the rest of the image.
+
+Both paths need `COLORTERM=truecolor`; the project ships the renderer, not the
+art.

@@ -1,12 +1,6 @@
 use std::path::Path;
 use std::process::Command;
 
-// One definition of the terminal table, shared with the daemon by path
-// rather than duplicated. These are two binary crates with no library
-// between them, and a second copy of the capability table is exactly how
-// the two would drift.
-#[path = "../../omarchy10kd/src/terminal.rs"]
-mod terminal;
 
 pub async fn run(socket_path: &Path) -> anyhow::Result<()> {
     println!("Omarchy10k Doctor");
@@ -130,7 +124,7 @@ fn check_terminal() {
     // reported "healthy" throughout all of them.
     let explicit = std::env::var("O10K_TERM").unwrap_or_default();
     let version = std::env::var("O10K_TERM_VERSION").unwrap_or_default();
-    let kind = terminal::kind_from_env();
+    let kind = crate::terminal::kind_from_env();
 
     let method = if !explicit.is_empty() {
         // O10K_TERM is what the adapter's probe writes, and also the manual
@@ -153,7 +147,7 @@ fn check_terminal() {
         format!("{name} {version}")
     };
 
-    if kind == terminal::TerminalKind::Unknown {
+    if kind == crate::terminal::TerminalKind::Unknown {
         println!("  Terminal          {:<14} ⚠ unidentified — conservative profile", display);
         println!("      via           {method}");
         println!("      hint          set O10K_TERM=<name>, or start an interactive shell");
@@ -162,7 +156,7 @@ fn check_terminal() {
         println!("  Terminal          {:<14} ✓ via {method}", display);
     }
 
-    let caps = terminal::TermCaps::for_kind(kind.clone());
+    let caps = crate::terminal::TermCaps::for_kind(kind.clone());
     let yn = |b: bool| if b { "✓" } else { "✘" };
     println!(
         "      caps          OSC7 {}  OSC8 {}  OSC52 {}  sixel {}  kitty-gfx {}  sync {}",
@@ -184,15 +178,15 @@ fn check_terminal() {
 /// refresh` or a hand-edit can silently drop it, and the only symptom is that
 /// the terminal quietly stops following the theme. Nothing is auto-written
 /// here: this project never edits terminal configs.
-fn check_theme_include(kind: &terminal::TerminalKind) {
+fn check_theme_include(kind: &crate::terminal::TerminalKind) {
     let home = std::env::var("HOME").unwrap_or_default();
     let (config, needle, label) = match kind {
-        terminal::TerminalKind::Ghostty => (
+        crate::terminal::TerminalKind::Ghostty => (
             format!("{home}/.config/ghostty/config"),
             "o10k-ghostty.conf",
             "ghostty/config",
         ),
-        terminal::TerminalKind::Foot => (
+        crate::terminal::TerminalKind::Foot => (
             format!("{home}/.config/foot/foot.ini"),
             "o10k-foot.ini",
             "foot/foot.ini",

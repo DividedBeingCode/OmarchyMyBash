@@ -115,6 +115,59 @@ else
     echo "SKIP: ghostty not installed"
 fi
 
+# ── Mascot: kitty graphics where supported, half-blocks where not ─────────
+#
+# Ghostty implements the kitty graphics protocol and gets the real PNG; foot
+# implements sixel, not kitty graphics, and must keep half-blocks. Asserted on
+# the BYTES rather than by screenshot, so it is deterministic.
+BIN="$ROOT/target/debug/omarchy10k"
+if [[ -x "$BIN" ]]; then
+    echo "mascot:"
+    mkdir -p "$WORK/xdg/omarchy10k"
+    # A tiny real PNG; the encoder is format-agnostic but the terminal is not.
+    python3 - "$WORK/xdg/omarchy10k/mascot.png" <<'PY'
+import struct, sys, zlib
+w = h = 8
+raw = b''.join(b'\x00' + bytes([255, 80, 160, 255] * w) for _ in range(h))
+def chunk(t, d):
+    c = t + d
+    return struct.pack('>I', len(d)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
+png = (b'\x89PNG\r\n\x1a\n'
+       + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0))
+       + chunk(b'IDAT', zlib.compress(raw))
+       + chunk(b'IEND', b''))
+open(sys.argv[1], 'wb').write(png)
+PY
+
+    if command -v foot >/dev/null; then
+        timeout 30 foot sh -c "XDG_CONFIG_HOME='$WORK/xdg' COLORTERM=truecolor '$BIN' intro --force > '$WORK/mascot.foot' 2>&1" >/dev/null 2>&1
+        if [[ -s "$WORK/mascot.foot" ]]; then
+            if grep -q $'\x1b_G' "$WORK/mascot.foot"; then
+                echo "FAIL: foot got kitty graphics, which it does not implement"; FAIL=1
+            else
+                echo "  ok: foot got no kitty graphics"
+            fi
+            grep -q '▀' "$WORK/mascot.foot" \
+                && echo "  ok: foot got half-blocks" \
+                || { echo "FAIL: foot got no half-block mascot"; FAIL=1; }
+        else
+            echo "  SKIP: foot produced no intro output"
+        fi
+    fi
+
+    if command -v ghostty >/dev/null; then
+        timeout 30 ghostty -e sh -c "XDG_CONFIG_HOME='$WORK/xdg' COLORTERM=truecolor '$BIN' intro --force > '$WORK/mascot.ghostty' 2>&1" >/dev/null 2>&1 &
+        for _ in $(seq 1 30); do [[ -s "$WORK/mascot.ghostty" ]] && break; sleep 0.5; done
+        if [[ -s "$WORK/mascot.ghostty" ]]; then
+            grep -q $'\x1b_G' "$WORK/mascot.ghostty" \
+                && echo "  ok: ghostty got a kitty graphics image" \
+                || { echo "FAIL: ghostty fell back to half-blocks"; FAIL=1; }
+        else
+            echo "  SKIP: ghostty produced no intro output"
+        fi
+    fi
+fi
+
 if (( FAIL )); then
     echo "terminal e2e FAILED"
     exit 1
