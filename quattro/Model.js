@@ -78,10 +78,34 @@ function stripAnsi(str) {
 // and readline delimiters are dropped. HTML entities are escaped first so
 // prompt text containing <, >, & renders literally.
 
+// Fallback base-16 table, used ONLY when no palette is supplied.
+//
+// These are Tokyo Night's values, and for a long time they were the ONLY
+// values: every ANSI-indexed color in every gallery card rendered in Tokyo
+// Night regardless of the palette actually being previewed, so a Gruvbox
+// user was shown a preview that was not of their prompt. Pass a palette to
+// `ansiToRich` and the indexed colors resolve against it instead.
 var _ANSI_FG = ["#414868", "#f7768e", "#9ece6a", "#e0af68",
                 "#7aa2f7", "#bb9af7", "#7dcfff", "#a9b1d6"];
 var _ANSI_FG_BRIGHT = ["#565f89", "#ff7a93", "#b9f27c", "#ff9e64",
                        "#7da6ff", "#c7a9ff", "#9dd6ff", "#c0caf5"];
+
+// ANSI index → palette role. Index 0 (black) maps to `muted` rather than
+// `background`: a prompt drawing "black" text on its own background would be
+// invisible, and muted is what a terminal's dim role actually is.
+var _ANSI_ROLES = ["muted", "red", "green", "yellow",
+                   "blue", "magenta", "cyan", "foreground"];
+
+/// Resolve base-16 index `i` (0-7) against a palette, falling back to the
+/// built-in table when the palette lacks that role.
+function _paletteAnsi(palette, i, bright) {
+    if (palette) {
+        var hex = palette[_ANSI_ROLES[i]];
+        if (hex !== undefined && hex !== null && String(hex).length > 0)
+            return String(hex);
+    }
+    return bright ? _ANSI_FG_BRIGHT[i] : _ANSI_FG[i];
+}
 
 function escapeHtml(str) {
     return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -95,8 +119,9 @@ function _hexRgb(r, g, b) {
     return "#" + h(r) + h(g) + h(b);
 }
 
-function _xterm256(idx) {
-    if (idx < 16) return idx < 8 ? _ANSI_FG[idx] : _ANSI_FG_BRIGHT[idx - 8];
+function _xterm256(idx, palette) {
+    if (idx < 16)
+        return _paletteAnsi(palette, idx < 8 ? idx : idx - 8, idx >= 8);
     if (idx < 232) {
         var steps = [0, 95, 135, 175, 215, 255];
         var n = idx - 16;
@@ -106,7 +131,7 @@ function _xterm256(idx) {
     return _hexRgb(gray, gray, gray);
 }
 
-function ansiToRich(text) {
+function ansiToRich(text, palette) {
     if (text === undefined || text === null) return "";
     text = String(text);
 
@@ -149,7 +174,7 @@ function ansiToRich(text) {
             else if (n === 38 || n === 48) {
                 var color = null;
                 if (parts[i + 1] === "5" && parts[i + 2] !== undefined) {
-                    color = _xterm256(parseInt(parts[i + 2], 10) || 0);
+                    color = _xterm256(parseInt(parts[i + 2], 10) || 0, palette);
                     i += 2;
                 } else if (parts[i + 1] === "2" && parts[i + 4] !== undefined) {
                     color = _hexRgb(parseInt(parts[i + 2], 10) || 0,
@@ -159,10 +184,10 @@ function ansiToRich(text) {
                 } else break; // malformed sequence — drop the remainder
                 if (n === 38) fg = color; else bg = color;
             }
-            else if (n >= 30 && n <= 37) fg = _ANSI_FG[n - 30];
-            else if (n >= 40 && n <= 47) bg = _ANSI_FG[n - 40];
-            else if (n >= 90 && n <= 97) fg = _ANSI_FG_BRIGHT[n - 90];
-            else if (n >= 100 && n <= 107) bg = _ANSI_FG_BRIGHT[n - 100];
+            else if (n >= 30 && n <= 37) fg = _paletteAnsi(palette, n - 30, false);
+            else if (n >= 40 && n <= 47) bg = _paletteAnsi(palette, n - 40, false);
+            else if (n >= 90 && n <= 97) fg = _paletteAnsi(palette, n - 90, true);
+            else if (n >= 100 && n <= 107) bg = _paletteAnsi(palette, n - 100, true);
             i++;
         }
     }
