@@ -40,6 +40,20 @@ pub struct Config {
     pub daemon: DaemonConfig,
     #[serde(default)]
     pub looks: std::collections::BTreeMap<String, LookEntry>,
+    #[serde(default)]
+    pub intro: IntroConfig,
+}
+
+/// First-run intro screen.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct IntroConfig {
+    /// Path to a PNG rendered beside the prompt preview. Empty means the
+    /// default location, `$XDG_CONFIG_HOME/omarchy10k/mascot.png`.
+    ///
+    /// This key was documented in intro.rs long before it existed, so a user
+    /// who followed the comment got no mascot and no error.
+    pub mascot: String,
 }
 
 /// A user-defined Look: a named patch bundle plus a palette directive
@@ -858,6 +872,7 @@ impl Default for Config {
             daemon: DaemonConfig::default(),
             looks: Default::default(),
             plugins: PluginsConfig::default(),
+            intro: IntroConfig::default(),
         }
     }
 }

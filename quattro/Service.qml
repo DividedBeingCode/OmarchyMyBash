@@ -134,6 +134,45 @@ Item {
     // state and both sibling projects treat it read-only.
     property string desktopTheme: ""
 
+    // ── Terminal font ──────────────────────────────────────────────────────
+    //
+    // Every preview surface claims to render "in the terminal's font, so a
+    // glyph that is tofu there looks like tofu here". None of them did: the
+    // property existed on TerminalPreview, PresetCard and GlyphBrowser, but
+    // nothing ever set it, so all three silently fell back to the panel font
+    // and the tofu promise was worthless.
+    //
+    // Read from the terminal's own config rather than guessed. Ghostty uses
+    // `font-family = "..."`, foot uses `font=name:size`.
+    /// Empty until the probe lands. Deliberately NOT defaulted to
+    /// Style.font.family: this is a non-visual service with no qs.Commons
+    /// import, and reaching for a UI singleton here threw
+    /// "ReferenceError: Style is not defined" on every startup. Consumers
+    /// fall back themselves.
+    property string terminalFont: ""
+
+    Process {
+        id: fontProbe
+        running: true
+        command: ["sh", "-c",
+            "sed -n 's/^ *font-family *= *//p' ~/.config/ghostty/config 2>/dev/null | head -1;" +
+            "sed -n 's/^ *font *= *//p' ~/.config/foot/foot.ini 2>/dev/null | head -1"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                var lines = String(this.text).split("\n")
+                for (var i = 0; i < lines.length; i++) {
+                    var v = lines[i].trim()
+                    if (v.length === 0) continue
+                    // Strip quotes, then foot's ":size=11" suffix and any
+                    // fallback list after the first comma.
+                    v = v.replace(/^["']|["']$/g, "")
+                    v = v.split(",")[0].split(":")[0].trim()
+                    if (v.length > 0) { service.terminalFont = v; return }
+                }
+            }
+        }
+    }
+
     function fetchLooks() {
         service._rpc(Model.buildCommand("looks", "svc-looks"), "svc-looks",
                      function (resp) {

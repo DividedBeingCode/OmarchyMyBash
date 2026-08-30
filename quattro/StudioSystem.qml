@@ -45,15 +45,43 @@ Flickable {
                 // `plugin list` prints one plugin per line; the enabled state
                 // is the trailing marker. Parsed leniently: a format change
                 // must degrade to "no plugins listed", never to a broken tab.
+                // Anchor on the bracketed state, which is the only reliable
+                // marker in this output:
+                //
+                //   plugins (/path/to/root):            <- header
+                //     <name> <version> [enabled] — ...  <- a real plugin
+                //     (invalid) /path — unreadable      <- broken manifest
+                //     <name> — enabled in config.toml but NOT installed
+                //
+                // Splitting on whitespace and taking [0] turned the HEADER
+                // into a plugin called "plugins", with a toggle that ran
+                // `plugin enable plugins`. And the drift line contains the
+                // word "enabled", so a MISSING plugin parsed as an enabled
+                // one -- exactly backwards.
                 var out = []
                 var lines = String(this.text).split("\n")
+                var rowRe = /^\s+(\S+)\s+(\S+)\s+\[(enabled|disabled)\]/
                 for (var i = 0; i < lines.length; i++) {
-                    var t = lines[i].trim()
+                    var raw = lines[i]
+                    var t = raw.trim()
                     if (t.length === 0 || t.indexOf("no plugins") >= 0) continue
-                    if (/^(NAME|ID)\b/i.test(t)) continue
-                    var enabled = /\benabled\b/i.test(t)
-                    var name = t.split(/\s+/)[0]
-                    if (name && name.length > 0) out.push({ name: name, enabled: enabled })
+
+                    var m = rowRe.exec(raw)
+                    if (m) {
+                        out.push({ name: m[1], version: m[2],
+                                   enabled: m[3] === "enabled", state: m[3] })
+                        continue
+                    }
+                    // Drift and breakage are worth surfacing, not skipping:
+                    // both are states the user needs to act on.
+                    if (t.indexOf("NOT installed") >= 0) {
+                        out.push({ name: t.split(/\s+/)[0], version: "",
+                                   enabled: false, state: "missing" })
+                    } else if (t.indexOf("(invalid)") >= 0) {
+                        out.push({ name: "(invalid manifest)", version: "",
+                                   enabled: false, state: "invalid" })
+                    }
+                    // Anything else -- the header included -- is not a row.
                 }
                 systemTab.plugins = out
                 systemTab.loading = false
@@ -182,7 +210,9 @@ Flickable {
                 id: pluginRow
                 required property var modelData
                 width: body.width
-                label: pluginRow.modelData.name
+                label: pluginRow.modelData.state === "missing"
+                    ? pluginRow.modelData.name + " — enabled but not installed"
+                    : pluginRow.modelData.name
                 value: pluginRow.modelData.enabled
                 // No recorded default for a third-party plugin, so the row
                 // never claims "modified" — see SettingRow.
@@ -190,6 +220,10 @@ Flickable {
 
                 Toggle {
                     checked: pluginRow.modelData.enabled
+                    // A plugin that is missing from disk or has an unreadable
+                    // manifest has nothing to enable.
+                    enabled: pluginRow.modelData.state === "enabled"
+                             || pluginRow.modelData.state === "disabled"
                     onClicked: systemTab.togglePlugin(pluginRow.modelData.name,
                                                       pluginRow.modelData.enabled)
                 }

@@ -354,7 +354,7 @@ Flickable {
             selected: promptTab._get("segments.character.success", "")
             // Preview in the terminal's font, not the panel's: a glyph that
             // is tofu in the terminal must look like tofu here.
-            previewFont: promptTab.service && promptTab.service.terminalFont
+            previewFont: (promptTab.service && promptTab.service.terminalFont)
                 ? promptTab.service.terminalFont : Style.font.family
             onPicked: function (key) {
                 promptTab._set("segments.character.success", key)

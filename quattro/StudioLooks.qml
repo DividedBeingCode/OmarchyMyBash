@@ -212,6 +212,8 @@ Item {
                         blurb: card.modelData.blurb || ""
                         tags: card.modelData.tags || []
                         colors: looks._paletteFor(card.modelData)
+                        terminalFont: (looks.service && looks.service.terminalFont)
+                            ? looks.service.terminalFont : Style.font.family
                         active: looks.selected === card.modelData.name
 
                         readonly property var cardResult:

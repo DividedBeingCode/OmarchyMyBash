@@ -114,7 +114,7 @@ fn mascot_rows() -> Vec<String> {
     if !truecolor {
         return Vec::new();
     }
-    let Some(path) = mascot_path() else {
+    let Some(path) = configured_mascot().or_else(mascot_path) else {
         return Vec::new();
     };
     // Where the terminal implements the kitty graphics protocol -- Ghostty,
@@ -139,6 +139,31 @@ fn mascot_rows() -> Vec<String> {
     // 32 columns keeps the sprite beside the framed preview rather than
     // dwarfing it, and bounds the work regardless of the source image size.
     crate::sprite::render(&path, 32, "  ").unwrap_or_default()
+}
+
+/// `[intro] mascot` from config.toml, if it names a file that exists.
+///
+/// Read straight from the file rather than asked of the daemon: the intro
+/// runs once, often before any daemon exists.
+fn configured_mascot() -> Option<PathBuf> {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config")))?;
+    let text = std::fs::read_to_string(base.join("omarchy10k").join("config.toml")).ok()?;
+    let value: toml::Value = toml::from_str(&text).ok()?;
+    let raw = value.get("intro")?.get("mascot")?.as_str()?.trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    // A leading ~ is the one expansion worth doing; anything else is the
+    // user's business.
+    let expanded = if let Some(rest) = raw.strip_prefix("~/") {
+        PathBuf::from(std::env::var("HOME").ok()?).join(rest)
+    } else {
+        PathBuf::from(raw)
+    };
+    expanded.is_file().then_some(expanded)
 }
 
 /// `$XDG_CONFIG_HOME/omarchy10k/mascot.png`, or `None` when absent.
