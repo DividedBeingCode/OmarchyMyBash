@@ -451,7 +451,10 @@ pub(crate) async fn daemon_request(socket_path: &Path, request: &str) -> Result<
     tokio::time::timeout(DAEMON_TIMEOUT, fut).await?
 }
 
-/// Copy text via wl-copy, falling back to xclip. Errors when neither works.
+/// Copy text to the system clipboard.
+///
+/// Tries `wl-copy`, then `xclip`, then **OSC 52** — the terminal-level
+/// clipboard escape, which is the only one of the three that works over SSH.
 fn copy_to_clipboard(text: &str) -> Result<()> {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -477,12 +480,113 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
             return Ok(());
         }
     }
+    // Last resort: ask the TERMINAL to set the clipboard (OSC 52).
+    //
+    // This is the path that works over SSH, where wl-copy and xclip talk to a
+    // display server that is not there. Ghostty, Kitty, Foot, WezTerm and
+    // Alacritty all implement it.
+    if let Some(seq) = osc52_sequence(text) {
+        use std::io::Write;
+        // Write to the TTY, not stdout: stdout may be redirected to a file or
+        // a pipe, and the escape has to reach the terminal to do anything.
+        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            if tty.write_all(seq.as_bytes()).is_ok() && tty.flush().is_ok() {
+                return Ok(());
+            }
+        }
+    }
+
     bail!("no clipboard tool available (install wl-clipboard or xclip), or use --out FILE")
+}
+
+/// Maximum payload for an OSC 52 write.
+///
+/// Terminals bound this; Kitty's documented ceiling is the smallest common
+/// one. A Look bundle is a few KB, so this only guards against something
+/// unreasonable — silently truncating a bundle would produce a corrupt paste,
+/// which is worse than declining.
+const OSC52_MAX_BYTES: usize = 74_994;
+
+/// Build an OSC 52 clipboard-set sequence, or `None` when the payload is too
+/// large for terminals to accept.
+fn osc52_sequence(text: &str) -> Option<String> {
+    let encoded = base64_encode(text.as_bytes());
+    if encoded.len() > OSC52_MAX_BYTES {
+        return None;
+    }
+    // ESC ] 52 ; c ; <base64> BEL — `c` selects the system clipboard.
+    Some(format!("\x1b]52;c;{encoded}\x07"))
+}
+
+/// Minimal standard base64. Written out rather than pulled in as a dependency:
+/// this is the only base64 in the project and the crate is lean by design.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        // Pad according to how many source bytes this chunk actually held.
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_matches_the_standard_alphabet_and_padding() {
+        // RFC 4648 vectors — the padding rules are where hand-rolled base64
+        // usually goes wrong, and a wrong pad produces a corrupt paste.
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn base64_handles_non_ascii_bytes() {
+        // Look bundles carry glyphs, so multi-byte UTF-8 must survive.
+        assert_eq!(base64_encode("λ".as_bytes()), "zrs=");
+        assert_eq!(base64_encode(&[0xff, 0xfe, 0xfd]), "//79");
+    }
+
+    #[test]
+    fn osc52_wraps_the_payload_in_the_clipboard_escape() {
+        let seq = osc52_sequence("hi").expect("small payload encodes");
+        assert!(seq.starts_with("\x1b]52;c;"), "got: {seq:?}");
+        assert!(seq.ends_with('\x07'));
+        assert!(seq.contains("aGk="), "payload should be base64 of 'hi'");
+    }
+
+    #[test]
+    fn osc52_declines_an_oversized_payload_rather_than_truncating() {
+        // Terminals cap OSC 52. Truncating would paste a corrupt bundle,
+        // which is worse than falling through to the error message.
+        let huge = "x".repeat(OSC52_MAX_BYTES);
+        assert!(osc52_sequence(&huge).is_none());
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn temp_dir(label: &str) -> PathBuf {
