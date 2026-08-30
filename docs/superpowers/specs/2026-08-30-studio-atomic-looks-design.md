@@ -285,9 +285,9 @@ every entry uses the existing closed vocabulary.
 | `the_leak_is_real_without_atomic_apply` | `server.rs` | The same sweep using `apply_transient` still leaks, so the invariant test cannot pass vacuously. |
 | `applying_a_look_leaves_your_own_settings_alone` | `server.rs` | Segment enable/disable, `git.mode`, `directory.*` and `terminal.*` survive an apply unchanged. |
 | `a_structure_look_keeps_the_palette_you_are_on` | `server.rs` | Existing test, retargeted at `apply_look`. |
-| `clear_look_owned_removes_rather_than_defaults` | `looks.rs` | The cleared keys are absent from the table, not written as explicit defaults. |
-| `every_daemon_glyph_is_browsable` | `style.rs` | Extends `catalog_parity_tests`: every key `available_symbol_chars` resolves appears in the Studio catalog. Fails today on three kaomoji. |
-| `the_catalog_has_no_duplicate_keys` | `style.rs` | Fails today on `dragon`. |
+| `clear_look_owned_removes_rather_than_writing_defaults` | `looks.rs` | The cleared keys are absent from the table, not written as explicit defaults. |
+| `every_glyph_the_daemon_resolves_is_browsable` | `style.rs` | Extends `catalog_parity_tests`: every key `available_symbol_chars` resolves appears in the Studio catalog. Fails today on three kaomoji. |
+| `the_studio_catalog_has_no_duplicate_keys` | `style.rs` | Fails today on `dragon`. |
 | `patch_schema_tests` | `looks.rs` | Existing; every new Look's patch is walked against `Config::default()`. |
 | `tst_subrail.qml` | `tests/qml/` | Sub-tab switching, bounds, and that an out-of-range index is clamped rather than blanking the tab. |
 | `tst_glyphbrowser.qml` | `tests/qml/` | Category filter combines with the search query; `all` restores the full set; glyph size scales with tile width. |
