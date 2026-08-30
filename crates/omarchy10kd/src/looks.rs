@@ -67,39 +67,107 @@ const fn p(
 }
 
 //      accent     foreground muted      background red        green      yellow     blue       magenta    cyan       orange
-static CURATED_PALETTES: [PaletteDef; 16] = [
-        p("tokyo-night", "Tokyo Night", "Cool indigo night, the Omarchy default mood.",
-          ["#7aa2f7", "#c0caf5", "#565f89", "#1a1b26", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#ff9e64"]),
-        p("catppuccin", "Catppuccin Mocha", "Soft pastels on warm charcoal.",
-          ["#89b4fa", "#cdd6f4", "#7f849c", "#1e1e2e", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#cba6f7", "#94e2d5", "#fab387"]),
-        p("catppuccin-frappe", "Catppuccin Frappé", "The same pastels, a shade lighter and cooler.",
-          ["#8caaee", "#c6d0f5", "#838ba7", "#303446", "#e78284", "#a6d189", "#e5c890", "#8caaee", "#ca9ee6", "#81c8be", "#ef9f76"]),
-        p("gruvbox", "Gruvbox", "Retro warmth: mustard, rust and olive.",
-          ["#83a598", "#ebdbb2", "#a89984", "#282828", "#fb4934", "#b8bb26", "#fabd2f", "#83a598", "#d3869b", "#8ec07c", "#fe8019"]),
-        p("nord", "Nord", "Arctic blues, deliberately low-key.",
-          ["#88c0d0", "#eceff4", "#7b88a1", "#2e3440", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#8fbcbb", "#d08770"]),
-        p("dracula", "Dracula", "High-contrast neon on deep violet.",
-          ["#bd93f9", "#f8f8f2", "#8a92b8", "#282a36", "#ff5555", "#50fa7b", "#f1fa8c", "#8be9fd", "#ff79c6", "#8be9fd", "#ffb86c"]),
-        p("rose-pine", "Rosé Pine", "Muted rose and pine on near-black plum.",
-          ["#c4a7e7", "#e0def4", "#908caa", "#191724", "#eb6f92", "#71b8a0", "#f6c177", "#9ccfd8", "#c4a7e7", "#9ccfd8", "#f0a878"]),
-        p("everforest", "Everforest", "Green-grey calm, easy on long sessions.",
-          ["#a7c080", "#d3c6aa", "#9da9a0", "#2d353b", "#e67e80", "#a7c080", "#dbbc7f", "#7fbbb3", "#d699b6", "#83c092", "#e69875"]),
-        p("kanagawa", "Kanagawa", "Ink-wash blues over sumi black.",
-          ["#7e9cd8", "#dcd7ba", "#928374", "#1f1f28", "#ff8b8b", "#98bb6c", "#ffa066", "#7e9cd8", "#b294bb", "#7aa89f", "#ffa066"]),
-        p("solarized-dark", "Solarized Dark", "The original calibrated scheme, teal-based.",
-          ["#268bd2", "#93a1a1", "#7d8f8f", "#002b36", "#dc322f", "#859900", "#b58900", "#268bd2", "#d33682", "#2aa198", "#cb4b16"]),
-        p("one-dark", "One Dark", "Atom's classic — balanced and familiar.",
-          ["#61afef", "#abb2bf", "#828997", "#282c34", "#e06c75", "#98c379", "#e5c07b", "#61afef", "#c678dd", "#56b6c2", "#d19a66"]),
-        p("monokai", "Monokai", "Loud lime and magenta on olive black.",
-          ["#a6e22e", "#f8f8f2", "#9a957f", "#272822", "#f92672", "#a6e22e", "#e6db74", "#66d9ef", "#ae81ff", "#66d9ef", "#fd971f"]),
-        p("ayu-mirage", "Ayu Mirage", "Amber highlights on slate blue.",
-          ["#ffcc66", "#cbccc6", "#8a94a3", "#1f2430", "#ff6666", "#bae67e", "#ffcc66", "#73d0ff", "#d4bfff", "#95e6cb", "#ff9940"]),
-        p("oxocarbon", "Oxocarbon", "IBM Carbon: flat, bright, near-black.",
-          ["#33b1ff", "#f2f4f8", "#8d8d8d", "#161616", "#ee5396", "#42be65", "#fae3b0", "#33b1ff", "#be95ff", "#3ddbd9", "#ff7eb6"]),
-        p("nightfox", "Nightfox", "Dusky blues with a warm amber accent.",
-          ["#719cd6", "#cdcecf", "#8b8d8f", "#192330", "#c94f6d", "#81b29a", "#dbc074", "#719cd6", "#9d79d6", "#63cdcf", "#f4a261"]),
+static CURATED_PALETTES: [PaletteDef; 39] = [
+    p("tokyo-night", "Tokyo Night", "Cool indigo night, the Omarchy default mood.",
+      ["#7aa2f7", "#c0caf5", "#565f89", "#1a1b26", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#ff9e64"]),
+    p("catppuccin", "Catppuccin Mocha", "Soft pastels on warm charcoal.",
+      ["#89b4fa", "#cdd6f4", "#7f849c", "#1e1e2e", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#cba6f7", "#94e2d5", "#fab387"]),
+    p("catppuccin-frappe", "Catppuccin Frappé", "The same pastels, a shade lighter and cooler.",
+      ["#8caaee", "#c6d0f5", "#838ba7", "#303446", "#e78284", "#a6d189", "#e5c890", "#8caaee", "#ca9ee6", "#81c8be", "#ef9f76"]),
+    p("gruvbox", "Gruvbox", "Retro warmth: mustard, rust and olive.",
+      ["#83a598", "#ebdbb2", "#a89984", "#282828", "#fb4934", "#b8bb26", "#fabd2f", "#83a598", "#d3869b", "#8ec07c", "#fe8019"]),
+    p("nord", "Nord", "Arctic blues, deliberately low-key.",
+      ["#88c0d0", "#eceff4", "#7b88a1", "#2e3440", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#8fbcbb", "#d08770"]),
+    p("dracula", "Dracula", "High-contrast neon on deep violet.",
+      ["#bd93f9", "#f8f8f2", "#8a92b8", "#282a36", "#ff5555", "#50fa7b", "#f1fa8c", "#8be9fd", "#ff79c6", "#8be9fd", "#ffb86c"]),
+    p("rose-pine", "Rosé Pine", "Muted rose and pine on near-black plum.",
+      ["#c4a7e7", "#e0def4", "#908caa", "#191724", "#eb6f92", "#71b8a0", "#f6c177", "#9ccfd8", "#c4a7e7", "#9ccfd8", "#f0a878"]),
+    p("everforest", "Everforest", "Green-grey calm, easy on long sessions.",
+      ["#a7c080", "#d3c6aa", "#9da9a0", "#2d353b", "#e67e80", "#a7c080", "#dbbc7f", "#7fbbb3", "#d699b6", "#83c092", "#e69875"]),
+    p("kanagawa", "Kanagawa", "Ink-wash blues over sumi black.",
+      ["#7e9cd8", "#dcd7ba", "#928374", "#1f1f28", "#ff8b8b", "#98bb6c", "#ffa066", "#7e9cd8", "#b294bb", "#7aa89f", "#ffa066"]),
+    p("solarized-dark", "Solarized Dark", "The original calibrated scheme, teal-based.",
+      ["#268bd2", "#93a1a1", "#7d8f8f", "#002b36", "#dc322f", "#859900", "#b58900", "#268bd2", "#d33682", "#2aa198", "#cb4b16"]),
+    p("one-dark", "One Dark", "Atom's classic — balanced and familiar.",
+      ["#61afef", "#abb2bf", "#828997", "#282c34", "#e06c75", "#98c379", "#e5c07b", "#61afef", "#c678dd", "#56b6c2", "#d19a66"]),
+    p("monokai", "Monokai", "Loud lime and magenta on olive black.",
+      ["#a6e22e", "#f8f8f2", "#9a957f", "#272822", "#f92672", "#a6e22e", "#e6db74", "#66d9ef", "#ae81ff", "#66d9ef", "#fd971f"]),
+    p("ayu-mirage", "Ayu Mirage", "Amber highlights on slate blue.",
+      ["#ffcc66", "#cbccc6", "#8a94a3", "#1f2430", "#ff6666", "#bae67e", "#ffcc66", "#73d0ff", "#d4bfff", "#95e6cb", "#ff9940"]),
+    p("oxocarbon", "Oxocarbon", "IBM Carbon: flat, bright, near-black.",
+      ["#33b1ff", "#f2f4f8", "#8d8d8d", "#161616", "#ee5396", "#42be65", "#fae3b0", "#33b1ff", "#be95ff", "#3ddbd9", "#ff7eb6"]),
+    p("nightfox", "Nightfox", "Dusky blues with a warm amber accent.",
+      ["#719cd6", "#cdcecf", "#8b8d8f", "#192330", "#c94f6d", "#81b29a", "#dbc074", "#719cd6", "#9d79d6", "#63cdcf", "#f4a261"]),
     p("catppuccin-latte", "Catppuccin Latte", "The light one, for daylight terminals.",
       ["#1e66f5", "#4c4f69", "#7c7f93", "#eff1f5", "#d20f39", "#40a02b", "#a06e17", "#1e66f5", "#ea76cb", "#179299", "#c4560b"]),
+
+    // ── Neon / cyberpunk, then more community classics ────────────────────
+    //
+    // Adapted from the canonical iTerm2-Color-Schemes collection
+    // (mbadolato/iTerm2-Color-Schemes, MIT), mapped from its Windows Terminal
+    // JSON onto this project's eleven roles.
+    //
+    // The mapping is not a straight copy, and three things about it are worth
+    // knowing:
+    //
+    //   * ANSI has no `orange` slot, so orange is the OKLCH midpoint of the
+    //     scheme's own red and yellow -- in the scheme's own hues rather than
+    //     a generic orange.
+    //   * `accent` prefers the scheme's cursor color when that color actually
+    //     carries chroma (plenty of schemes set it to plain white), else the
+    //     first of purple/cyan/blue/yellow/green that does. RED IS NEVER the
+    //     accent: in a prompt, red means error.
+    //   * Roles below this module's contrast floors were repaired at
+    //     authoring time by the same OKLCH walk `palette_derive` uses, so
+    //     these clear `every_curated_palette_clears_the_contrast_gate`
+    //     without runtime repair. Where a value differs from upstream, that
+    //     is why.
+    p("synthwave-alpha", "Synthwave Alpha", "Purple grid, sunset horizon, 1984 forever.",
+      ["#d53bce", "#f2f2e3", "#7f7094", "#241b30", "#e60a70", "#00986c", "#adad3e", "#9151d5", "#c120ba", "#00b0b1", "#e46d00"]),
+    p("outrun-electric", "Outrun Electric", "Chrome and neon, driving music at 3am.",
+      ["#ff2afc", "#f2f3f7", "#546a90", "#0c0a20", "#e61f44", "#a7da1e", "#ffd400", "#1ea8fc", "#ff2afc", "#42c6ff", "#ff8000"]),
+    p("neon", "Neon", "Electric cyan and magenta. Maximum voltage.",
+      ["#f924e7", "#00fffc", "#686868", "#14161a", "#ff3045", "#5ffa74", "#fffc7e", "#2b5dff", "#f924e7", "#00fffc", "#ffa100"]),
+    p("cyberpunk", "Cyberpunk", "Teal and hot pink over deep violet.",
+      ["#21f6bc", "#e5e5e5", "#6a6a6a", "#332a57", "#ff7092", "#00fbac", "#fffa6a", "#00bfff", "#df95ff", "#86cbfe", "#ffac4c"]),
+    p("scarlet-protocol", "Scarlet Protocol", "Scarlet ink on black, with acid green.",
+      ["#76ff9f", "#ff587a", "#686868", "#101116", "#ff0051", "#01dc84", "#faf945", "#0271b6", "#c930c7", "#00c5c7", "#ff9300"]),
+    p("laser", "Laser", "Magenta text, green cursor, no apologies.",
+      ["#00ff9c", "#ff2bf1", "#8f8f8f", "#030d18", "#ff8373", "#b4fb73", "#09b4bd", "#fed300", "#ff90fe", "#d1d1fe", "#a3af3f"]),
+    p("blue-matrix", "Blue Matrix", "Terminal-green rain on cold blue.",
+      ["#76ff9f", "#00a2ff", "#686868", "#101116", "#ff5680", "#00ff9c", "#fffc58", "#00b0ff", "#d57bff", "#76c1ff", "#ffa219"]),
+    p("vaporwave-sunset", "Vaporwave Sunset", "Hot pink and cyan on twilight purple.",
+      ["#ff4fd8", "#fff7ed", "#6d5586", "#180827", "#fb7185", "#2dd4bf", "#fb923c", "#a78bfa", "#ff4fd8", "#22d3ee", "#ff7f60"]),
+    p("aura", "Aura", "Violet on near-black, unapologetically saturated.",
+      ["#a277ff", "#cdccce", "#5c5c5c", "#15141b", "#ff6767", "#61ffca", "#ffca85", "#a277ff", "#61ffca", "#a277ff", "#ff9b62"]),
+    p("andromeda", "Andromeda", "Deep space navy with a magenta pulse.",
+      ["#ca4dc9", "#e5e5e5", "#666666", "#262a33", "#d43937", "#05bc79", "#e5e512", "#2b78cf", "#bc3fbc", "#0fa8cd", "#f38900"]),
+    p("cobalt2", "Cobalt2", "Cobalt and hazard yellow. Wes Bos's.",
+      ["#f0cc09", "#ffffff", "#666666", "#132738", "#ff0000", "#38de21", "#ffe50a", "#236de0", "#ff005d", "#00bbbb", "#ff8d00"]),
+    p("snazzy", "Snazzy", "Hyper's bright, friendly palette.",
+      ["#fc4cb4", "#ebece6", "#606060", "#1e1f29", "#fc4346", "#50fb7c", "#f0fb8c", "#49baff", "#fc4cb4", "#8be9fe", "#ffa700"]),
+    p("night-owl", "Night Owl", "Built for late nights and low light.",
+      ["#9069d6", "#d6deeb", "#5d5c5c", "#011627", "#ef5350", "#22da6e", "#addb67", "#82aaff", "#c792ea", "#21c7a8", "#e99a00"]),
+    p("material-ocean", "Material Ocean", "Material's deepest navy.",
+      ["#82aaff", "#9599a8", "#546e7a", "#0f111a", "#ff5370", "#c3e88d", "#ffcb6b", "#82aaff", "#c792ea", "#89ddff", "#ff914c"]),
+    p("horizon", "Horizon", "Sunset pinks and teals on slate.",
+      ["#ee64ac", "#d5d8da", "#666666", "#1c1e26", "#e95678", "#29d398", "#fab795", "#26bbd9", "#ee64ac", "#59e1e3", "#f6887a"]),
+    p("monokai-pro", "Monokai Pro", "The Monokai refit: softer, still punchy.",
+      ["#ab9df2", "#fcfcfa", "#727072", "#2d2a2e", "#ff6188", "#a9dc76", "#ffd866", "#fc9867", "#ab9df2", "#78dce8", "#ff9a52"]),
+    p("sonokai", "Sonokai", "Monokai's high-contrast successor.",
+      ["#b39df3", "#e2e2e3", "#7f8490", "#2c2e34", "#fc5d7c", "#9ed072", "#e7c664", "#76cce0", "#b39df3", "#f39660", "#ff9249"]),
+    p("poimandres", "Poimandres", "Teal and mist, deliberately desaturated.",
+      ["#5de4c7", "#a6accd", "#63677c", "#1a1e28", "#d0679d", "#5de4c7", "#fffac2", "#89ddff", "#fcc5e9", "#add7ff", "#fdac85"]),
+    p("iceberg", "Iceberg", "Cold, restrained blues. Very quiet.",
+      ["#a093c7", "#c6c8d1", "#6b7089", "#161821", "#e27878", "#b4be82", "#e2a478", "#84a0c6", "#a093c7", "#89b8c2", "#e48e72"]),
+    p("everblush", "Everblush", "Soft botanical greens, low glare.",
+      ["#c47fd5", "#dadada", "#565f61", "#141b1e", "#e57474", "#8ccf7e", "#e5c76b", "#67b0e8", "#c47fd5", "#6cbfbf", "#f09b5b"]),
+    p("zenburn", "Zenburn", "The original low-contrast scheme, from 2003.",
+      ["#dc8cc3", "#dcdccc", "#709080", "#3f3f3f", "#9b7a7a", "#60b48a", "#f0dfaf", "#748495", "#dc8cc3", "#8cd0d3", "#bc9982"]),
+    p("rose-pine-moon", "Rosé Pine Moon", "Rosé Pine's moonlit variant.",
+      ["#c4a7e7", "#e0def4", "#6e6a86", "#232136", "#eb6f92", "#3e8fb0", "#f6c177", "#9ccfd8", "#c4a7e7", "#ea9a97", "#fc9572"]),
+    p("tokyo-night-storm", "Tokyo Night Storm", "Tokyo Night with the lights up a notch.",
+      ["#bb9af7", "#c0caf5", "#5f6687", "#24283b", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#f49168"]),
 ];
 
 /// Look up a curated palette as a `theme` sub-patch.
@@ -364,7 +432,114 @@ pub fn curated() -> Vec<LookDef> {
                 "git": { "branch_icon": "text" },
                 "frame": { "enabled": false },
             }), "solarized-dark")),
-        look("daylight-latte", "Daylight Latte",
+        // ── Neon / cyberpunk ──────────────────────────────────────────────
+        look("neon-grid", "Neon Grid",
+            "Full rainbow powerline in electric cyan and magenta.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "rainbow", "separators": { "shape": "powerline" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "triangle", "error": "triangle", "transient": "triangle" } },
+                "git": { "branch_icon": "powerline" },
+                "frame": { "enabled": false },
+                "prompt": { "newline": true },
+            }), "neon")),
+        look("outrun", "Outrun",
+            "Flame-cut segments and a chrome horizon. Drive.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "gradient", "separators": { "shape": "flame" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "arrow", "error": "arrow", "transient": "arrow" } },
+                "git": { "branch_icon": "nerd" },
+                "frame": { "enabled": false },
+            }), "outrun-electric")),
+        look("synthwave", "Synthwave",
+            "A gradient rule across the grid, purple all the way down.",
+            &["complete", "framed", "two-line", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "framed", "separators": { "shape": "slanted" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
+                "git": { "branch_icon": "powerline" },
+                "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "full" },
+                "prompt": { "newline": true },
+            }), "synthwave-alpha")),
+        look("scarlet-protocol", "Scarlet Protocol",
+            "Dense trapezoid segments, scarlet on black. Reads like a HUD.",
+            &["complete", "dense", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "dense", "separators": { "shape": "trapezoid" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "angle", "error": "kaomoji_rage", "transient": "angle" } },
+                "git": { "branch_icon": "octicon" },
+                "frame": { "enabled": false },
+            }), "scarlet-protocol")),
+        look("matrix-rain", "Matrix Rain",
+            "Terminal green on cold blue, stripped to nothing but the path.",
+            &["complete", "minimal", "ascii-safe"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "minimal", "separators": { "shape": "none" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "angle", "error": "angle", "transient": "angle" } },
+                "git": { "branch_icon": "text" },
+                "frame": { "enabled": false },
+                "prompt": { "newline": false },
+            }), "blue-matrix")),
+        look("laser-focus", "Laser Focus",
+            "Magenta ink, one clean line to type on.",
+            &["complete", "two-line", "minimal"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "pure", "separators": { "shape": "dot" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "lambda", "error": "lambda", "transient": "lambda" } },
+                "git": { "branch_icon": "text" },
+                "frame": { "enabled": false },
+                "prompt": { "newline": true },
+            }), "laser")),
+        look("vapor-drift", "Vapor Drift",
+            "Segments that fade into twilight. Hot pink over deep purple.",
+            &["complete", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "gradient", "separators": { "shape": "fade" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "triangle", "error": "triangle", "transient": "triangle" } },
+                "git": { "branch_icon": "nerd" },
+                "frame": { "enabled": false },
+            }), "vaporwave-sunset")),
+        look("cobalt-hazard", "Cobalt Hazard",
+            "Cobalt blue with hazard-yellow highlights.",
+            &["complete", "powerline", "nerd-font"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "powerline", "separators": { "shape": "powerline" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
+                "git": { "branch_icon": "powerline" },
+                "frame": { "enabled": false },
+            }), "cobalt2")),
+
+        // ── Quieter additions ─────────────────────────────────────────────
+        look("night-owl-lean", "Night Owl Lean",
+            "For 2am: low glare, nothing shouting.",
+            &["complete", "minimal"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "lean", "separators": { "shape": "vertical" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "owl", "error": "owl", "transient": "owl" } },
+                "git": { "branch_icon": "nerd" },
+                "frame": { "enabled": false },
+            }), "night-owl")),
+        look("poimandres-zen", "Poimandres Zen",
+            "Desaturated teal and mist. As calm as a prompt gets.",
+            &["complete", "minimal", "ascii-safe"],
+            with_palette(serde_json::json!({
+                "style": { "preset": "pure", "separators": { "shape": "none" } },
+                "segments": { "os": { "icon": "none" },
+                              "character": { "success": "angle", "error": "angle", "transient": "angle" } },
+                "git": { "branch_icon": "text" },
+                "frame": { "enabled": false },
+            }), "poimandres")),
+                look("daylight-latte", "Daylight Latte",
             "For terminals in the sun: light background, dark ink.",
             &["complete", "minimal"],
             with_palette(serde_json::json!({
@@ -725,10 +900,10 @@ mod preset_tests {
     #[test]
     fn the_collection_is_worth_browsing() {
         // The point of the pass: enough breadth that the gallery is a gallery.
-        assert!(curated().len() >= 18, "expected at least 18 curated Looks");
+        assert!(curated().len() >= 28, "expected at least 28 curated Looks");
         assert!(
-            curated_palettes().len() >= 16,
-            "expected at least 16 curated palettes"
+            curated_palettes().len() >= 38,
+            "expected at least 38 curated palettes"
         );
     }
 }

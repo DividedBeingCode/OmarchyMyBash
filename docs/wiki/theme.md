@@ -419,6 +419,32 @@ deriver repairs **8% of roles** across the 22 shipped themes, and 8 themes
 come through untouched. `muted` dominates what it does touch — the
 well-known bright-black-as-text problem.
 
+### The curated collection
+
+39 curated palettes. Beyond the classics, the neon/cyberpunk set (Synthwave
+Alpha, Outrun Electric, Neon, Cyberpunk, Scarlet Protocol, Laser, Blue
+Matrix, Vaporwave Sunset, Aura, Andromeda, Cobalt2, Snazzy) and further
+community favourites (Night Owl, Material Ocean, Horizon, Monokai Pro,
+Sonokai, Poimandres, Iceberg, Everblush, Zenburn, Rose Pine Moon, Tokyo Night
+Storm) are adapted from the canonical `mbadolato/iTerm2-Color-Schemes`
+collection (MIT), mapped from its Windows Terminal JSON onto this project's
+eleven roles.
+
+The mapping is not a straight copy:
+
+- **ANSI has no `orange` slot**, so orange is the OKLCH midpoint of the
+  scheme's own red and yellow — in the scheme's hues, not a generic orange.
+- **`accent`** prefers the scheme's cursor color when that color actually
+  carries chroma (many schemes set it to plain white), else the first of
+  purple/cyan/blue/yellow/green that does. **Red is never the accent**: in a
+  prompt, red means error.
+- **A few schemes need explicit overrides.** Vaporwave Sunset ships `purple`
+  and `cyan` swapped relative to how they read; Poimandres puts its signature
+  teal in the `green` slot. Those are upstream quirks no rule sees through.
+- **Roles below the floors were repaired at authoring time** by the same
+  OKLCH walk, so the curated table clears its gate without runtime repair.
+  Where a value differs from upstream, that is why.
+
 ### The gate
 
 `every_installed_omarchy_theme_derives_a_readable_palette` enumerates

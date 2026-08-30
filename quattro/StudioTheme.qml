@@ -28,6 +28,12 @@ Flickable {
 
     property var themes: []
     property string current: ""
+    /// Palette search. At 8 palettes a plain list was fine; at 53 it is a
+    /// wall, and the curated/derived split is the distinction people actually
+    /// filter on.
+    property string paletteQuery: ""
+    /// "" | "curated" | "derived"
+    property string paletteSource: ""
 
     readonly property var cfg: themeTab.service ? themeTab.service.cfgFlat : ({})
     readonly property var palettes:
@@ -50,6 +56,24 @@ Flickable {
                        blurb: p.blurb || "", source: p.source || "curated",
                        accent: p.accent || "",
                        colors: p.colors ? p.colors : p })
+        }
+        return out
+    }
+
+    readonly property var visiblePalettes: {
+        var q = themeTab.paletteQuery.trim().toLowerCase()
+        var out = []
+        for (var i = 0; i < themeTab.paletteList.length; i++) {
+            var e = themeTab.paletteList[i]
+            if (themeTab.paletteSource.length > 0
+                    && String(e.source || "curated") !== themeTab.paletteSource)
+                continue
+            if (q.length > 0) {
+                var hay = String(e.label || "") + " " + String(e.key || "")
+                        + " " + String(e.blurb || "")
+                if (hay.toLowerCase().indexOf(q) < 0) continue
+            }
+            out.push(e)
         }
         return out
     }
@@ -212,12 +236,56 @@ Flickable {
             font.pixelSize: Style.font.caption
         }
 
+        Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            TextField {
+                id: palSearch
+                width: parent.width - Style.space(300)
+                placeholderText: "Search palettes — try \"neon\", \"cyber\", \"gruvbox\"…"
+                text: themeTab.paletteQuery
+                onTextChanged: themeTab.paletteQuery = text
+            }
+
+            Chip {
+                anchors.verticalCenter: parent.verticalCenter
+                label: "all"
+                active: themeTab.paletteSource.length === 0
+                onClicked: themeTab.paletteSource = ""
+            }
+
+            Chip {
+                anchors.verticalCenter: parent.verticalCenter
+                label: "curated"
+                active: themeTab.paletteSource === "curated"
+                onClicked: themeTab.paletteSource =
+                    themeTab.paletteSource === "curated" ? "" : "curated"
+            }
+
+            Chip {
+                anchors.verticalCenter: parent.verticalCenter
+                label: "from themes"
+                active: themeTab.paletteSource === "derived"
+                onClicked: themeTab.paletteSource =
+                    themeTab.paletteSource === "derived" ? "" : "derived"
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: themeTab.visiblePalettes.length + " / " + themeTab.paletteList.length
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+            }
+        }
+
         Flow {
             width: parent.width
             spacing: Style.space(8)
 
             Repeater {
-                model: themeTab.paletteList
+                model: themeTab.visiblePalettes
 
                 delegate: Chip {
                     id: palChip

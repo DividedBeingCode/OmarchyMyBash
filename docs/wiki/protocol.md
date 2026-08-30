@@ -771,7 +771,7 @@ Top-level `left`/`right` are always present, even alongside `renders`.
 
 `{"type":"control","command":"palettes"}` returns the curated table **plus one
 palette derived from every installed Omarchy theme without a curated entry** —
-30 entries on a stock install (16 curated + 14 derived).
+53 entries on a stock install (39 curated + 14 derived).
 
 ```json
 {"key":"osaka-jade","label":"Osaka Jade",
