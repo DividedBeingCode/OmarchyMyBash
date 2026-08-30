@@ -257,6 +257,18 @@ impl DaemonState {
         *self.plugins.write().await = new_plugins;
         self.plugin_cache.invalidate_all().await;
         self.set_config(new_config).await;
+        // Resolve the palette HERE rather than at each caller.
+        //
+        // The persistent `looks_apply` path forgot to: it wrote the new theme
+        // to config.toml, reloaded the config, and left the daemon rendering
+        // the PREVIOUS palette. The prompt showed the old colors, and in the
+        // Studio every card whose theme now matched the live config took that
+        // stale palette through `handle_preview`'s skip-the-resolve branch —
+        // so applying a Look flipped the whole grid to the colors you had
+        // before. The transient path, `config_set` and the file watcher each
+        // remembered to call this; one caller forgetting is what made it a
+        // bug, so no caller gets the choice any more.
+        self.reload_theme().await;
         info!("config reloaded");
         Ok(())
     }
@@ -1420,10 +1432,12 @@ async fn handle_connection(
 
                             match write_config_patch(&state, &patch).await {
                                 Ok(()) => {
-                                    let touches_theme = patch.get("theme").is_some();
-                                    if touches_theme {
-                                        state.reload_theme().await;
-                                    }
+                                    // No reload_theme here: write_config_patch
+                                    // persists and reloads, and reload_config
+                                    // now resolves the palette itself. This
+                                    // used to be the ONLY write path that
+                                    // remembered to, which is exactly why the
+                                    // Look-apply path could forget.
                                     write_response(&mut writer, serde_json::json!({
                                         "type": "config",
                                         "status": "ok",
@@ -2476,6 +2490,53 @@ mod tests {
             };
             assert!(d <= 45.0, "{}: published ramp swings {d:.0}deg", p["key"]);
         }
+    }
+
+    #[tokio::test]
+    async fn applying_a_look_refreshes_the_palette_not_just_the_config() {
+        // The Apply button's path. It wrote the new theme to config.toml and
+        // left `state.palette` on the PREVIOUS palette, so the prompt kept
+        // rendering the old colors and every Studio card whose theme now
+        // matched the live config inherited that staleness through
+        // `handle_preview`'s skip-the-resolve branch.
+        let dir = temp_config_dir("apply-refreshes-palette");
+        let path = dir.join("config.toml");
+        // Start on Gruvbox's accent, pinned so nothing on the host machine
+        // can change what this test starts from.
+        std::fs::write(
+            &path,
+            "[theme]\nsource = \"custom\"\n\n[theme.custom]\naccent = \"#83a598\"\n",
+        )
+        .unwrap();
+        let config = Config::load(&path).expect("load config");
+        let palette = ThemePalette::resolve_palette(&config);
+        assert_eq!(palette.accent, crate::theme::AnsiColor::from_hex("#83a598").unwrap());
+
+        let state = std::sync::Arc::new(DaemonState::new(
+            config,
+            palette,
+            path.clone(),
+            dir.join("d.sock"),
+        ));
+
+        let look = crate::looks::resolve("synthwave", &Config::default()).expect("curated");
+        write_look_patch(&state, &look.patch).await.expect("write ok");
+
+        let want = state.config.read().await.theme.clone();
+        let got = state.palette.read().await;
+        let expected = ThemePalette::resolve_palette(&Config {
+            theme: want,
+            ..Config::default()
+        });
+        assert_eq!(
+            got.accent, expected.accent,
+            "the daemon kept the previous palette after applying a Look"
+        );
+        assert_ne!(
+            got.accent,
+            crate::theme::AnsiColor::from_hex("#83a598").unwrap(),
+            "palette did not move off the starting accent at all"
+        );
     }
 }
 

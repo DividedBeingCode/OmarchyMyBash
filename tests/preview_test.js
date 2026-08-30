@@ -9,7 +9,7 @@ const src = fs.readFileSync(
     path.join(__dirname, '..', 'quattro', 'o10k', 'Preview.js'), 'utf8')
     .replace(/^\.pragma library.*$/m, '');
 const P = new Function(src + '\n;return {' +
-    ' SCENES, CARD_SCENES, SCENE_FIELDS, buildRequest, cacheKey, debouncer };')();
+    ' SCENES, CARD_SCENES, SCENE_FIELDS, buildRequest, cacheKey, debouncer, cardColsFor };')();
 
 let failures = 0;
 function check(desc, actual, expected) {
@@ -191,6 +191,32 @@ function fakeClock() {
     check('the same request still shares a cache entry',
           P.cacheKey('synthwave', null, P.CARD_SCENES, 38) ===
           P.cacheKey('synthwave', null, P.CARD_SCENES, 38), true);
+})();
+
+
+// ── Card render width ──────────────────────────────────────────────────────
+//
+// The bug: cardColsFor clamped to 20 for a pane that had not been laid out,
+// so the gallery rendered every card for a 20-column terminal and only
+// refetched at the real width when something else triggered a refresh —
+// making an unrelated Apply look like it rewrote every other preset.
+(() => {
+    const GAP = 10, PAD = 20, CW = 7.1875;
+    check('an unlaid-out pane renders nothing, rather than 20 columns',
+          P.cardColsFor(0, 3, CW, GAP, PAD), 0);
+    check('a pane with no font metrics renders nothing',
+          P.cardColsFor(1160, 3, 0, GAP, PAD), 0);
+    check('a zero column count renders nothing',
+          P.cardColsFor(1160, 0, CW, GAP, PAD), 0);
+
+    const laid = P.cardColsFor(1160, 3, CW, GAP, PAD);
+    check('a laid-out pane is far wider than the floor', laid > 40, true);
+    check('the floor still protects a genuinely narrow pane',
+          P.cardColsFor(200, 3, CW, GAP, PAD), 20);
+
+    // The regression itself: these two must not be confusable.
+    check('unlaid-out and narrow are distinguishable',
+          P.cardColsFor(0, 3, CW, GAP, PAD) !== P.cardColsFor(200, 3, CW, GAP, PAD), true);
 })();
 
 if (failures) {

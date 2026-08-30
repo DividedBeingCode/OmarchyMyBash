@@ -78,12 +78,13 @@ Item {
     }
 
     /// How many characters fit across one card, for the daemon to render to.
-    readonly property int cardCols: {
-        var cw = cardMetrics.advanceWidth("0")
-        if (!(cw > 0)) return 44
-        var cardW = (looks.width - Style.space(10) * (looks.columns - 1)) / looks.columns
-        return Math.max(20, Math.floor((cardW - Style.space(20)) / cw))
-    }
+    ///
+    /// 0 means "not laid out yet" — see Preview.cardColsFor. `refreshCards`
+    /// refuses to fetch at 0 rather than rendering every card for a
+    /// 20-column terminal and leaving it that way.
+    readonly property int cardCols: Preview.cardColsFor(
+        looks.width, looks.columns, cardMetrics.advanceWidth("0"),
+        Style.space(10), Style.space(20))
 
     FontMetrics {
         id: cardMetrics
@@ -154,12 +155,37 @@ Item {
     }
 
     function refreshCards() {
+        // Never render for a pane that has not been laid out. `cardCols`
+        // divides by `width`, so at width 0 it clamps to its floor of 20 and
+        // the daemon renders every card for a 20-column terminal: no OS icon,
+        // no git segment, a stub frame.
+        if (!(looks.cardCols > 0)) return
         var r = looks.results
         for (var i = 0; i < r.length; i++) looks._fetchCard(r[i])
     }
 
     onResultsChanged: looks.refreshCards()
     Component.onCompleted: looks.refreshCards()
+
+    // Refetch when the width the cards were rendered TO changes.
+    //
+    // `Component.onCompleted` fires before layout, so the first refresh ran
+    // at width 0 and cached 52 renders made for 20 columns. Layout then
+    // widened the pane, `cardCols` jumped to ~50, and nothing refetched — so
+    // the grid kept showing the narrow renders until the next Apply happened
+    // to call `refreshCards()`, at which point every card gained its icons,
+    // git segment and full frame at once. That is why applying one preset
+    // looked like it changed all the others.
+    //
+    // Debounced: a window drag walks `cardCols` through every intermediate
+    // value, and each one is 52 daemon round-trips.
+    onCardColsChanged: cardColsSettle.restart()
+
+    Timer {
+        id: cardColsSettle
+        interval: 120
+        onTriggered: looks.refreshCards()
+    }
 
     function preview(look, immediate) {
         if (!looks.previewPane || !looks.service) return

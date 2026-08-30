@@ -161,6 +161,26 @@ function buildRequest(ctx, patch, look, scenes, id) {
     return JSON.stringify(msg) + "\n";
 }
 
+/// Columns one gallery card should be rendered to — or 0 when the pane has
+/// not been laid out yet.
+///
+/// Returning 0 for an unlaid-out pane is the whole point. This used to clamp
+/// straight to its floor of 20, and `Component.onCompleted` fires BEFORE
+/// layout, so the first refresh rendered all 52 cards for a 20-column
+/// terminal: no OS icon, no git segment, a stub frame. Layout then widened
+/// the pane and nothing refetched, so the grid kept those narrow renders
+/// until the next Apply called refreshCards() and every card changed at once
+/// — which is what made applying one preset look like it rewrote the others.
+///
+/// The 20-column floor still applies to a pane that is genuinely narrow.
+function cardColsFor(paneWidth, columns, charWidth, gap, padding) {
+    if (!(paneWidth > 0) || !(charWidth > 0) || !(columns > 0))
+        return 0;
+    var cardW = (paneWidth - gap * (columns - 1)) / columns;
+    var cols = Math.floor((cardW - padding) / charWidth);
+    return Math.max(20, cols);
+}
+
 /// Stable cache key for a preview request.
 ///
 /// `cols` is part of the key. Without it a render made for a narrow pane is
