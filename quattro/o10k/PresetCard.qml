@@ -103,10 +103,12 @@ Rectangle {
                 color: card.previewFg
                 font.family: card.terminalFont
                 font.pixelSize: Style.font.caption
-                // Two lines of real prompt beat one line elided at 40%: the
-                // interesting part of a powerline prompt is often the tail.
-                maximumLineCount: 2
-                wrapMode: Text.WrapAnywhere
+                // One line, never wrapped. The scene is rendered to this
+                // card's own column count, so it fits; wrapping would show a
+                // layout the terminal will never produce.
+                maximumLineCount: 1
+                wrapMode: Text.NoWrap
+                clip: true
                 elide: Text.ElideRight
             }
 

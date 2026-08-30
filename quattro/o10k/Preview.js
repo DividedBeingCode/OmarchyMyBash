@@ -74,12 +74,35 @@ var SCENES = [
 var CARD_SCENES = [{
     key: "dirty",
     label: "",
+    // A SHORT path on purpose. A card is a thumbnail roughly 38 columns
+    // wide, and "~/projects/my-app" spends most of that budget on the path
+    // alone -- at which point the daemon correctly drops it to fit the
+    // frame, and every framed preset renders as a bare rule with no path at
+    // all. The point of the card is the preset's SHAPE: its separators, its
+    // glyphs, its colours.
+    cwd: "~/app",
     git_branch: "main",
     git_staged: 2,
     git_unstaged: 1,
     exit_code: 0,
     cols: 44
 }];
+
+/// The card scene rendered to a specific width.
+///
+/// A fixed 44 was still too wide: three cards across a 1440 canvas are about
+/// 274px, roughly 35 columns, so every card wrapped onto a second line. Ask
+/// for what the card can show and it fits by construction.
+function cardScenes(cols) {
+    var out = [];
+    for (var i = 0; i < CARD_SCENES.length; i++) {
+        var s = {};
+        for (var k in CARD_SCENES[i]) s[k] = CARD_SCENES[i][k];
+        if (cols && cols > 0) s.cols = cols;
+        out.push(s);
+    }
+    return out;
+}
 
 /// Two scenes at bar-popout width. The bar panel is 360px wide, so the
 /// Studio's six rows at 88 columns do not fit; these two cover the states
@@ -140,16 +163,17 @@ function buildRequest(ctx, patch, look, scenes, id) {
 
 /// Stable cache key for a preview request.
 ///
-/// Two hovers over the same card must produce the same key or the broker
-/// caches nothing. Object key order is not guaranteed across engines, so the
-/// patch is serialized through a sorted walk rather than plain JSON.stringify.
-function cacheKey(look, patch, scenes) {
+/// `cols` is part of the key. Without it a render made for a narrow pane is
+/// served back to a wide one and vice versa -- the prompt is laid out to a
+/// column count, so two widths are two different renders.
+function cacheKey(look, patch, scenes, cols) {
     var sceneKeys = [];
     if (scenes) {
         for (var i = 0; i < scenes.length; i++)
             sceneKeys.push(scenes[i].key || scenes[i].label || String(i));
     }
-    return [String(look || ""), _stableStringify(patch), sceneKeys.join(",")].join("|");
+    return [String(look || ""), _stableStringify(patch),
+            sceneKeys.join(","), String(cols || "")].join("|");
 }
 
 function _stableStringify(value) {

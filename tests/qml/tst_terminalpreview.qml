@@ -24,6 +24,7 @@ TestCase {
     TerminalPreview { id: noDaemon; width: 400; renderState: "empty" }
     TerminalPreview { id: idle; width: 400; renderState: "idle" }
     TerminalPreview { id: bare; width: 400; renders: parent.threeRows }
+    TerminalPreview { id: wide; width: 900; renders: parent.threeRows }
 
     // The central promise: the mock is drawn on the palette being PREVIEWED,
     // not on the Control Center's surface. A prompt swatched on the panel
@@ -79,8 +80,25 @@ TestCase {
         compare(errored.renderState, "error")
     }
 
-    function test_column_count_is_stated() {
-        // The render assumed a width; hiding that makes the preview dishonest.
-        compare(shown.cols, 120)
+    // The pane used to ask the daemon for a fixed 88 columns while being
+    // capped at 420px -- about 53 columns -- so every line overflowed and
+    // wrapped mid-word. A terminal renders to its own width; so does this.
+    function test_columns_are_measured_from_the_pane() {
+        verify(shown.cols > 0, "cols must be a real count, got " + shown.cols)
+        compare(shown.cols, shown.fitCols)
+    }
+
+    function test_a_wider_pane_asks_for_more_columns() {
+        verify(wide.fitCols > shown.fitCols,
+               "900px pane got " + wide.fitCols + " cols, 400px got " + shown.fitCols)
+    }
+
+    function test_a_degenerate_width_still_yields_a_usable_count() {
+        // Before first layout the width is 0; asking the daemon for 0 columns
+        // would render nothing at all.
+        var tiny = shown.width
+        shown.width = 0
+        verify(shown.fitCols >= 24, "got " + shown.fitCols)
+        shown.width = tiny
     }
 }

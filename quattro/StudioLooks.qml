@@ -77,6 +77,21 @@ Item {
         return out
     }
 
+    /// How many characters fit across one card, for the daemon to render to.
+    readonly property int cardCols: {
+        var cw = cardMetrics.advanceWidth("0")
+        if (!(cw > 0)) return 44
+        var cardW = (looks.width - Style.space(10) * (looks.columns - 1)) / looks.columns
+        return Math.max(20, Math.floor((cardW - Style.space(20)) / cw))
+    }
+
+    FontMetrics {
+        id: cardMetrics
+        font.family: looks.service && looks.service.terminalFont
+            ? looks.service.terminalFont : Style.font.family
+        font.pixelSize: Style.font.caption
+    }
+
     /// Responsive column count. A fixed 4 leaves cards unreadably narrow on a
     /// laptop and absurdly wide on a desktop.
     readonly property int columns: Math.max(2, Math.min(4,
@@ -100,7 +115,8 @@ Item {
 
     function _fetchCard(look) {
         if (!looks.service) return
-        looks.service.requestPreview(look.name, null, Preview.CARD_SCENES, true,
+        looks.service.requestPreview(look.name, null,
+            Preview.cardScenes(looks.cardCols), true,
             function (res) {
                 var next = {}
                 for (var k in looks.cardRenders) next[k] = looks.cardRenders[k]
@@ -108,7 +124,7 @@ Item {
                 // Reassigned, not mutated: a plain JS object mutated in place
                 // never re-evaluates the bindings that read it.
                 looks.cardRenders = next
-            })
+            }, looks.cardCols)
     }
 
     function refreshCards() {
@@ -129,7 +145,7 @@ Item {
                 looks.previewPane.renderState = res.state
                 looks.previewPane.renders = res.renders
                 looks.previewPane.errorText = res.error
-            })
+            }, looks.previewPane.cols)
     }
 
     Flickable {

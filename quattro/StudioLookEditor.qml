@@ -95,7 +95,7 @@ Item {
             editor.previewPane.renderState = res.state
             editor.previewPane.renders = res.renders
             editor.previewPane.errorText = res.error
-        })
+        }, editor.previewPane.cols)
     }
 
     // ── Gradient ramp ──────────────────────────────────────────────────────

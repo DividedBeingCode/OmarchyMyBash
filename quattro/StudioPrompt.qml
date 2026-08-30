@@ -60,7 +60,7 @@ Flickable {
                 promptTab.previewPane.renderState = res.state
                 promptTab.previewPane.renders = res.renders
                 promptTab.previewPane.errorText = res.error
-            })
+            }, promptTab.previewPane.cols)
     }
 
     onPreviewPaneChanged: promptTab.refreshPreview()

@@ -95,7 +95,7 @@ Flickable {
                 themeTab.previewPane.renderState = res.state
                 themeTab.previewPane.renders = res.renders
                 themeTab.previewPane.errorText = res.error
-            })
+            }, themeTab.previewPane.cols)
     }
 
     function showCurrent() {
@@ -108,7 +108,7 @@ Flickable {
                 themeTab.previewPane.renderState = res.state
                 themeTab.previewPane.renders = res.renders
                 themeTab.previewPane.errorText = res.error
-            })
+            }, themeTab.previewPane.cols)
     }
 
     onPreviewPaneChanged: themeTab.showCurrent()

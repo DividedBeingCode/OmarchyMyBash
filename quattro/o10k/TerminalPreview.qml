@@ -47,9 +47,31 @@ Item {
     /// terminal must look like tofu here, or the preview is lying.
     property string terminalFont: Style.font.family
     property real fontSize: Style.font.bodySmall
-    /// Column count the daemon rendered at, shown in the frame caption so the
-    /// preview is honest about the width it assumed.
-    property int cols: 120
+    /// Column count to render at.
+    ///
+    /// Defaults to what this pane can actually SHOW. The daemon used to be
+    /// asked for a fixed 88 columns while the pane was capped at 420px --
+    /// about 53 columns -- so every line overflowed by ~35 characters and
+    /// wrapped mid-word ("command not foun / d"). A terminal renders to its
+    /// own width; so does this.
+    ///
+    /// Callers may override, but should then pass the same value to the
+    /// daemon or the mismatch comes straight back.
+    property int cols: preview.fitCols
+
+    /// How many characters of `terminalFont` fit across the frame.
+    readonly property int fitCols: {
+        var cw = metrics.advanceWidth("0")
+        if (!(cw > 0)) return 80
+        var usable = preview.width - Style.space(24)
+        return Math.max(24, Math.floor(usable / cw))
+    }
+
+    FontMetrics {
+        id: metrics
+        font.family: preview.terminalFont
+        font.pixelSize: preview.fontSize
+    }
     property string caption: "preview"
     /// "ok" | "loading" | "idle" | "empty" | "error".
     ///
@@ -161,16 +183,20 @@ Item {
                         color: preview.fg
                         font.family: preview.terminalFont
                         font.pixelSize: preview.fontSize
-                        // A prompt is a terminal line: it wraps rather than
-                        // eliding, because eliding is what made the old
-                        // gallery cards useless.
-                        wrapMode: Text.WrapAnywhere
+                        // NEVER wrap. A wrapped prompt is not what the
+                        // terminal will show -- it is this pane lying about
+                        // the layout. `cols` is chosen so lines fit; if one
+                        // still overruns, clipping is the honest failure.
+                        wrapMode: Text.NoWrap
+                        clip: true
                         lineHeight: 1.25
                     }
 
                     Text {
                         visible: !!row.modelData.right
                         width: row.width
+                        wrapMode: Text.NoWrap
+                        clip: true
                         horizontalAlignment: Text.AlignRight
                         text: row.modelData.right
                             ? Model.ansiToRich(row.modelData.right, preview.colors) : ""

@@ -337,7 +337,6 @@ Item {
                             TerminalPreview {
                                 id: previewPane
                                 width: parent.width
-                                cols: studio.service ? studio.service.previewCols : 120
                                 terminalFont: (studio.service && studio.service.terminalFont)
                                     ? studio.service.terminalFont : Style.font.family
                                 renderState: "idle"
