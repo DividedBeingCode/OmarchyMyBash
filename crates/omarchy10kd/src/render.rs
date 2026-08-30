@@ -301,7 +301,11 @@ impl<'a> PromptRenderer<'a> {
             .cursor_shape
             .sequence_for_keymap(&ctx.env_get("vi_mode").unwrap_or_default())
         {
-            Some(seq) => format!("{seq}{left}"),
+            // wrap_np, NOT raw. The adapter assigns this verbatim to PS1, and
+            // readline counts any byte not inside \x01..\x02 as printable --
+            // so an unwrapped 5-byte sequence puts the cursor column out by
+            // five, wrapping long lines wrongly and corrupting Ctrl-R redraw.
+            Some(seq) => format!("{}{left}", wrap_np(&seq)),
             None => left,
         };
 
@@ -1017,7 +1021,7 @@ mod cursor_shape_render_tests {
         let mut c = Config::default();
         c.terminal.cursor_shape.enabled = true;
         let out = render(&c, Some(&env_with("vi_mode", "vi-command")));
-        assert!(out.starts_with("\x1b[2 q"), "expected steady block, got {out:?}");
+        assert!(out.contains("\x1b[2 q"), "expected steady block, got {out:?}");
     }
 
     #[test]
@@ -1025,7 +1029,7 @@ mod cursor_shape_render_tests {
         let mut c = Config::default();
         c.terminal.cursor_shape.enabled = true;
         let out = render(&c, Some(&env_with("vi_mode", "vi-insert")));
-        assert!(out.starts_with("\x1b[6 q"), "expected steady bar, got {out:?}");
+        assert!(out.contains("\x1b[6 q"), "expected steady bar, got {out:?}");
     }
 
     #[test]
@@ -1035,7 +1039,20 @@ mod cursor_shape_render_tests {
         let mut c = Config::default();
         c.terminal.cursor_shape.enabled = true;
         let out = render(&c, None);
-        assert!(out.starts_with("\x1b[6 q"), "got {out:?}");
+        assert!(out.contains("\x1b[6 q"), "got {out:?}");
+    }
+
+    #[test]
+    fn the_sequence_is_wrapped_for_readline() {
+        // Every escape in PS1 must sit inside \x01..\x02 or readline counts
+        // its bytes as printable and mis-tracks the cursor column.
+        let mut c = Config::default();
+        c.terminal.cursor_shape.enabled = true;
+        let out = render(&c, Some(&env_with("vi_mode", "vi-command")));
+        assert!(
+            out.starts_with("\x01\x1b[2 q\x02"),
+            "DECSCUSR must be wrapped as non-printing, got {out:?}"
+        );
     }
 
     #[test]
@@ -1045,7 +1062,7 @@ mod cursor_shape_render_tests {
         c.terminal.cursor_shape.enabled = true;
         let out = render(&c, Some(&env_with("vi_mode", "vi-command")));
         let seq_at = out.find("\x1b[2 q").expect("sequence present");
-        assert_eq!(seq_at, 0, "DECSCUSR must be first in: {out:?}");
+        assert_eq!(seq_at, 1, "DECSCUSR must be first, just inside \\x01");
     }
 }
 

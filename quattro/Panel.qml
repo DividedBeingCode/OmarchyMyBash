@@ -235,17 +235,30 @@ Panel {
         if (key === "theme") {
             themePatch = { source: "omarchy" }
         } else {
-            var p = Model.CURATED_PALETTES[key]
-            if (!p) return
-            themePatch = {
-                source: "hybrid",
-                custom: {
+            // The service's catalog first (53 palettes: 39 curated plus one
+            // derived per installed Omarchy theme). Model.CURATED_PALETTES
+            // holds 8 and is only the offline fallback -- resolving against
+            // it made every card beyond those 8 a dead button once the grid
+            // started listing them all.
+            var custom = null
+            if (root.omarchyService && root.omarchyService.paletteColors)
+                custom = root.omarchyService.paletteColors(key)
+            if (!custom) {
+                var p = Model.CURATED_PALETTES[key]
+                if (!p) {
+                    root.lastError = "Unknown palette: " + key
+                    root._showError = true
+                    errorTimer.restart()
+                    return
+                }
+                custom = {
                     accent: p.accent, foreground: p.foreground, muted: p.muted,
                     background: p.background, red: p.red, green: p.green,
                     yellow: p.yellow, blue: p.blue, magenta: p.magenta,
                     cyan: p.cyan, orange: p.orange
                 }
             }
+            themePatch = { source: "hybrid", custom: custom }
         }
         daemonSocket.write(Model.buildConfigSet({ theme: themePatch }, "palette-set"))
         daemonSocket.flush()

@@ -353,18 +353,40 @@ Item {
     }
 
     // Pin terminal colors to a curated palette — the deliberate unbind.
-    function applyPalette(key) {
+    /// Flat role -> hex for a palette key, from the DAEMON's catalog first.
+    ///
+    /// Model.CURATED_PALETTES holds 8 entries and exists only so the bind
+    /// indicator can name a palette before the first fetch lands. The daemon
+    /// serves 53 (39 curated + one derived per installed Omarchy theme).
+    /// Resolving against the 8 made every chip beyond them a dead button:
+    /// no write, no error, no toast -- clicking Neon or Outrun Electric
+    /// simply did nothing.
+    function paletteColors(key) {
+        var rec = service.palettes ? service.palettes[key] : null
+        if (rec) {
+            var c = rec.colors && Object.keys(rec.colors).length > 0
+                ? rec.colors : rec.custom
+            if (c && Object.keys(c).length > 0) return c
+        }
         var pal = Model.CURATED_PALETTES[key]
-        if (!pal) return false
+        if (!pal) return null
+        return {
+            accent: pal.accent, foreground: pal.foreground, muted: pal.muted,
+            background: pal.background, red: pal.red, green: pal.green,
+            yellow: pal.yellow, blue: pal.blue, magenta: pal.magenta,
+            cyan: pal.cyan, orange: pal.orange
+        }
+    }
+
+    function applyPalette(key) {
+        // "theme" is the resync directive, not a palette.
+        if (key === "theme") return service.applyPaletteTheme()
+        var colors = service.paletteColors(key)
+        if (!colors) return service._err("unknown palette: " + key)
         var id = "svc-palette-" + key
         var msg = JSON.stringify({
             type: "config", command: "set",
-            config: { theme: { source: "hybrid", custom: {
-                accent: pal.accent, foreground: pal.foreground, muted: pal.muted,
-                background: pal.background, red: pal.red, green: pal.green,
-                yellow: pal.yellow, blue: pal.blue, magenta: pal.magenta,
-                cyan: pal.cyan, orange: pal.orange
-            } } }, id: id
+            config: { theme: { source: "hybrid", custom: colors } }, id: id
         }) + "\n"
         return service._rpc(msg, id, function () { service.invalidateDerived() })
     }
