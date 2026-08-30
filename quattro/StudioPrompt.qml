@@ -82,7 +82,27 @@ Flickable {
         { key: "none",           glyph: "∅" }
     ]
 
-    readonly property var promptChars: ["❯", "➜", "λ", "$", ">", "%", "▶", "#"]
+    // {key, glyph} pairs, NOT bare glyphs.
+    //
+    // This row used to write the glyph itself into
+    // `segments.character.success`. The daemon tolerates that -- its catalog
+    // lookup falls through to `_ => key` -- so it appeared to work, but it
+    // wrote a different format than every other writer of the same config
+    // key: the glyph browser below writes catalog keys, and so does every
+    // Look. The visible symptom was that applying a Look (which writes
+    // "chevron") left this row with nothing selected.
+    //
+    // Keys mirror GlyphCatalog::prompt_char in style.rs.
+    readonly property var promptChars: [
+        { key: "chevron",  glyph: "\u276f" },
+        { key: "arrow",    glyph: "\u279c" },
+        { key: "lambda",   glyph: "\u03bb" },
+        { key: "dollar",   glyph: "$" },
+        { key: "angle",    glyph: ">" },
+        { key: "percent",  glyph: "%" },
+        { key: "triangle", glyph: "\u25b6" },
+        { key: "hash",     glyph: "#" }
+    ]
 
     // Every glyph the project offers, in one searchable place. Generated from
     // the same catalogs the bar panel uses so the two cannot drift.
@@ -282,9 +302,10 @@ Flickable {
                 model: promptTab.promptChars
                 delegate: Rectangle {
                     id: charChip
-                    required property string modelData
+                    required property var modelData
                     readonly property bool active:
-                        promptTab._get("segments.character.success", "❯") === charChip.modelData
+                        promptTab._get("segments.character.success", "chevron")
+                        === charChip.modelData.key
                     width: Style.space(42)
                     height: Style.space(34)
                     radius: Fx.radius(Style.cornerRadius) / 2
@@ -293,7 +314,7 @@ Flickable {
 
                     Text {
                         anchors.centerIn: parent
-                        text: charChip.modelData
+                        text: charChip.modelData.glyph
                         color: charChip.active ? Color.background : Color.foreground
                         font.family: Style.font.family
                         font.pixelSize: Style.font.body
@@ -307,9 +328,9 @@ Flickable {
                         onClicked: {
                             // The three character roles move together here;
                             // per-role editing lives in the Looks Studio.
-                            promptTab._set("segments.character.success", charChip.modelData)
-                            promptTab._set("segments.character.error", charChip.modelData)
-                            promptTab._set("segments.character.transient", charChip.modelData)
+                            promptTab._set("segments.character.success", charChip.modelData.key)
+                            promptTab._set("segments.character.error", charChip.modelData.key)
+                            promptTab._set("segments.character.transient", charChip.modelData.key)
                         }
                     }
                 }

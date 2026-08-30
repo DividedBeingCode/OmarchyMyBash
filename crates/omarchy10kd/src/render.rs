@@ -141,7 +141,11 @@ impl<'a> PromptRenderer<'a> {
         let in_ssh = force_ssh.unwrap_or_else(|| {
             std::env::var("SSH_TTY").is_ok() || std::env::var("SSH_CONNECTION").is_ok()
         });
-        let term_caps = TermCaps::detect();
+        // The SHELL's answer, not the daemon's environment. The daemon has no
+        // controlling terminal and outlives the shell that spawned it, so its
+        // own env names whichever terminal started it first -- and this gates
+        // OSC 8 hyperlinks and undercurl, so getting it wrong is visible.
+        let term_caps = TermCaps::for_kind(crate::terminal::kind_from_channel(env));
 
         let ctx = SegmentContext {
             cwd,
@@ -1042,5 +1046,62 @@ mod cursor_shape_render_tests {
         let out = render(&c, Some(&env_with("vi_mode", "vi-command")));
         let seq_at = out.find("\x1b[2 q").expect("sequence present");
         assert_eq!(seq_at, 0, "DECSCUSR must be first in: {out:?}");
+    }
+}
+
+#[cfg(test)]
+mod term_caps_plumbing_tests {
+    use super::*;
+
+    fn env_with(k: &str, v: &str) -> std::collections::HashMap<String, String> {
+        let mut m = std::collections::HashMap::new();
+        m.insert(k.to_string(), v.to_string());
+        m
+    }
+
+    fn render_with(env: Option<&std::collections::HashMap<String, String>>) -> String {
+        let mut config = Config::default();
+        // The directory segment carries the OSC 8 hyperlink that term_caps
+        // gates, so this is the observable difference.
+        config.directory.enabled = true;
+        let palette = ThemePalette::default();
+        let renderer = PromptRenderer::new(&config, &palette);
+        let git = crate::git::GitStatus { is_repo: false, branch: "main".into(), ..Default::default() };
+        renderer
+            .render_with_ssh("/home/u/p", 0, 0, 120, 0, &git, false, Some(false), env, Vec::new())
+            .left
+    }
+
+    /// The regression this plumbing exists for. `TermCaps` was detected from
+    /// the DAEMON's environment, which names whichever terminal happened to
+    /// start it -- so a foot shell talking to a daemon spawned elsewhere got
+    /// the wrong capability profile, and lost OSC 8 hyperlinks.
+    #[test]
+    fn capabilities_follow_the_shells_terminal_not_the_daemons() {
+        let foot = render_with(Some(&env_with("O10K_TERM", "foot")));
+        let unknown = render_with(Some(&env_with("O10K_TERM", "unknown")));
+
+        // foot supports OSC 8; the conservative profile does not.
+        assert!(
+            foot.contains("\x1b]8;;"),
+            "foot should get an OSC 8 hyperlink, got {foot:?}"
+        );
+        assert!(
+            !unknown.contains("\x1b]8;;"),
+            "an unidentified terminal must not get OSC 8, got {unknown:?}"
+        );
+    }
+
+    #[test]
+    fn ghostty_also_gets_hyperlinks() {
+        let out = render_with(Some(&env_with("O10K_TERM", "ghostty")));
+        assert!(out.contains("\x1b]8;;"), "got {out:?}");
+    }
+
+    #[test]
+    fn a_request_without_the_channel_value_still_renders() {
+        // Older adapters send no O10K_TERM; this must fall back, not panic.
+        let _ = render_with(None);
+        let _ = render_with(Some(&env_with("VIRTUAL_ENV", "/x")));
     }
 }

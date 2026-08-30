@@ -175,29 +175,6 @@ pub struct RenderSummary {
 /// segments/ai.rs detection (CLAUDE_CODE_ENTRYPOINT -> claude; CODEX_SANDBOX
 /// or CODEX_HOME -> codex) so the `status` agent field always agrees with the
 /// prompt's agent segment.
-/// The terminal the SHELL is in, as resolved by the adapter and sent over
-/// the env channel.
-///
-/// Falls back to the daemon's own environment, which is only ever a hint:
-/// the daemon has no controlling terminal, so it cannot probe, and a daemon
-/// reused across shells inherited whichever terminal started it first.
-fn terminal_kind_for(
-    env: Option<&std::collections::HashMap<String, String>>,
-) -> crate::terminal::TerminalKind {
-    use crate::terminal::TerminalKind;
-    if let Some(name) = env.and_then(|e| e.get("O10K_TERM")) {
-        return match name.trim().to_lowercase().as_str() {
-            "ghostty" => TerminalKind::Ghostty,
-            "foot" => TerminalKind::Foot,
-            "kitty" => TerminalKind::Kitty,
-            "wezterm" => TerminalKind::WezTerm,
-            "alacritty" => TerminalKind::Alacritty,
-            _ => TerminalKind::Unknown,
-        };
-    }
-    crate::terminal::kind_from_env()
-}
-
 fn detect_agent(env: Option<&std::collections::HashMap<String, String>>) -> Option<String> {
     let env = env?;
     if env.contains_key("CLAUDE_CODE_ENTRYPOINT") {
@@ -2178,7 +2155,7 @@ mod terminal_channel_tests {
         // The shell probed; the daemon cannot. This is the whole point of
         // sending it over the channel.
         let e = env(&[("O10K_TERM", "foot")]);
-        assert_eq!(terminal_kind_for(Some(&e)), TerminalKind::Foot);
+        assert_eq!(crate::terminal::kind_from_channel(Some(&e)), TerminalKind::Foot);
     }
 
     #[test]
@@ -2191,14 +2168,14 @@ mod terminal_channel_tests {
             ("alacritty", TerminalKind::Alacritty),
         ] {
             let e = env(&[("O10K_TERM", name)]);
-            assert_eq!(terminal_kind_for(Some(&e)), want, "for {name}");
+            assert_eq!(crate::terminal::kind_from_channel(Some(&e)), want, "for {name}");
         }
     }
 
     #[test]
     fn case_and_padding_do_not_matter() {
         let e = env(&[("O10K_TERM", "  Ghostty ")]);
-        assert_eq!(terminal_kind_for(Some(&e)), TerminalKind::Ghostty);
+        assert_eq!(crate::terminal::kind_from_channel(Some(&e)), TerminalKind::Ghostty);
     }
 
     #[test]
@@ -2206,13 +2183,13 @@ mod terminal_channel_tests {
         // The shell saying "I could not identify this" must NOT fall back to
         // the daemon's own guess -- that guess is exactly what is untrusted.
         let e = env(&[("O10K_TERM", "unknown")]);
-        assert_eq!(terminal_kind_for(Some(&e)), TerminalKind::Unknown);
+        assert_eq!(crate::terminal::kind_from_channel(Some(&e)), TerminalKind::Unknown);
     }
 
     #[test]
     fn a_missing_channel_value_falls_back_without_panicking() {
         let e = env(&[("VIRTUAL_ENV", "/x")]);
-        let _ = terminal_kind_for(Some(&e));
-        let _ = terminal_kind_for(None);
+        let _ = crate::terminal::kind_from_channel(Some(&e));
+        let _ = crate::terminal::kind_from_channel(None);
     }
 }

@@ -157,6 +157,35 @@ pub fn kind_from_env() -> TerminalKind {
     }
 }
 
+/// The terminal the SHELL is in, as resolved by the adapter and sent over the
+/// env channel as `O10K_TERM`.
+///
+/// This is the authoritative answer and `kind_from_env` is only a fallback.
+/// The daemon has no controlling terminal, so it cannot probe; worse, a
+/// daemon outlives the shell that spawned it and a headless one serves many
+/// shells at once, so its own environment describes whichever terminal
+/// happened to start it first.
+///
+/// That matters because `TermCaps` gates visible behaviour: OSC 8 hyperlinks
+/// on the branch and path, and undercurl on errors.
+pub fn kind_from_channel(
+    env: Option<&std::collections::HashMap<String, String>>,
+) -> TerminalKind {
+    if let Some(name) = env.and_then(|e| e.get("O10K_TERM")) {
+        return match name.trim().to_lowercase().as_str() {
+            "ghostty" => TerminalKind::Ghostty,
+            "foot" => TerminalKind::Foot,
+            "kitty" => TerminalKind::Kitty,
+            "wezterm" => TerminalKind::WezTerm,
+            "alacritty" => TerminalKind::Alacritty,
+            // An honest `unknown` from the shell is carried through rather
+            // than falling back: the fallback is exactly what is untrusted.
+            _ => TerminalKind::Unknown,
+        };
+    }
+    kind_from_env()
+}
+
 impl TermCaps {
     pub fn detect() -> Self {
         Self::for_kind(kind_from_env())

@@ -667,3 +667,135 @@ mod tests {
         assert_eq!(GlyphCatalog::branch_icon("custom-icon"), "custom-icon");
     }
 }
+
+#[cfg(test)]
+mod catalog_parity_tests {
+    use super::*;
+
+    /// The Studio hardcodes its own copies of these catalogs in QML, because
+    /// a picker needs the list before it has a daemon connection. That is a
+    /// reasonable trade, but it means the two can drift -- and drift here is
+    /// invisible: `GlyphCatalog::separator` maps an unknown key to a space,
+    /// which looks exactly like `none`, and `prompt_char` passes an unknown
+    /// key straight through, which looks exactly like a literal glyph.
+    ///
+    /// The bug that motivated this: the prompt-character row wrote the GLYPH
+    /// ("❯") where every other writer -- the glyph browser, every Look, the
+    /// CLI -- writes the catalog KEY ("chevron"). The daemon tolerated it via
+    /// `_ => key`, so the prompt still rendered, but applying a Look left the
+    /// row with nothing selected.
+    fn qml(name: &str) -> String {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../quattro")
+            .join(name);
+        std::fs::read_to_string(p).unwrap_or_default()
+    }
+
+    /// Pull `key: "value"` pairs out of a named QML property block.
+    fn keys_in_property(src: &str, property: &str) -> Vec<String> {
+        let Some(start) = src.find(&format!("property var {property}:")) else {
+            return Vec::new();
+        };
+        let tail = &src[start..];
+        let Some(end) = tail.find("\n    ]") else {
+            return Vec::new();
+        };
+        let block = &tail[..end];
+        let mut out = Vec::new();
+        for part in block.split("key:").skip(1) {
+            let part = part.trim_start();
+            if let Some(rest) = part.strip_prefix('"') {
+                if let Some(close) = rest.find('"') {
+                    out.push(rest[..close].to_string());
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn studio_prompt_chars_are_real_catalog_keys() {
+        let src = qml("StudioPrompt.qml");
+        if src.is_empty() {
+            eprintln!("skipping: StudioPrompt.qml not found");
+            return;
+        }
+        let keys = keys_in_property(&src, "promptChars");
+        assert!(!keys.is_empty(), "found no prompt-char keys to check");
+
+        let known: Vec<&str> = available_prompt_chars()
+            .iter()
+            .map(|(k, _)| *k)
+            .collect();
+        for k in &keys {
+            assert!(
+                known.contains(&k.as_str()),
+                "StudioPrompt offers prompt char {k:?}, which is not in the \
+                 daemon catalog. A glyph here instead of a key is the exact \
+                 bug this test exists for."
+            );
+        }
+    }
+
+    #[test]
+    fn studio_separators_are_real_catalog_keys() {
+        let src = qml("StudioPrompt.qml");
+        if src.is_empty() {
+            return;
+        }
+        let keys = keys_in_property(&src, "separators");
+        assert!(!keys.is_empty(), "found no separator keys to check");
+
+        let known: Vec<&str> = available_separators()
+            .iter()
+            .map(|(k, _)| *k)
+            .collect();
+        for k in &keys {
+            assert!(
+                known.contains(&k.as_str()),
+                "StudioPrompt offers separator {k:?}, which the daemon does \
+                 not know. An unknown separator renders as a bare space, \
+                 indistinguishable from `none`."
+            );
+        }
+    }
+
+    #[test]
+    fn studio_presets_match_the_daemon_list() {
+        let src = qml("StudioPrompt.qml");
+        if src.is_empty() {
+            return;
+        }
+        // Presets are bare strings rather than {key, glyph} pairs.
+        let Some(start) = src.find("property var presets:") else {
+            panic!("presets property not found");
+        };
+        let tail = &src[start..];
+        let block = &tail[..tail.find("\n    ]").unwrap_or(tail.len())];
+        let offered: Vec<String> = block
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(|s| s.to_string())
+            .collect();
+        assert!(!offered.is_empty(), "found no presets to check");
+
+        let known = available_presets();
+        for p in &offered {
+            assert!(
+                known.contains(&p.as_str()),
+                "StudioPrompt offers preset {p:?}, which the daemon does not \
+                 implement"
+            );
+        }
+        // And the other direction: a preset the daemon gained but the Studio
+        // never surfaced is dead to every user who does not edit TOML.
+        for p in known {
+            assert!(
+                offered.iter().any(|o| o == p),
+                "the daemon implements preset {p:?} but the Studio does not \
+                 offer it"
+            );
+        }
+    }
+}
