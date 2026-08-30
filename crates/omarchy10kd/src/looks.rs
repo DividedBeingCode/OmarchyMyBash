@@ -324,7 +324,7 @@ pub fn curated() -> Vec<LookDef> {
             })),
         look("dot-matrix", "Dot Matrix",
             "Dense segments separated by dots. A lot of state, little width.",
-            &["structure", "dense"],
+            &["structure", "dense", "nerd-font"],
             serde_json::json!({
                 "style": { "preset": "dense", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "linux" },
@@ -390,7 +390,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "gruvbox")),
         look("rose-classic", "Rosé Classic",
             "Soft rose, plain bars, and a bear who disapproves of failures.",
-            &["complete"],
+            &["complete", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "classic", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -524,7 +524,7 @@ pub fn curated() -> Vec<LookDef> {
         // ── Quieter additions ─────────────────────────────────────────────
         look("night-owl-lean", "Night Owl Lean",
             "For 2am: low glare, nothing shouting.",
-            &["complete", "minimal"],
+            &["complete", "minimal", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -562,7 +562,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "kanagawa")),
         look("sushi-bar", "Sushi Bar",
             "Muted rose, plain bars, one piece at a time.",
-            &["complete", "minimal"],
+            &["complete", "minimal", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "classic", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -571,7 +571,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "rose-pine")),
         look("ramen-shop", "Ramen Shop",
             "Warm broth colors, dense as a full counter.",
-            &["complete", "dense"],
+            &["complete", "dense", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "dense", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -589,7 +589,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "rose-pine-moon")),
         look("tea-house", "Tea House",
             "Green-grey calm and nothing you did not ask for.",
-            &["complete", "minimal"],
+            &["complete", "minimal", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -628,7 +628,7 @@ pub fn curated() -> Vec<LookDef> {
             }), "scarlet-protocol")),
         look("bot-farm", "Bot Farm",
             "Flat IBM Carbon, arrows, and no personality whatsoever.",
-            &["complete", "powerline"],
+            &["complete", "powerline", "nerd-font"],
             with_palette(serde_json::json!({
                 "style": { "preset": "powerline", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -735,7 +735,7 @@ pub fn curated() -> Vec<LookDef> {
             })),
         look("single-line", "Single Line",
             "Everything on one row, no blank line above it.",
-            &["structure", "minimal"],
+            &["structure", "minimal", "nerd-font"],
             serde_json::json!({
                 "style": { "preset": "lean", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
@@ -1188,23 +1188,13 @@ mod tests {
         }
         assert_eq!(curated().len(), 52, "expected 52 curated Looks");
     }
-
-    #[test]
-    fn every_look_name_is_unique() {
-        let mut seen = std::collections::BTreeSet::new();
-        let dupes: Vec<String> = curated()
-            .iter()
-            .filter(|l| !seen.insert(l.name.clone()))
-            .map(|l| l.name.clone())
-            .collect();
-        assert!(dupes.is_empty(), "duplicate Look names: {dupes:?}");
-    }
 }
 
 #[cfg(test)]
 mod preset_tests {
     use super::*;
     use crate::palette_derive::{apca_lc_abs, target_for};
+    use crate::style::GlyphCatalog;
 
     #[test]
     fn curated_look_names_are_unique() {
@@ -1342,6 +1332,62 @@ mod preset_tests {
             assert_eq!(patch["theme"]["custom"]["accent"], p.colors[accent_index]);
         }
         assert!(curated_palette("no-such-palette").is_none());
+    }
+
+    /// The `nerd-font` tag is user-facing: it is how someone on a plain
+    /// console — no patched font, SSH into a stock VM, a tmux that lies
+    /// about its font — knows in advance which curated Looks will render
+    /// as tofu instead of a glyph. A Look that resolves to a Private Use
+    /// Area code point without carrying this tag would silently break for
+    /// exactly the audience the tag exists to warn.
+    #[test]
+    fn a_look_that_needs_a_nerd_font_says_so() {
+        fn is_pua(s: &str) -> bool {
+            s.chars().any(|c| {
+                let cp = c as u32;
+                (0xE000..=0xF8FF).contains(&cp) || (0xF0000..=0xFFFFD).contains(&cp)
+            })
+        }
+
+        fn needs_nerd_font(patch: &serde_json::Value) -> bool {
+            let mut glyphs: Vec<String> = Vec::new();
+
+            if let Some(icon) = patch.pointer("/segments/os/icon").and_then(|v| v.as_str()) {
+                if let Some(resolved) = GlyphCatalog::os_icon(icon) {
+                    glyphs.push(resolved.to_string());
+                }
+            }
+            for key in ["success", "error", "transient"] {
+                if let Some(c) = patch
+                    .pointer(&format!("/segments/character/{key}"))
+                    .and_then(|v| v.as_str())
+                {
+                    glyphs.push(GlyphCatalog::prompt_char(c).to_string());
+                }
+            }
+            if let Some(gi) = patch.pointer("/git/branch_icon").and_then(|v| v.as_str()) {
+                glyphs.push(GlyphCatalog::branch_icon(gi).to_string());
+            }
+            if let Some(shape) = patch.pointer("/style/separators/shape").and_then(|v| v.as_str()) {
+                glyphs.push(GlyphCatalog::separator(shape).to_string());
+            }
+
+            glyphs.iter().any(|g| is_pua(g))
+        }
+
+        let missing: Vec<String> = curated()
+            .into_iter()
+            .filter(|look| {
+                needs_nerd_font(&look.patch) && !look.tags.iter().any(|t| t == "nerd-font")
+            })
+            .map(|look| look.name)
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "these Looks resolve a glyph from the Private Use Area (require a \
+             Nerd Font) but are not tagged `nerd-font`: {missing:?}"
+        );
     }
 
     #[test]

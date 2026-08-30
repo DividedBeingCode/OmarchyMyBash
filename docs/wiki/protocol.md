@@ -420,7 +420,7 @@ List all Looks. Returns curated Looks first, then user Looks from `[looks.<name>
 |-------|------|-------------|
 | `looks` | array | `{name, label, patch}` objects. `patch` is `config_set`-shaped (top-level config keys, glyph shortcuts expanded, palette resolved into a `theme` sub-patch), directly applicable via `config_set`. |
 
-The 8 curated Looks are compiled in: `omnarchy`, `tokyo-rainbow`, `framed-gradient`, `lean-pure`, `slanted-owl`, `gruvbox-drift`, `rose-classic`, `polar-lean`.
+52 curated Looks are compiled in (see `omarchy10k look list` for the full set).
 
 **Used by:** CLI `look list`, Quattro panel Looks rail, gallery overlay.
 

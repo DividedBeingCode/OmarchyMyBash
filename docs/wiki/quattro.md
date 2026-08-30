@@ -1153,4 +1153,4 @@ The Control Center panel uses a 4-bucket rail (LOOKS · STYLE · BEHAVIOR · SYS
 - Control verbs (protocol 0.5): `looks` (list), `looks_apply {name, transient?}` (atomic config merge; `transient` = in-memory only, revert via `reload_config`), `looks_save {name, label}` (snapshot current mapped keys), `palettes` (curated palette table, moved daemon-side from Model.js), `defaults` (factory defaults snapshot powering the panel's modified-ink/reset chips).
 - `preview` requests accept `look: "<name>"` for dry-run renders (gallery cards).
 - CLI: `omarchy10k look list|apply <name> [--transient]|save <name>`.
-- 8 curated Looks ship compiled-in; user entries shadow curated names.
+- 52 curated Looks ship compiled-in (see `omarchy10k look list` for the full set); user entries shadow curated names.
