@@ -1071,6 +1071,64 @@ Panel {
                        }
                    }
 
+                   // Open Studio — the primary action of this popout.
+                   //
+                   // It used to sit at the bottom of the Looks bucket, three
+                   // scrolls down and labelled "Expand gallery", which buried
+                   // the surface where nearly everything actually happens.
+                   // The popout is for quick changes; the Studio is where you
+                   // browse 28 presets and 53 palettes with a live preview.
+                   Rectangle {
+                       width: parent.width
+                       height: studioLabel.implicitHeight + Style.space(16)
+                       radius: Style.cornerRadius
+                       // Accent-filled rather than a bordered chip: this is
+                       // the one thing on the panel worth making obvious.
+                       color: studioMa.containsMouse
+                           ? Qt.lighter(Color.accent, 1.15) : Color.accent
+
+                       Row {
+                           anchors.centerIn: parent
+                           spacing: Style.space(8)
+
+                           Text {
+                               id: studioLabel
+                               anchors.verticalCenter: parent.verticalCenter
+                               text: "Open Studio"
+                               color: Color.background
+                               font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                               font.pixelSize: Style.font.body
+                               font.bold: true
+                           }
+
+                           Text {
+                               anchors.verticalCenter: parent.verticalCenter
+                               text: "\u2197"
+                               color: Color.background
+                               font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                               font.pixelSize: Style.font.body
+                           }
+                       }
+
+                       MouseArea {
+                           id: studioMa
+                           anchors.fill: parent
+                           hoverEnabled: true
+                           cursorShape: Qt.PointingHandCursor
+                           onClicked: {
+                               if (root.omarchyService
+                                       && typeof root.omarchyService.openGallery === "function")
+                                   root.omarchyService.openGallery()
+                               else
+                                   root.galleryRequested()
+                               // Close the popout behind it: two stacked
+                               // surfaces showing the same settings is
+                               // confusing, and the Studio takes the screen.
+                               root.close()
+                           }
+                       }
+                   }
+
                    Rectangle {
                        width: parent.width
                        height: previewContent.implicitHeight + Style.space(16)

@@ -197,18 +197,8 @@ Column {
         onClicked: looksBucket.panel.saveLook(lookNameField.text)
     }
 
-    // Opens the Studio's Looks tab. The label named a separate surface that
-    // no longer exists as one -- the browser is a Studio tab now.
-    PanelKit.ActionButton {
-        label: "Browse all presets\u2026"
-        panel: looksBucket.panel
-        onClicked: {
-            if (looksBucket.panel.omarchyService && typeof looksBucket.panel.omarchyService.openGallery === "function")
-                looksBucket.panel.omarchyService.openGallery()
-            else
-                looksBucket.panel.galleryRequested()
-        }
-    }
+    // The "open the Studio" action lives in the panel HEADER now, not here:
+    // buried at the bottom of one bucket it was three scrolls from the top.
 
     PanelSeparator { foreground: looksBucket.panel.barForeground }
 
