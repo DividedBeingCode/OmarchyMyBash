@@ -51,7 +51,13 @@ Item {
     /// preview is honest about the width it assumed.
     property int cols: 120
     property string caption: "preview"
-    /// "ok" | "loading" | "empty" | "error".
+    /// "ok" | "loading" | "idle" | "empty" | "error".
+    ///
+    /// `idle` and `empty` are different states and used to share one message:
+    /// the surface sets `empty` on every tab switch to mean "nothing
+    /// requested yet", but empty's copy said "No daemon", so a perfectly
+    /// healthy Studio accused itself of having no daemon right beside a
+    /// header reading "daemon running".
     ///
     /// Named `renderState`, not `state`: Item.state drives QML's state
     /// machine, which would try to match "loading" against a StateGroup.
@@ -194,6 +200,8 @@ Item {
                         return preview.errorText.length > 0
                             ? preview.errorText
                             : "The daemon could not render this configuration."
+                    case "idle":
+                        return "Nothing selected yet."
                     case "empty":
                         return "No daemon — open a shell with the Omarchy10k "
                              + "prompt to see a live preview."

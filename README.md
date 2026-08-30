@@ -1,36 +1,71 @@
+<div align="center">
+
 # Omarchy10k
 
-A reactive shell prompt and desktop-control layer for [Omarchy](https://github.com/basecamp/omarchy) (Arch + Hyprland + Quickshell) — the visual language of Powerlevel10k with Omarchy Quattro's philosophy: **a compiled daemon renders your prompt in under 5 ms, and the desktop controls it.**
+**A compiled daemon renders your prompt in under 5 ms. The desktop controls it.**
 
-![Control Center](docs/img/panel.png)
+A reactive shell prompt and desktop-control layer for
+[Omarchy](https://github.com/basecamp/omarchy) — Arch, Hyprland, Quickshell.
+The visual language of Powerlevel10k, built the way Omarchy Quattro is built.
 
-## What it is
+</div>
 
-- **A prompt engine** (`omarchy10kd`, Rust): 24 segments, 11 style presets, truecolor gradients, frames, powerline separators, transient prompts, right rail, vi-mode character, git/worktree awareness with stale-tolerant caching. Per-prompt render is pure in-memory — git runs async against a TTL cache, never on the hot path.
-- **A Looks system**: atomic appearance bundles. 8 curated Looks (Omnarchy, Tokyo Rainbow, Gruvbox Drift, Polar Lean…), applied atomically or tried transiently, saved from your current state, shared as portable files, or edited visually in the Looks Studio.
-- **A Control Center** (Quickshell plugin): live prompt preview, every setting as a control, the Looks gallery with real daemon-rendered previews and an in-panel editor, per-row modified-vs-default ink with one-tap reset, doctor/benchmark dashboards, session switcher.
-- **A bash integration layer** (`shell/omarchy10k.bash`): hook broker, per-shell daemon lifecycle, instant prompt, env channel, transient prompts, right rail — coexisting with Omarchy's own bash layer instead of replacing it (`omarchy10k layer` shows exactly who owns what).
+![The Studio — 29 presets, each rendered by the daemon, with a live six-scene preview](docs/img/studio-looks.png)
 
-![Looks Gallery](docs/img/gallery.png)
+---
+
+## Why a daemon
+
+A prompt runs before every command you type, so its cost is a tax on the whole
+session. Shelling out to `git` on the hot path is what makes a beautiful prompt
+feel slow.
+
+Omarchy10k separates the two. A per-shell Rust daemon holds the state; bash
+sends it a context line and reads back a rendered prompt over a Unix socket.
+Everything expensive happens off the hot path:
+
+- **Git is asynchronous**, served from a stale-tolerant TTL cache. A prompt
+  never waits on a subprocess.
+- **The render is pure in-memory** — no forks, no file reads, no allocation
+  storms.
+- **The desktop is the UI.** The daemon already knows how to render any
+  hypothetical config, so the Control Center asks it for real prompts instead
+  of drawing an approximation.
+
+That last point is the one that shapes everything: the preview you see in the
+Studio is produced by the same code that draws your prompt.
+
+## What's in the box
+
+| | |
+|---|---|
+| **Prompt engine** | 25 segments · 11 style presets · 14 separator shapes · truecolor gradients · frames · transient prompts · right rail · vi-mode character · git and worktree awareness |
+| **Presets** | 28 curated Looks and 53 palettes — 39 hand-tuned plus one derived from every Omarchy theme you have installed |
+| **Control Center** | A summonable Studio and a bar popout, both driven by live daemon renders |
+| **Bash layer** | Hook broker, per-shell daemon lifecycle, instant prompt, env channel — *coexisting* with Omarchy's own bash layer rather than replacing it |
+| **Terminal integration** | OSC 7/8/52/133, XTVERSION probing, kitty graphics, DECSCUSR cursor shapes |
+
+---
 
 ## Install
-
-On Omarchy:
 
 ```bash
 git clone https://github.com/DividedBeingCode/OmarchyMyBash.git && cd OmarchyMyBash
 ./install.sh
 ```
 
-Then add one line to `~/.bashrc`:
+Then one line in `~/.bashrc`:
 
 ```bash
 eval "$(omarchy10k init bash)"
 ```
 
-`install.sh` handles the rest: builds the binaries, installs them to `~/.local/bin`, installs the Quattro plugin, rice templates, and desktop hooks. Nothing outside `~/.config/omarchy10k`, `~/.local/bin`, and the plugin dir is touched; `--uninstall` reverses everything.
+`install.sh` builds the binaries into `~/.local/bin`, installs the Quattro
+plugin, rice templates and desktop hooks. Nothing outside
+`~/.config/omarchy10k`, `~/.local/bin` and the plugin directory is touched, and
+`--uninstall` reverses all of it.
 
-### Installing the Control Center on its own
+### The Control Center on its own
 
 The repo is a valid Omarchy plugin, so the QML half can be added directly:
 
@@ -38,57 +73,165 @@ The repo is a valid Omarchy plugin, so the QML half can be added directly:
 omarchy plugin add https://github.com/DividedBeingCode/OmarchyMyBash.git --enable --yes
 ```
 
-**This installs the plugin only.** `omarchy plugin add` never builds anything
-— by design, since plugins run unsandboxed inside a long-lived shell process.
-Omarchy10k is a control surface for a prompt daemon, so without the
-`omarchy10k` binary on `PATH` there is nothing to preview and nothing to
-apply. The Studio says so plainly and names the script to run; `plugin add`
-clones the whole repo, so `install.sh` lands in the plugin directory next to
-the QML:
+**This installs the plugin only.** `omarchy plugin add` never builds anything —
+deliberately, since plugins run unsandboxed inside a long-lived shell process.
+Omarchy10k is a control surface for a prompt daemon, so without the `omarchy10k`
+binary on `PATH` there is nothing to preview and nothing to apply. The Studio
+says so plainly and names the script to run; `plugin add` clones the whole repo,
+so the installer lands right beside the QML:
 
 ```bash
 ~/.config/omarchy/plugins/community.omarchy10k/install.sh
 ```
 
-Pass `--enable` if you want it active immediately — plugins land disabled
-otherwise, so you can read the code first.
+Omit `--enable` and the plugin lands disabled, so you can read the code before
+it runs inside your shell.
 
-## Quick start
+---
+
+## The Studio
+
+Summon it from anywhere:
 
 ```bash
-omarchy10k configure        # p10k-style wizard: live preview, context checks, segment toggles
-omarchy10k look list        # browse the curated Looks
-omarchy10k look apply tokyo-rainbow --transient   # try it — reload reverts
-omarchy10k layer            # see exactly what o10k owns vs Omarchy vs you
-omarchy10k doctor           # diagnose the whole stack
+omarchy-shell shell summon community.omarchy10k
 ```
 
-Per-project prompts: drop a `.o10k.toml` in a repo root (display keys only — it's untrusted input by design):
+Six tabs, and on four of them a **pinned live preview** that never scrolls away
+from the control you are turning.
+
+| Tab | What it does |
+|---|---|
+| **Looks** | Browse 28 presets. Every card is a real prompt rendered in that preset's own colors. Hover previews, click selects, Apply commits |
+| **Prompt** | Presets, separators, prompt characters, a searchable browser of 80 glyphs, per-segment toggles |
+| **Theme** | Apply an Omarchy theme desktop-wide, or pin terminal colors independently. Every chip carries its actual palette |
+| **Rice** | Terminal, git, and system-tool theming through the `o10k` templates |
+| **System** | Doctor, benchmark, sessions, segment plugins, and the shell-layer claim map |
+| **Setup** | The first-run wizard, driven by the CLI's own step definitions |
+
+![The Theme tab — 53 palettes, each showing the colors it will apply](docs/img/studio-theme.png)
+
+### Presets come in two flavours
+
+Every curated Look is tagged **`structure`** or **`complete`**:
+
+- **`structure`** changes separators, frames, glyphs and layout, and **respects
+  whatever palette you are on**.
+- **`complete`** brings its own colors too.
+
+The tag is on the card, so you always know whether picking something will
+change your palette.
+
+### Colors that are actually readable
+
+Omarchy ships 22 themes; only some have a hand-tuned prompt palette. The rest
+are **derived** — each theme's `colors.toml` roles are mapped across, then
+repaired where they are unreadable as prompt text.
+
+Contrast is measured in [APCA](https://git.apcacontrast.com/documentation/APCA_in_a_Nutshell.html)
+rather than WCAG 2.x, because these palettes are dark and WCAG 2.x overstates
+contrast for dark colors badly enough that its own analysis says it cannot
+guide dark-mode design. Repairs walk lightness in
+[OKLCH](https://bottosson.github.io/posts/oklab/), so hue and chroma hold
+still — a monochrome theme stays monochrome.
+
+The thresholds are calibrated against the curated palettes themselves, not
+against APCA's prose tiers: gating at those tiers flagged Solarized Dark as
+broken on nine of eleven roles, which is the instrument being wrong about the
+goal. In practice the deriver repairs **8% of roles** and leaves 8 of the 22
+themes untouched.
+
+---
+
+## The bar popout
+
+![The bar popout — quick controls with a compact live preview](docs/img/panel.png)
+
+Click the prompt glyph in the bar for quick changes without leaving what you
+are doing: a compact two-scene preview, Looks, palettes, per-row
+modified-vs-default ink with one-tap reset, and an undo timeline.
+**Open Studio** at the top escalates to the full surface.
+
+---
+
+## Command line
+
+```bash
+omarchy10k configure      # p10k-style wizard, with live preview
+omarchy10k look list      # browse the curated Looks
+omarchy10k look apply tokyo-rainbow --transient    # try it; a reload reverts
+omarchy10k layer          # who owns ls, cd, cat — o10k, Omarchy, or you
+omarchy10k doctor         # diagnose the whole stack
+omarchy10k benchmark      # measure the render budget
+```
+
+`doctor` is the one to run when something looks wrong. It reports your
+terminal, how it was identified, its capability profile, and whether the
+themed include is still wired into the terminal's own config:
+
+```
+  Terminal          ghostty 1.3.1-arch2 ✓ via O10K_TERM (probe or override)
+      caps          OSC7 ✓  OSC8 ✓  OSC52 ✓  sixel ✘  kitty-gfx ✓  sync ✓
+      theme include ghostty/config → o10k-ghostty.conf ✓
+```
+
+### Per-project prompts
+
+Drop a `.o10k.toml` in a repo root. Display keys only — it is untrusted input
+by design, so nothing there can execute anything:
 
 ```toml
 [segments]
 git = { enabled = false }
 ```
 
-## Daily controls
+---
 
-| Where | What |
-|---|---|
-| **Panel** (bar widget) | Looks · Style · Behavior · System — live preview, Looks Studio with ramp designer, doctor cards, settings search, undo timeline |
-| **Gallery** (`Expand gallery`) | All Looks with real rendered previews, category filters, edit/Try/Apply/delete |
-| **CLI** | `look`, `layer`, `script`, `configure`, `statusline`, `doctor`, `benchmark` |
-| **Config** | `~/.config/omarchy10k/config.toml` — every key documented in [docs/wiki/config.md](docs/wiki/config.md) |
+## Terminals
+
+Ghostty and foot are both first-class, and both are tested end to end by
+launching the real terminal and asserting what reaches the wire.
+
+Terminals are identified by an **XTVERSION probe**, not by environment
+variables, because environment variables do not work: foot deliberately unsets
+`TERM_PROGRAM`, and Omarchy configures it to report `TERM=xterm-256color`. A
+real foot session carries no identifying signal at all. The probe runs once per
+shell and only when the environment is inconclusive — Ghostty is identified for
+free — and never through tmux, where the answer would describe the wrong
+terminal.
+
+| | Ghostty | foot |
+|---|---|---|
+| OSC 8 hyperlinks, OSC 52 clipboard | ✓ | ✓ |
+| OSC 133 semantic prompts | ✓ | ✓ |
+| Graphics | kitty protocol | sixel |
+| Mascot rendering | real image | half-blocks |
+
+---
 
 ## Documentation
 
-The [wiki](docs/wiki/INDEX.md) is the source of truth: [architecture](docs/wiki/architecture.md), [daemon](docs/wiki/daemon.md), [protocol](docs/wiki/protocol.md) (NDJSON over Unix sockets, v0.5), [bash adapter](docs/wiki/bash-adapter.md), [Quattro plugin](docs/wiki/quattro.md), [configuration](docs/wiki/config.md), [theme bridge](docs/wiki/theme.md), [glossary](docs/wiki/glossary.md).
+The [wiki](docs/wiki/INDEX.md) is the source of truth:
+[architecture](docs/wiki/architecture.md) ·
+[daemon](docs/wiki/daemon.md) ·
+[protocol](docs/wiki/protocol.md) ·
+[bash adapter](docs/wiki/bash-adapter.md) ·
+[Quattro plugin](docs/wiki/quattro.md) ·
+[configuration](docs/wiki/config.md) ·
+[theme bridge](docs/wiki/theme.md) ·
+[glossary](docs/wiki/glossary.md)
+
+Every config key is documented in [config.md](docs/wiki/config.md), and the
+NDJSON socket protocol in [protocol.md](docs/wiki/protocol.md).
 
 ## Status
 
-- 190+ unit tests, 80+ integration assertions, QML parity gate
+- **370 unit tests** (267 daemon, 103 CLI), 77 QML component tests, 7 JS
+  suites, plus integration and real-terminal end-to-end suites
+- A `qmllint` gate that fails on parse errors and unqualified access
 - Protocol 0.5 · crate 0.4.0
-- Tested on Ghostty and foot; developed on Omarchy Quattro (Arch, kernel 7.1)
+- Developed on Omarchy Quattro; tested on Ghostty 1.3 and foot 1.27
 
 ## License
 
-See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

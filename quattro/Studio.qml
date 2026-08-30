@@ -340,7 +340,7 @@ Item {
                                 cols: studio.service ? studio.service.previewCols : 120
                                 terminalFont: (studio.service && studio.service.terminalFont)
                                     ? studio.service.terminalFont : Style.font.family
-                                renderState: "empty"
+                                renderState: "idle"
                                 caption: "preview"
                             }
 
@@ -371,7 +371,9 @@ Item {
         // `previewPane` fires the tab's onPreviewPaneChanged, which kicks off
         // its own first render; clearing afterwards clobbered that and left
         // the pane reading "No daemon" while the daemon was plainly running.
-        previewPane.renderState = "empty"
+        // `idle`, not `empty`: nothing has been requested yet, which is not
+        // the same as having no daemon to request it from.
+        previewPane.renderState = "idle"
         previewPane.renders = []
         previewPane.errorText = ""
         previewPane.caption = studio.currentTabDef.label.toLowerCase() + " preview"

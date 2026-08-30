@@ -22,6 +22,7 @@ TestCase {
     TerminalPreview { id: loading; width: 400; renderState: "loading" }
     TerminalPreview { id: errored; width: 400; renderState: "error"; errorText: "unrepresentable patch" }
     TerminalPreview { id: noDaemon; width: 400; renderState: "empty" }
+    TerminalPreview { id: idle; width: 400; renderState: "idle" }
     TerminalPreview { id: bare; width: 400; renders: parent.threeRows }
 
     // The central promise: the mock is drawn on the palette being PREVIEWED,
@@ -43,6 +44,14 @@ TestCase {
         verify(!loading.hasRows)
         verify(!errored.hasRows)
         verify(!noDaemon.hasRows)
+        verify(!idle.hasRows)
+    }
+
+    // "nothing requested yet" and "no daemon" are different conditions and
+    // must not share a message: the Studio sets idle on every tab switch, and
+    // showing "No daemon" there accused a healthy setup of being broken.
+    function test_idle_is_distinct_from_no_daemon() {
+        verify(idle.renderState !== noDaemon.renderState)
     }
 
     function test_an_empty_render_list_is_not_ok_rows() {
