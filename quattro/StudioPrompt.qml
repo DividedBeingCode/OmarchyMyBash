@@ -381,7 +381,7 @@ Flickable {
                 { key: "prompt.blank_line",   label: "Blank line before prompt" },
                 { key: "prompt.right_prompt", label: "Right prompt rail" },
                 { key: "git.enabled",         label: "Git segment" },
-                { key: "frame.enabled",       label: "Frame lines" },
+                { key: "style.frame.enabled", label: "Frame lines" },
                 { key: "terminal.title.enabled", label: "Set terminal title" }
             ]
 

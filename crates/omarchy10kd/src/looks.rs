@@ -248,11 +248,10 @@ pub fn curated() -> Vec<LookDef> {
             "The house style. Follows your Omarchy theme exactly.",
             &["structure", "nerd-font"],
             serde_json::json!({
-                "style": { "preset": "omarchy", "separators": { "shape": "auto" } },
+                "style": { "preset": "omarchy", "separators": { "shape": "auto" }, "frame": { "enabled": false, "gap_char": "", "gap_gradient": "off" } },
                 "segments": { "os": { "icon": "arch", "enabled": true },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
-                "frame": { "enabled": false, "gap_char": "", "gap_gradient": "off" },
                 "theme": { "source": "omarchy" },
                 "directory": { "unique": false },
             })),
@@ -260,73 +259,66 @@ pub fn curated() -> Vec<LookDef> {
             "No icons, no fills. Just the path, the branch and a lambda.",
             &["structure", "minimal", "ascii-safe"],
             serde_json::json!({
-                "style": { "preset": "pure", "separators": { "shape": "auto" } },
+                "style": { "preset": "pure", "separators": { "shape": "auto" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "lambda", "error": "lambda", "transient": "lambda" } },
                 "git": { "branch_icon": "text" },
-                "frame": { "enabled": false },
             })),
         look("mono-minimal", "Mono Minimal",
             "The smallest prompt that still tells you where you are.",
             &["structure", "minimal", "ascii-safe"],
             serde_json::json!({
-                "style": { "preset": "minimal", "separators": { "shape": "none" } },
+                "style": { "preset": "minimal", "separators": { "shape": "none" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "dollar", "error": "dollar", "transient": "dollar" } },
                 "git": { "branch_icon": "text" },
-                "frame": { "enabled": false },
                 "prompt": { "newline": false },
             })),
         look("powerline-classic", "Powerline Classic",
             "The arrows everyone knows, on your own colors.",
             &["structure", "powerline", "nerd-font"],
             serde_json::json!({
-                "style": { "preset": "powerline", "separators": { "shape": "powerline" } },
+                "style": { "preset": "powerline", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "arch" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
-                "frame": { "enabled": false },
             })),
         look("two-line-focus", "Two-Line Focus",
             "Context above, a clean line to type on below.",
             &["structure", "two-line", "nerd-font"],
             serde_json::json!({
-                "style": { "preset": "lean", "separators": { "shape": "vertical" } },
+                "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "nerd" },
-                "frame": { "enabled": false },
                 "prompt": { "newline": true },
             })),
         look("dot-matrix", "Dot Matrix",
             "Dense segments separated by dots. A lot of state, little width.",
             &["structure", "dense"],
             serde_json::json!({
-                "style": { "preset": "dense", "separators": { "shape": "dot" } },
+                "style": { "preset": "dense", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "linux" },
                               "character": { "success": "angle", "error": "angle", "transient": "angle" } },
                 "git": { "branch_icon": "octicon" },
-                "frame": { "enabled": false },
             })),
         look("zen-fade", "Zen Fade",
             "Segments that dissolve into each other instead of butting up.",
             &["structure", "nerd-font"],
             serde_json::json!({
-                "style": { "preset": "gradient", "separators": { "shape": "fade" } },
+                "style": { "preset": "gradient", "separators": { "shape": "fade" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "triangle", "error": "triangle", "transient": "triangle" } },
                 "git": { "branch_icon": "nerd" },
-                "frame": { "enabled": false },
             })),
         look("framed-focus", "Framed Focus",
             "A rule across the terminal that separates every command.",
             &["structure", "framed", "two-line"],
             serde_json::json!({
-                "style": { "preset": "framed", "separators": { "shape": "auto" } },
+                "style": { "preset": "framed", "separators": { "shape": "auto" }, "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "off" } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "text" },
-                "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "off" },
                 "prompt": { "newline": true },
             })),
 
@@ -335,187 +327,169 @@ pub fn curated() -> Vec<LookDef> {
             "p10k's signature rainbow, in Tokyo Night indigo.",
             &["complete", "powerline", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "rainbow", "separators": { "shape": "powerline" } },
+                "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "arch" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
-                "frame": { "enabled": false },
             }), "tokyo-night")),
         look("framed-gradient", "Framed Gradient",
             "A full-width gradient rule above every prompt.",
             &["complete", "framed", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "framed", "separators": { "shape": "auto" } },
+                "style": { "preset": "framed", "separators": { "shape": "auto" }, "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "full" } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
-                "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "full" },
             }), "tokyo-night")),
         look("slanted-owl", "Slanted Owl",
             "Forest greens, slanted cuts, and an owl watching your errors.",
             &["complete", "powerline", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "slanted", "separators": { "shape": "slanted" } },
+                "style": { "preset": "slanted", "separators": { "shape": "slanted" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "owl" },
                               "character": { "success": "owl", "error": "dragon", "transient": "owl" } },
                 "git": { "branch_icon": "octicon" },
-                "frame": { "enabled": false },
             }), "everforest")),
         look("gruvbox-drift", "Gruvbox Drift",
             "Rust and mustard with flame-cut separators.",
             &["complete", "powerline", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "gradient", "separators": { "shape": "flame" } },
+                "style": { "preset": "gradient", "separators": { "shape": "flame" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "paw" },
                               "character": { "success": "paw", "error": "kaomoji_rage", "transient": "paw" } },
                 "git": { "branch_icon": "octicon" },
-                "frame": { "enabled": false },
             }), "gruvbox")),
         look("rose-classic", "Rosé Classic",
             "Soft rose, plain bars, and a bear who disapproves of failures.",
             &["complete"],
             with_palette(serde_json::json!({
-                "style": { "preset": "classic", "separators": { "shape": "vertical" } },
+                "style": { "preset": "classic", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "kaomoji_bear", "error": "kaomoji_disapprove", "transient": "kaomoji_bear" } },
                 "git": { "branch_icon": "octicon" },
-                "frame": { "enabled": false },
             }), "rose-pine")),
         look("polar-lean", "Polar Lean",
             "Arctic blues, rounded caps, and a penguin.",
             &["complete", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "lean", "separators": { "shape": "round" } },
+                "style": { "preset": "lean", "separators": { "shape": "round" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "penguin" },
                               "character": { "success": "penguin", "error": "kaomoji_disapprove", "transient": "penguin" } },
                 "git": { "branch_icon": "nerd" },
-                "frame": { "enabled": false },
             }), "nord")),
         look("midnight-metro", "Midnight Metro",
             "Catppuccin pastels in full powerline, like a transit map.",
             &["complete", "powerline", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "rainbow", "separators": { "shape": "powerline" } },
+                "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "arch" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
-                "frame": { "enabled": false },
                 "prompt": { "newline": true },
             }), "catppuccin")),
         look("dracula-dense", "Dracula Dense",
             "Neon on violet, packed tight with trapezoid cuts.",
             &["complete", "dense", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "dense", "separators": { "shape": "trapezoid" } },
+                "style": { "preset": "dense", "separators": { "shape": "trapezoid" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "dragon", "error": "kaomoji_rage", "transient": "dragon" } },
                 "git": { "branch_icon": "octicon" },
-                "frame": { "enabled": false },
             }), "dracula")),
         look("kanagawa-wave", "Kanagawa Wave",
             "Ink-wash blues, slanted like a brush stroke.",
             &["complete", "powerline", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "slanted", "separators": { "shape": "slanted" } },
+                "style": { "preset": "slanted", "separators": { "shape": "slanted" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "fish", "error": "kaomoji_disapprove", "transient": "fish" } },
                 "git": { "branch_icon": "nerd" },
-                "frame": { "enabled": false },
             }), "kanagawa")),
         look("solarized-lean", "Solarized Lean",
             "The calibrated classic, kept deliberately plain.",
             &["complete", "minimal", "ascii-safe"],
             with_palette(serde_json::json!({
-                "style": { "preset": "lean", "separators": { "shape": "vertical" } },
+                "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "angle", "error": "angle", "transient": "angle" } },
                 "git": { "branch_icon": "text" },
-                "frame": { "enabled": false },
             }), "solarized-dark")),
         // ── Neon / cyberpunk ──────────────────────────────────────────────
         look("neon-grid", "Neon Grid",
             "Full rainbow powerline in electric cyan and magenta.",
             &["complete", "powerline", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "rainbow", "separators": { "shape": "powerline" } },
+                "style": { "preset": "rainbow", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "triangle", "error": "triangle", "transient": "triangle" } },
                 "git": { "branch_icon": "powerline" },
-                "frame": { "enabled": false },
                 "prompt": { "newline": true },
             }), "neon")),
         look("outrun", "Outrun",
             "Flame-cut segments and a chrome horizon. Drive.",
             &["complete", "powerline", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "gradient", "separators": { "shape": "flame" } },
+                "style": { "preset": "gradient", "separators": { "shape": "flame" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "arrow", "error": "arrow", "transient": "arrow" } },
                 "git": { "branch_icon": "nerd" },
-                "frame": { "enabled": false },
             }), "outrun-electric")),
         look("synthwave", "Synthwave",
             "A gradient rule across the grid, purple all the way down.",
             &["complete", "framed", "two-line", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "framed", "separators": { "shape": "slanted" } },
+                "style": { "preset": "framed", "separators": { "shape": "slanted" }, "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "full" } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
-                "frame": { "enabled": true, "gap_char": "\u{2500}", "gap_gradient": "full" },
                 "prompt": { "newline": true },
             }), "synthwave-alpha")),
         look("scarlet-protocol", "Scarlet Protocol",
             "Dense trapezoid segments, scarlet on black. Reads like a HUD.",
             &["complete", "dense", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "dense", "separators": { "shape": "trapezoid" } },
+                "style": { "preset": "dense", "separators": { "shape": "trapezoid" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "angle", "error": "kaomoji_rage", "transient": "angle" } },
                 "git": { "branch_icon": "octicon" },
-                "frame": { "enabled": false },
             }), "scarlet-protocol")),
         look("matrix-rain", "Matrix Rain",
             "Terminal green on cold blue, stripped to nothing but the path.",
             &["complete", "minimal", "ascii-safe"],
             with_palette(serde_json::json!({
-                "style": { "preset": "minimal", "separators": { "shape": "none" } },
+                "style": { "preset": "minimal", "separators": { "shape": "none" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "angle", "error": "angle", "transient": "angle" } },
                 "git": { "branch_icon": "text" },
-                "frame": { "enabled": false },
                 "prompt": { "newline": false },
             }), "blue-matrix")),
         look("laser-focus", "Laser Focus",
             "Magenta ink, one clean line to type on.",
             &["complete", "two-line", "minimal"],
             with_palette(serde_json::json!({
-                "style": { "preset": "pure", "separators": { "shape": "dot" } },
+                "style": { "preset": "pure", "separators": { "shape": "dot" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "lambda", "error": "lambda", "transient": "lambda" } },
                 "git": { "branch_icon": "text" },
-                "frame": { "enabled": false },
                 "prompt": { "newline": true },
             }), "laser")),
         look("vapor-drift", "Vapor Drift",
             "Segments that fade into twilight. Hot pink over deep purple.",
             &["complete", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "gradient", "separators": { "shape": "fade" } },
+                "style": { "preset": "gradient", "separators": { "shape": "fade" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "triangle", "error": "triangle", "transient": "triangle" } },
                 "git": { "branch_icon": "nerd" },
-                "frame": { "enabled": false },
             }), "vaporwave-sunset")),
         look("cobalt-hazard", "Cobalt Hazard",
             "Cobalt blue with hazard-yellow highlights.",
             &["complete", "powerline", "nerd-font"],
             with_palette(serde_json::json!({
-                "style": { "preset": "powerline", "separators": { "shape": "powerline" } },
+                "style": { "preset": "powerline", "separators": { "shape": "powerline" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "powerline" },
-                "frame": { "enabled": false },
             }), "cobalt2")),
 
         // ── Quieter additions ─────────────────────────────────────────────
@@ -523,31 +497,28 @@ pub fn curated() -> Vec<LookDef> {
             "For 2am: low glare, nothing shouting.",
             &["complete", "minimal"],
             with_palette(serde_json::json!({
-                "style": { "preset": "lean", "separators": { "shape": "vertical" } },
+                "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "owl", "error": "owl", "transient": "owl" } },
                 "git": { "branch_icon": "nerd" },
-                "frame": { "enabled": false },
             }), "night-owl")),
         look("poimandres-zen", "Poimandres Zen",
             "Desaturated teal and mist. As calm as a prompt gets.",
             &["complete", "minimal", "ascii-safe"],
             with_palette(serde_json::json!({
-                "style": { "preset": "pure", "separators": { "shape": "none" } },
+                "style": { "preset": "pure", "separators": { "shape": "none" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "angle", "error": "angle", "transient": "angle" } },
                 "git": { "branch_icon": "text" },
-                "frame": { "enabled": false },
             }), "poimandres")),
                 look("daylight-latte", "Daylight Latte",
             "For terminals in the sun: light background, dark ink.",
             &["complete", "minimal"],
             with_palette(serde_json::json!({
-                "style": { "preset": "lean", "separators": { "shape": "vertical" } },
+                "style": { "preset": "lean", "separators": { "shape": "vertical" }, "frame": { "enabled": false } },
                 "segments": { "os": { "icon": "none" },
                               "character": { "success": "chevron", "error": "chevron", "transient": "chevron" } },
                 "git": { "branch_icon": "text" },
-                "frame": { "enabled": false },
             }), "catppuccin-latte")),
     ]
 }
@@ -905,5 +876,74 @@ mod preset_tests {
             curated_palettes().len() >= 38,
             "expected at least 38 curated palettes"
         );
+    }
+}
+#[cfg(test)]
+mod patch_schema_tests {
+    use super::*;
+    use crate::config::Config;
+
+    /// Every key a Look patch writes must exist in the config schema.
+    ///
+    /// `Config` does not use `deny_unknown_fields`, so serde silently DROPS
+    /// anything it does not recognise. A patch key with a typo, or one at the
+    /// wrong nesting level, therefore produces no error and no effect -- it
+    /// simply does nothing, forever.
+    ///
+    /// That is not hypothetical: every curated Look carried a top-level
+    /// `"frame"` object, but the frame lives at `style.frame`. All of them
+    /// were silently discarded, and the framed Looks only looked right
+    /// because their `style.preset` happened to set the frame too. The
+    /// Studio's "Frame lines" toggle and the wizard's frame step wrote the
+    /// same dead path.
+    fn walk(schema: &serde_json::Value, patch: &serde_json::Value, path: &str, bad: &mut Vec<String>) {
+        let (Some(sobj), Some(pobj)) = (schema.as_object(), patch.as_object()) else {
+            return;
+        };
+        for (k, v) in pobj {
+            let here = if path.is_empty() { k.clone() } else { format!("{path}.{k}") };
+            match sobj.get(k) {
+                None => bad.push(here),
+                Some(sv) => {
+                    // Recurse only into real sub-objects. A free-form map
+                    // (theme.custom) accepts any key by design.
+                    if v.is_object() && sv.is_object() && !here.starts_with("theme.custom") {
+                        walk(sv, v, &here, bad);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_curated_look_writes_only_real_config_paths() {
+        let schema = serde_json::to_value(Config::default()).expect("config serializes");
+        let mut failures = Vec::new();
+        for look in curated() {
+            let mut bad = Vec::new();
+            walk(&schema, &look.patch, "", &mut bad);
+            for b in bad {
+                failures.push(format!("{}: {b}", look.name));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} Look patch key(s) are not in the config schema and would be \
+             silently dropped:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn the_frame_lives_under_style() {
+        // Pins the specific shape, so a future edit cannot quietly move it
+        // back to the top level where serde would drop it.
+        let schema = serde_json::to_value(Config::default()).unwrap();
+        assert!(
+            schema.get("frame").is_none(),
+            "there is no top-level `frame`; it is `style.frame`"
+        );
+        assert!(schema["style"].get("frame").is_some());
     }
 }

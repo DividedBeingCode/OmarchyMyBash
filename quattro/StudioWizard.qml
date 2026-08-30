@@ -63,7 +63,7 @@ Flickable {
     readonly property var keyFor: ({
         "preset":      "style.preset",
         "separator":   "style.separators.shape",
-        "frame":       "frame.enabled",
+        "frame":       "style.frame.enabled",
         "gap_char":    "style.frame.gap_char",
         "prompt_char": "segments.character.success",
         "os_icon":     "segments.os.icon"
