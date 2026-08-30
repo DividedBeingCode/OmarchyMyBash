@@ -58,6 +58,87 @@ Flickable {
 
     readonly property var promptChars: ["❯", "➜", "λ", "$", ">", "%", "▶", "#"]
 
+    // Every glyph the project offers, in one searchable place. Generated from
+    // the same catalogs the bar panel uses so the two cannot drift.
+    readonly property var glyphCatalog: [
+        { key: "cat", glyph: "\u{f011b}", label: "Cat", category: "Animals" },
+        { key: "dog", glyph: "\u{f0a43}", label: "Dog", category: "Animals" },
+        { key: "owl", glyph: "\u{f03d2}", label: "Owl", category: "Animals" },
+        { key: "duck", glyph: "\u{f01e5}", label: "Duck", category: "Animals" },
+        { key: "penguin", glyph: "\u{f0ec0}", label: "Penguin", category: "Animals" },
+        { key: "rabbit", glyph: "\u{f0907}", label: "Rabbit", category: "Animals" },
+        { key: "turtle", glyph: "\u{f0cd7}", label: "Turtle", category: "Animals" },
+        { key: "panda", glyph: "\u{f03da}", label: "Panda", category: "Animals" },
+        { key: "koala", glyph: "\u{f173f}", label: "Koala", category: "Animals" },
+        { key: "unicorn", glyph: "\u{f15c2}", label: "Unicorn", category: "Animals" },
+        { key: "cow", glyph: "\u{f019a}", label: "Cow", category: "Animals" },
+        { key: "horse", glyph: "\u{f15bf}", label: "Horse", category: "Animals" },
+        { key: "pig", glyph: "\u{f0401}", label: "Pig", category: "Animals" },
+        { key: "sheep", glyph: "\u{f0cc6}", label: "Sheep", category: "Animals" },
+        { key: "bee", glyph: "\u{f0fa1}", label: "Bee", category: "Animals" },
+        { key: "butterfly", glyph: "\u{f1589}", label: "Butterfly", category: "Animals" },
+        { key: "ladybug", glyph: "\u{f082d}", label: "Ladybug", category: "Animals" },
+        { key: "snail", glyph: "\u{f1677}", label: "Snail", category: "Animals" },
+        { key: "spider", glyph: "\u{f11ea}", label: "Spider", category: "Animals" },
+        { key: "snake", glyph: "\u{f150e}", label: "Snake", category: "Animals" },
+        { key: "bird", glyph: "\u{f15c6}", label: "Bird", category: "Animals" },
+        { key: "fish", glyph: "\u{f023a}", label: "Fish", category: "Animals" },
+        { key: "dolphin", glyph: "\u{f18b4}", label: "Dolphin", category: "Animals" },
+        { key: "shark", glyph: "\u{f18ba}", label: "Shark", category: "Animals" },
+        { key: "jellyfish", glyph: "\u{f0f01}", label: "Jellyfish", category: "Animals" },
+        { key: "elephant", glyph: "\u{f07c6}", label: "Elephant", category: "Animals" },
+        { key: "kangaroo", glyph: "\u{f1558}", label: "Kangaroo", category: "Animals" },
+        { key: "donkey", glyph: "\u{f07c2}", label: "Donkey", category: "Animals" },
+        { key: "rodent", glyph: "\u{f1327}", label: "Rodent", category: "Animals" },
+        { key: "bat", glyph: "\u{f0b5f}", label: "Bat", category: "Animals" },
+        { key: "paw", glyph: "\u{f03e9}", label: "Paw", category: "Animals" },
+        { key: "bone", glyph: "\u{f00b9}", label: "Bone", category: "Animals" },
+        { key: "egg", glyph: "\u{f0aaf}", label: "Egg", category: "Animals" },
+        { key: "feather", glyph: "\u{f06d3}", label: "Feather", category: "Animals" },
+        { key: "bug", glyph: "\u{f00e4}", label: "Bug", category: "Animals" },
+        { key: "dragon", glyph: "\ueef8", label: "Dragon", category: "Animals" },
+        { key: "frog", glyph: "\uedf8", label: "Frog", category: "Animals" },
+        { key: "squirrel", glyph: "\ueb58", label: "Squirrel", category: "Animals" },
+        { key: "ninja", glyph: "\u{f0774}", label: "Ninja", category: "Japan / Geek" },
+        { key: "torii", glyph: "\ueee6", label: "Torii", category: "Japan / Geek" },
+        { key: "sushi", glyph: "\ue21a", label: "Sushi", category: "Japan / Geek" },
+        { key: "noodles", glyph: "\u{f117e}", label: "Noodles", category: "Japan / Geek" },
+        { key: "rice", glyph: "\u{f07ea}", label: "Rice", category: "Japan / Geek" },
+        { key: "tea", glyph: "\u{f0d9e}", label: "Tea", category: "Japan / Geek" },
+        { key: "fan", glyph: "\u{f0210}", label: "Fan", category: "Japan / Geek" },
+        { key: "mask", glyph: "\u{f1023}", label: "Mask", category: "Japan / Geek" },
+        { key: "drama", glyph: "\u{f0d02}", label: "Drama", category: "Japan / Geek" },
+        { key: "katana", glyph: "\u{f18be}", label: "Katana", category: "Japan / Geek" },
+        { key: "alien", glyph: "\u{f089a}", label: "Alien", category: "Japan / Geek" },
+        { key: "robot", glyph: "\u{f1719}", label: "Robot", category: "Japan / Geek" },
+        { key: "ghost", glyph: "\u{f02a0}", label: "Ghost", category: "Japan / Geek" },
+        { key: "sakura", glyph: "\u{f09f1}", label: "Sakura", category: "Japan / Geek" },
+        { key: "dragon", glyph: "\ueef8", label: "Dragon", category: "Japan / Geek" },
+        { key: "crown", glyph: "\uedeb", label: "Crown", category: "Japan / Geek" },
+        { key: "sword", glyph: "\u{f04e5}", label: "Sword", category: "Japan / Geek" },
+        { key: "emoticon", glyph: "\u{f0c68}", label: "Emoticon", category: "Japan / Geek" },
+        { key: "cool", glyph: "\u{f0c6b}", label: "Cool", category: "Japan / Geek" },
+        { key: "wink", glyph: "\u{f0c78}", label: "Wink", category: "Japan / Geek" },
+        { key: "heart", glyph: "\u{f02d1}", label: "Heart", category: "Japan / Geek" },
+        { key: "star", glyph: "\u{f04ce}", label: "Star", category: "Japan / Geek" },
+        { key: "(\u25d5\u203f\u25d5)", glyph: "(\u25d5\u203f\u25d5)", label: "Happy", category: "Kaomoji" },
+        { key: "(\u00b4\u2022\u1d17\u2022`)", glyph: "(\u00b4\u2022\u1d17\u2022`)", label: "Soft", category: "Kaomoji" },
+        { key: "( \u02d8\u03c9\u02d8 )", glyph: "( \u02d8\u03c9\u02d8 )", label: "Sleepy", category: "Kaomoji" },
+        { key: "\u30fd(\u2022\u203f\u2022)\u30ce", glyph: "\u30fd(\u2022\u203f\u2022)\u30ce", label: "Cheer", category: "Kaomoji" },
+        { key: "(\u256f\u00b0\u25a1\u00b0)\u256f", glyph: "(\u256f\u00b0\u25a1\u00b0)\u256f", label: "Flip", category: "Kaomoji" },
+        { key: "\u00af\\_(\u30c4)_/\u00af", glyph: "\u00af\\_(\u30c4)_/\u00af", label: "Shrug", category: "Kaomoji" },
+        { key: "(\u2022\u203f\u2022)", glyph: "(\u2022\u203f\u2022)", label: "Smile", category: "Kaomoji" },
+        { key: "\u0295\u2022\u1d25\u2022\u0294", glyph: "\u0295\u2022\u1d25\u2022\u0294", label: "Bear", category: "Kaomoji" },
+        { key: "\u276f", glyph: "\u276f", label: "Chevron", category: "Prompt" },
+        { key: "\u279c", glyph: "\u279c", label: "Arrow", category: "Prompt" },
+        { key: "\u03bb", glyph: "\u03bb", label: "Lambda", category: "Prompt" },
+        { key: "$", glyph: "$", label: "Dollar", category: "Prompt" },
+        { key: ">", glyph: ">", label: "Angle", category: "Prompt" },
+        { key: "%", glyph: "%", label: "Percent", category: "Prompt" },
+        { key: "\u25b6", glyph: "\u25b6", label: "Triangle", category: "Prompt" },
+        { key: "#", glyph: "#", label: "Hash", category: "Prompt" }
+    ]
+
     Column {
         id: body
         width: promptTab.width
@@ -206,6 +287,32 @@ Flickable {
                         }
                     }
                 }
+            }
+        }
+
+        PanelSeparator { foreground: Color.foreground }
+
+        // ── Glyph browser ──────────────────────────────────────────────────
+        Text {
+            text: "ALL GLYPHS"
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            font.bold: true
+        }
+
+        GlyphBrowser {
+            width: parent.width
+            catalog: promptTab.glyphCatalog
+            selected: promptTab._get("segments.character.success", "")
+            // Preview in the terminal's font, not the panel's: a glyph that
+            // is tofu in the terminal must look like tofu here.
+            previewFont: promptTab.service && promptTab.service.terminalFont
+                ? promptTab.service.terminalFont : Style.font.family
+            onPicked: function (key) {
+                promptTab._set("segments.character.success", key)
+                promptTab._set("segments.character.error", key)
+                promptTab._set("segments.character.transient", key)
             }
         }
 

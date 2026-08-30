@@ -76,6 +76,7 @@ under `qmltestrunner`, so logic kept in QML cannot be tested at all.
 | `o10k/Card.qml` | Elevated surface: floored radius, `RectangularShadow`, **opaque** base with the state tint composited over it. |
 | `o10k/SettingRow.qml` | Label + control slot + modified-vs-default ink + per-row reset. |
 | `o10k/ThemeBindRow.qml` | The sync/desync indicator (see [Theme](theme.md)). |
+| `o10k/GlyphBrowser.qml` + `GlyphCell.qml` | Searchable glyph picker, previewing in the **terminal's** font. |
 
 Two rules the kit exists to enforce, both learned the hard way:
 
@@ -89,9 +90,26 @@ Two rules the kit exists to enforce, both learned the hard way:
   renders every card as a hard rectangle. The floor is a *minimum*: a theme
   asking for more rounding keeps its value.
 
-The kit components are deliberately **unbound** (no `pragma ComponentBehavior:
-Bound`) — bound inline components cannot be instantiated cross-file, the key
-finding of the C4 decomposition. Consumers are bound.
+Most kit components are **unbound** (no `pragma ComponentBehavior: Bound`).
+The C4 finding is specifically that bound **inline `Component {}` blocks**
+cannot be instantiated cross-file — a *file* component is unaffected, which is
+why every `Panel*.qml` and `Studio*.qml` carries the pragma and works fine.
+`GlyphBrowser.qml` carries it too, because a `Repeater` delegate has to reach
+the root id to size and select itself and `Bound` is what makes that resolve.
+
+### Glyph escapes
+
+QML/JavaScript `\uXXXX` takes **exactly four** hex digits. A Nerd Font
+codepoint above U+FFFF written as `\uf011b` therefore parses as U+F011 plus a
+literal `b` — the wrong glyph *and* a stray character, with no error anywhere.
+53 glyphs shipped that way. Above-BMP codepoints must use the ES6 brace form
+`\u{f011b}`; `tests/qmllint.sh` fails on any bare 5-digit escape and
+`tests/qml/tst_glyphescapes.qml` pins both behaviours.
+
+That bug survived a round of "fixing" the same table because the codepoints
+were checked in Python and never rendered from the QML. The `GlyphBrowser`
+exists partly so this class of error is visible: it previews in the terminal's
+font, so a wrong or missing glyph is obvious next to its name.
 
 ### Testing QML
 
