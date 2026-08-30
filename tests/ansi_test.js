@@ -10,7 +10,7 @@ const path = require('path');
 const src = fs.readFileSync(
     path.join(__dirname, '..', 'quattro', 'Model.js'), 'utf8')
     .replace(/^\.pragma library.*$/m, '');
-const M = new Function(src + '\n;return { ansiToRich, stripAnsi };')();
+const M = new Function(src + '\n;return { ansiToRich, stripAnsi, stripLeadingBlankLines };')();
 
 let failures = 0;
 function check(desc, actual, expected) {
@@ -104,6 +104,40 @@ check('null input yields empty output', M.ansiToRich(null, GRUVBOX), '');
     // a way that differs with and without a palette.
     const a = M.ansiToRich(`${ESC}[38;5mx`, GRUVBOX);
     ok('a malformed sequence still returns a string', typeof a === 'string');
+})();
+
+// Two-line prompts. StyledText collapses whitespace like HTML, so a raw \n
+// renders as a SPACE and the second line runs onto the first -- which is what
+// made every card read "~/app git: main ╰─❯" and then clip.
+(() => {
+    const out = M.ansiToRich(`~/app${'\n'}> `);
+    ok('a newline becomes a real line break', out.includes('<br/>'));
+    ok('the raw newline is gone', !/[^>]\n/.test(out));
+})();
+
+(() => {
+    const out = M.ansiToRich(`a${'\r\n'}b`);
+    ok('CRLF is handled too', out.includes('<br/>') && !out.includes('\r'));
+})();
+
+(() => {
+    // A prompt with no newline must not gain a break.
+    ok('single-line prompts are untouched', !M.ansiToRich('~/app > ').includes('<br'));
+})();
+
+// prompt.blank_line puts an empty line before every prompt. Right in a
+// terminal; in a two-line-tall card it consumed the line the "╰─❯" needed.
+(() => {
+    check('a leading blank line is dropped',
+        M.stripLeadingBlankLines('\n~/app\n> '), '~/app\n> ');
+    check('several are dropped',
+        M.stripLeadingBlankLines('\n\n\n~/app'), '~/app');
+    check('interior blank lines are kept',
+        M.stripLeadingBlankLines('~/app\n\n> '), '~/app\n\n> ');
+    check('a prompt with no blank line is untouched',
+        M.stripLeadingBlankLines('~/app'), '~/app');
+    check('empty input is safe', M.stripLeadingBlankLines(''), '');
+    check('null input is safe', M.stripLeadingBlankLines(null), '');
 })();
 
 if (failures) {

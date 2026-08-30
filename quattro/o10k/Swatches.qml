@@ -29,6 +29,14 @@ Item {
     /// Draw as a continuous bar rather than separate dots. Reads as a single
     /// object at card scale, where eight loose dots read as noise.
     property bool joined: false
+    /// Stretch the strip to exactly this width, dividing it between the
+    /// roles present. Eight small dots show that a palette EXISTS; a band
+    /// across the full card shows what the palette IS.
+    property real stretchTo: 0
+
+    readonly property real cellWidth: swatches.stretchTo > 0
+        ? swatches.stretchTo / Math.max(1, swatches.present.length)
+        : swatches.dotSize
 
     readonly property var present: {
         var out = []
@@ -42,16 +50,18 @@ Item {
         return out
     }
 
-    implicitWidth: swatches.present.length > 0
-        ? (swatches.joined
-            ? swatches.present.length * swatches.dotSize
-            : swatches.present.length * swatches.dotSize
-              + (swatches.present.length - 1) * swatches.gap)
-        : 0
+    implicitWidth: swatches.present.length === 0
+        ? 0
+        : swatches.stretchTo > 0
+            ? swatches.stretchTo
+            : (swatches.joined
+                ? swatches.present.length * swatches.dotSize
+                : swatches.present.length * swatches.dotSize
+                  + (swatches.present.length - 1) * swatches.gap)
     implicitHeight: swatches.dotSize
 
     Row {
-        spacing: swatches.joined ? 0 : swatches.gap
+        spacing: (swatches.joined || swatches.stretchTo > 0) ? 0 : swatches.gap
 
         Repeater {
             model: swatches.present
@@ -61,7 +71,7 @@ Item {
                 required property string modelData
                 required property int index
 
-                width: swatches.dotSize
+                width: swatches.cellWidth
                 height: swatches.dotSize
                 color: dot.modelData
 
@@ -70,7 +80,8 @@ Item {
                 // outer ends.
                 readonly property bool isEnd: dot.index === 0
                     || dot.index === swatches.present.length - 1
-                radius: !swatches.joined
+                readonly property bool banded: swatches.joined || swatches.stretchTo > 0
+                radius: !dot.banded
                     ? width / 2
                     : (dot.isEnd ? height / 4 : 0)
             }

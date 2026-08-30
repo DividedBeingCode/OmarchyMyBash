@@ -111,6 +111,26 @@ function escapeHtml(str) {
     return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// Newlines must become <br/>, because Text.StyledText collapses whitespace --
+// newlines included -- exactly like HTML. A two-line prompt (frame presets,
+// prompt.newline) therefore rendered as ONE long line with the second line
+// appended, so every card and preview row showed "~/app ⑂ main ╰─❯" run
+// together and then clipped. It looked like a wrapping bug and was not.
+/// Drop leading blank lines from a render.
+///
+/// `prompt.blank_line` puts an empty line before the prompt so consecutive
+/// commands breathe. That is right in a terminal and wrong in a preview: a
+/// card is two lines tall, and spending one of them on emptiness cut the
+/// "╰─❯" line off every two-line preset.
+function stripLeadingBlankLines(text) {
+    return String(text === undefined || text === null ? "" : text)
+        .replace(/^(?:[ \t]*\r?\n)+/, "");
+}
+
+function newlinesToBreaks(str) {
+    return String(str).replace(/\r?\n/g, "<br/>");
+}
+
 function _hexRgb(r, g, b) {
     function h(v) {
         var s = Math.max(0, Math.min(255, v | 0)).toString(16);
@@ -196,7 +216,8 @@ function ansiToRich(text, palette) {
     var last = 0;
     var m;
     while ((m = re.exec(text)) !== null) {
-        if (m.index > last) out += escapeHtml(text.substring(last, m.index));
+        if (m.index > last)
+            out += newlinesToBreaks(escapeHtml(text.substring(last, m.index)));
         last = re.lastIndex;
         if (m[2] === "m" && m[1].indexOf("?") === -1) {
             var prevFg = fg, prevBg = bg;
@@ -211,7 +232,8 @@ function ansiToRich(text, palette) {
         // Any other escape sequence (OSC, cursor movement, private modes,
         // readline delimiters) is dropped.
     }
-    if (last < text.length) out += escapeHtml(text.substring(last));
+    if (last < text.length)
+        out += newlinesToBreaks(escapeHtml(text.substring(last)));
     closeSpan();
     return out;
 }

@@ -85,37 +85,58 @@ Rectangle {
         Rectangle {
             id: previewFrame
             width: parent.width
-            height: Style.space(46)
+            height: Style.space(62)
             radius: Fx.radius(Style.cornerRadius) / 2
             color: card.previewBg
             clip: true
 
             Text {
+                id: promptLine
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.leftMargin: Style.space(8)
-                anchors.rightMargin: Style.space(8)
+                anchors.top: parent.top
+                anchors.margins: Style.space(8)
                 visible: card.renderState === "ok" && !!card.render
                 text: (card.render && card.render.left)
-                    ? Model.ansiToRich(card.render.left, card.colors) : ""
+                    ? Model.ansiToRich(
+                        Model.stripLeadingBlankLines(card.render.left), card.colors)
+                    : ""
                 textFormat: Text.StyledText
                 color: card.previewFg
                 font.family: card.terminalFont
                 font.pixelSize: Style.font.caption
-                // One line, never wrapped. The scene is rendered to this
-                // card's own column count, so it fits; wrapping would show a
-                // layout the terminal will never produce.
-                maximumLineCount: 1
+                // Up to TWO lines, because a two-line preset genuinely has
+                // two and squashing them together is what made these cards
+                // look wrong. Never wrapped: the scene is rendered to this
+                // card's own column count, so each line fits.
+                maximumLineCount: 2
                 wrapMode: Text.NoWrap
                 clip: true
                 elide: Text.ElideRight
+                lineHeight: 1.15
+            }
+
+            // The whole palette, across the whole card, on the background it
+            // will actually sit on. Eight small dots showed that a palette
+            // exists; this shows what it is -- and seeing it against its own
+            // background is the part that tells you whether it will read.
+            Swatches {
+                id: paletteBand
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                visible: card.colors && Object.keys(card.colors).length > 0
+                colors: card.colors ? card.colors : ({})
+                roles: ["accent", "red", "green", "yellow", "blue",
+                        "magenta", "cyan", "orange", "muted", "foreground"]
+                stretchTo: previewFrame.width
+                dotSize: Style.space(7)
             }
 
             Text {
                 anchors.centerIn: parent
                 visible: card.renderState !== "ok" || !card.render
-                text: card.renderState === "error" ? "render failed" : "…"
+                text: card.renderState === "error" ? "render failed" : "\u2026"
                 color: Qt.rgba(card.previewFg.r, card.previewFg.g, card.previewFg.b, 0.4)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
@@ -148,17 +169,7 @@ Rectangle {
         // ── Palette strip + tags ───────────────────────────────────────────
         Item {
             width: parent.width
-            height: Math.max(strip.implicitHeight, tagRow.implicitHeight)
-
-            Swatches {
-                id: strip
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-                visible: card.colors && Object.keys(card.colors).length > 0
-                colors: card.colors ? card.colors : ({})
-                dotSize: Style.space(8)
-                joined: true
-            }
+            height: tagRow.implicitHeight
 
             Row {
                 id: tagRow

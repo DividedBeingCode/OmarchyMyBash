@@ -178,7 +178,9 @@ Item {
                     // these re-parse on every hover.
                     Text {
                         width: row.width
-                        text: Model.ansiToRich(row.modelData.left, preview.colors)
+                        text: Model.ansiToRich(
+                            Model.stripLeadingBlankLines(row.modelData.left),
+                            preview.colors)
                         textFormat: Text.StyledText
                         color: preview.fg
                         font.family: preview.terminalFont
