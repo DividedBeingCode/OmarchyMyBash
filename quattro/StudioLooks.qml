@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Ui
 import "o10k"
 import "o10k/Preview.js" as Preview
+import "o10k/Fx.js" as Fx
 
 // Studio → Looks: the preset browser.
 //
@@ -30,6 +31,8 @@ Item {
     property string activeTag: ""
     property string selected: ""
     property bool editing: false
+    /// Momentary "Applied ✓" state on the commit button.
+    property bool applied: false
 
     readonly property var selectedLook: {
         for (var i = 0; i < looks.allLooks.length; i++) {
@@ -131,7 +134,15 @@ Item {
 
     Flickable {
         id: scroll
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        // Stops above the action bar so the commit controls are never
+        // scrolled off. They used to live at the BOTTOM of this Column,
+        // below a grid of 29 preset cards -- several screens down -- so
+        // selecting a preset looked like it did nothing.
+        anchors.bottom: applyBar.visible ? applyBar.top : parent.bottom
+        anchors.bottomMargin: applyBar.visible ? Style.space(10) : 0
         contentWidth: width
         contentHeight: body.implicitHeight
         clip: true
@@ -230,8 +241,10 @@ Item {
                         // whole reason the pane is pinned.
                         onEntered: looks.preview(card.modelData, false)
                         onClicked: {
-                            if (looks.selected !== card.modelData.name)
+                            if (looks.selected !== card.modelData.name) {
                                 looks.editing = false
+                                looks.applied = false
+                            }
                             looks.selected = card.modelData.name
                             looks.preview(card.modelData, true)
                         }
@@ -250,43 +263,6 @@ Item {
                     ? "No presets yet — start a shell with the Omarchy10k prompt, "
                       + "or run: omarchy10k look list"
                     : "Nothing matches that search."
-            }
-
-            // ── Apply / edit ───────────────────────────────────────────────
-            Row {
-                width: parent.width
-                spacing: Style.space(8)
-                visible: looks.selected.length > 0
-
-                Button {
-                    text: "Apply " + looks.selected
-                    bordered: true
-                    onClicked: {
-                        if (looks.service && looks.service.applyLook)
-                            looks.service.applyLook(looks.selected, false)
-                    }
-                }
-
-                Button {
-                    text: "Try without saving"
-                    bordered: true
-                    onClicked: {
-                        if (looks.service && looks.service.applyLook)
-                            looks.service.applyLook(looks.selected, true)
-                    }
-                }
-
-                Button {
-                    text: looks.editing ? "Close editor" : "Edit\u2026"
-                    bordered: true
-                    onClicked: {
-                        looks.editing = !looks.editing
-                        // Leaving the editor puts the pane back on the preset
-                        // itself rather than on an abandoned edit.
-                        if (!looks.editing && looks.selectedLook)
-                            looks.preview(looks.selectedLook, true)
-                    }
-                }
             }
 
             // Behind a Loader: the editor is a dozen text fields and a ramp
@@ -332,6 +308,84 @@ Item {
                 }
             }
         }
+    }
+
+    // Pinned commit bar. Outside the Flickable on purpose: a selection is
+    // useless if the way to act on it is below the fold.
+    Rectangle {
+        id: applyBar
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: applyRow.implicitHeight + Style.space(16)
+        radius: Fx.radius(Style.cornerRadius)
+        visible: looks.selected.length > 0
+        color: Color.background
+
+        Rectangle {
+            anchors.fill: parent
+            radius: parent.radius
+            color: Style.normalFill
+        }
+
+        Row {
+            id: applyRow
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.leftMargin: Style.space(12)
+            anchors.rightMargin: Style.space(12)
+            spacing: Style.space(8)
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Selected: " + looks.selected
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+            }
+
+            Button {
+                // Applying is otherwise silent: the prompt only changes in
+                // terminals, so without this the Studio gives no sign it did
+                // anything at all.
+                text: looks.applied ? "Applied \u2713" : "Apply"
+                bordered: true
+                onClicked: {
+                    if (looks.service && looks.service.applyLook) {
+                        looks.service.applyLook(looks.selected, false)
+                        looks.applied = true
+                        appliedTimer.restart()
+                    }
+                }
+            }
+
+            Button {
+                text: "Try without saving"
+                bordered: true
+                onClicked: {
+                    if (looks.service && looks.service.applyLook)
+                        looks.service.applyLook(looks.selected, true)
+                }
+            }
+
+            Button {
+                text: looks.editing ? "Close editor" : "Edit\u2026"
+                bordered: true
+                onClicked: {
+                    looks.editing = !looks.editing
+                    if (!looks.editing && looks.selectedLook)
+                        looks.preview(looks.selectedLook, true)
+                }
+            }
+        }
+    }
+
+    Timer {
+        id: appliedTimer
+        interval: 2000
+        onTriggered: looks.applied = false
     }
 
     Component {
